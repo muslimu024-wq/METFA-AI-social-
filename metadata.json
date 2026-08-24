@@ -1,0 +1,6 @@
+{
+  "name": "Metfa AI",
+  "description": "Metfa AI - Comprehensive AI creation and social media ecosystem combining AI scene transformation with creator Pages, community Groups, 90s Reels, live streaming studio, and dual-feed social networking.",
+  "requestFramePermissions": ["microphone", "camera"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
