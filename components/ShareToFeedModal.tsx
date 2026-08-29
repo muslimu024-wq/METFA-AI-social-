@@ -3,6 +3,7 @@ import { Share2, X, Sparkles, Wand2, Check } from 'lucide-react';
 import { CommunityPost, PostingIdentity, UserProfile } from '../types/community';
 import { getPages, getGroups } from '../utils/socialStore';
 import { generateSocialCaptionAndHashtags } from '../services/geminiService';
+import { compressImageDataUrl } from '../utils/storageUtils';
 
 interface ShareToFeedModalProps {
   isOpen: boolean;
@@ -47,7 +48,7 @@ export const ShareToFeedModal: React.FC<ShareToFeedModalProps> = ({
     }
   };
 
-  const handleSubmit = () => {
+  const handleSubmit = async () => {
     let postingIdentity: PostingIdentity = {
       type: 'personal',
       id: userProfile.id,
@@ -96,6 +97,8 @@ export const ShareToFeedModal: React.FC<ShareToFeedModalProps> = ({
       .map((t) => t.trim().replace(/^#/, ''))
       .filter(Boolean);
 
+    const optimizedImage = await compressImageDataUrl(postData.imageSrc, 800, 800, 0.7);
+
     onPostCreated({
       author: {
         id: userProfile.id,
@@ -110,10 +113,10 @@ export const ShareToFeedModal: React.FC<ShareToFeedModalProps> = ({
       groupId,
       groupName,
       prompt: postData.prompt,
-      caption: caption.trim() || 'Created with Metfa AI Studio.',
+      caption: caption.trim() || 'Created with Metfa Social Studio.',
       stylePreset: postData.stylePreset,
-      imageSrc: postData.imageSrc,
-      tags: tags.length > 0 ? tags : ['MetfaAI', 'GeminiVision'],
+      imageSrc: optimizedImage,
+      tags: tags.length > 0 ? tags : ['MetfaSocial', 'GeminiVision'],
       feedType: 'for_you',
     });
 
@@ -121,8 +124,14 @@ export const ShareToFeedModal: React.FC<ShareToFeedModalProps> = ({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md animate-fadeIn">
-      <div className="bg-gray-900 border border-purple-500/30 rounded-3xl max-w-lg w-full p-6 shadow-2xl relative overflow-hidden">
+    <div
+      onClick={onClose}
+      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md animate-fadeIn"
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        className="bg-gray-900 border border-purple-500/30 rounded-3xl max-w-lg w-full p-6 shadow-2xl relative overflow-hidden"
+      >
         <div className="flex items-center justify-between pb-4 border-b border-gray-800 mb-4">
           <div className="flex items-center gap-2">
             <div className="p-2 rounded-xl bg-purple-950 text-purple-300">

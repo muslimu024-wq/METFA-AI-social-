@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Users, Plus, Check, Search, Shield, Lock, Globe } from 'lucide-react';
 import { SocialGroup, UserProfile } from '../types/community';
 import { getGroups, toggleJoinGroup } from '../utils/socialStore';
@@ -14,6 +14,16 @@ export const GroupsDirectory: React.FC<GroupsDirectoryProps> = ({
 }) => {
   const [groups, setGroups] = useState<SocialGroup[]>(getGroups());
   const [searchQuery, setSearchQuery] = useState('');
+
+  useEffect(() => {
+    const handleGroupsUpdated = (e: any) => {
+      if (e.detail) setGroups(e.detail);
+      else setGroups(getGroups());
+    };
+
+    window.addEventListener('metfa_groups_updated', handleGroupsUpdated);
+    return () => window.removeEventListener('metfa_groups_updated', handleGroupsUpdated);
+  }, []);
 
   const handleJoin = (id: string) => {
     const updated = toggleJoinGroup(id);

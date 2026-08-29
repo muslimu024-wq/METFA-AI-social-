@@ -8,7 +8,9 @@ export type NotificationType =
   | 'page_created'
   | 'group_created'
   | 'system'
-  | 'follow';
+  | 'follow'
+  | 'login'
+  | 'account_switch';
 
 export interface AppNotification {
   id: string;

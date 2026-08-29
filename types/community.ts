@@ -76,15 +76,27 @@ export interface CommunityPost {
   prompt: string;
   caption?: string;
   stylePreset?: string;
-  imageSrc: string;
+  imageSrc?: string;
+  imageGallery?: string[];
   videoSrc?: string;
   originalImageSrc?: string;
+  textBackgroundPreset?: string; // e.g. 'sunset', 'cyberpunk', 'emerald', 'midnight', 'fire'
+  postType?: 'text' | 'media' | 'ai_art';
   likesCount: number;
   remixCount: number;
   commentsCount: number;
   sharesCount: number;
   isLiked?: boolean;
   isBookmarked?: boolean;
+  userReaction?: 'like' | 'love' | 'haha' | 'wow' | 'sad' | 'fire';
+  reactionCounts?: {
+    like?: number;
+    love?: number;
+    haha?: number;
+    wow?: number;
+    sad?: number;
+    fire?: number;
+  };
   comments: PostComment[];
   voiceComments?: VoiceComment[];
   createdAt: string;
@@ -109,7 +121,9 @@ export interface ReelHighlight {
   likesCount: number;
   commentsCount: number;
   sharesCount: number;
+  savesCount?: number;
   isLiked?: boolean;
+  isSaved?: boolean;
   createdAt: string;
   promptUsed?: string;
   musicTrack?: string;

@@ -1,0 +1,50 @@
+{
+  "generatedAt": "2026-08-28T08:08:05.253Z",
+  "version": "2.6.0",
+  "assets": {
+    "favicons": [
+      "/favicon.ico",
+      "/favicon.svg",
+      "/favicon-16.png",
+      "/favicon-32.png",
+      "/favicon-48.png",
+      "/favicon-64.png"
+    ],
+    "webAppIcons": [
+      "/icon-192.png",
+      "/icon-512.png",
+      "/icon.png",
+      "/logo.png",
+      "/logo.svg"
+    ],
+    "maskableIcons": [
+      "/icon-maskable-192.png",
+      "/icon-maskable-512.png"
+    ],
+    "appleTouchIcons": [
+      "/apple-touch-icon.png",
+      "/apple-touch-icon-180x180.png",
+      "/apple-touch-icon-152x152.png",
+      "/apple-touch-icon-precomposed.png"
+    ],
+    "brandEmblems": [
+      "/metfa-emblem.png",
+      "/metfa-emblem-128.png",
+      "/metfa-emblem.svg"
+    ],
+    "screenshots": [
+      "/screenshot-wide.png",
+      "/screenshot-narrow.png"
+    ],
+    "manifests": [
+      "/manifest.json",
+      "/manifest.webmanifest"
+    ]
+  },
+  "compliance": {
+    "lighthousePwaReady": true,
+    "maskableSafeZoneRatio": 0.8,
+    "standaloneDisplay": true,
+    "serviceWorkerPrecached": true
+  }
+}

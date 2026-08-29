@@ -3,8 +3,61 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-    <title>Metfa AI - Multimodal Vision & Creative Studio</title>
-    <meta name="description" content="Metfa AI - Next-gen Multimodal AI Assistant, Scene Transformation, Reels, Groups, Pages, and Live Streaming." />
+    <title>Metfa Social - Multimodal AI Studio & Creative Community</title>
+    <meta name="description" content="Metfa Social - Next-gen Multimodal AI Assistant, Scene Transformation, Reels, Groups, Creator Pages, and Live Streaming." />
+    <!-- Standard & Favicon Icons -->
+    <link rel="icon" type="image/x-icon" href="/favicon.ico" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16.png" />
+    <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png" />
+    <link rel="icon" type="image/png" sizes="48x48" href="/favicon-48.png" />
+    <link rel="icon" type="image/png" sizes="64x64" href="/favicon-64.png" />
+    <link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png" />
+    <link rel="icon" type="image/png" sizes="512x512" href="/icon-512.png" />
+
+    <!-- Apple Touch Icons for iOS Safari Home Screen -->
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
+    <link rel="apple-touch-icon" sizes="152x152" href="/apple-touch-icon-152x152.png" />
+    <link rel="apple-touch-icon-precomposed" href="/apple-touch-icon.png" />
+    <link rel="mask-icon" href="/favicon.svg" color="#1877F2" />
+
+    <!-- Web App Manifest -->
+    <link rel="manifest" href="/manifest.json" />
+    <link rel="alternate" type="application/manifest+json" href="/manifest.webmanifest" />
+
+    <!-- Theme & Status Bar Colors -->
+    <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#0B1020" />
+    <meta name="theme-color" media="(prefers-color-scheme: light)" content="#1877F2" />
+    <meta name="theme-color" content="#1877F2" />
+
+    <!-- Apple iOS Capabilities -->
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="Metfa Social" />
+
+    <!-- Android & Windows Capabilities -->
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="application-name" content="Metfa Social" />
+    <meta name="msapplication-TileColor" content="#0B1020" />
+    <meta name="msapplication-TileImage" content="/icon-192.png" />
+    <meta name="msapplication-navbutton-color" content="#1877F2" />
+
+    <!-- Open Graph & Social Sharing Rich Previews -->
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="Metfa Social" />
+    <meta property="og:title" content="Metfa Social - Multimodal AI Studio & Creative Community" />
+    <meta property="og:description" content="Next-gen Multimodal AI Assistant, Scene Transformation, Reels, Groups, Creator Pages, and Live Streaming." />
+    <meta property="og:image" content="/icon-512.png" />
+    <meta property="og:image:width" content="512" />
+    <meta property="og:image:height" content="512" />
+    <meta property="og:image:alt" content="Metfa Social Logo" />
+
+    <!-- Twitter Card Meta Tags -->
+    <meta name="twitter:card" content="summary" />
+    <meta name="twitter:title" content="Metfa Social" />
+    <meta name="twitter:description" content="Next-gen Multimodal AI Assistant & Creative Social Ecosystem" />
+    <meta name="twitter:image" content="/icon-512.png" />
     <script src="https://cdn.tailwindcss.com"></script>
     <script>
       tailwind.config = {
@@ -57,5 +110,29 @@
   <body class="bg-gray-950 text-gray-100 antialiased selection:bg-purple-500 selection:text-white min-h-screen">
     <div id="root"></div>
     <script type="module" src="/index.tsx"></script>
+    <script>
+      if ('serviceWorker' in navigator) {
+        window.addEventListener('load', () => {
+          navigator.serviceWorker.register('/sw.js', { scope: '/' })
+            .then((registration) => {
+              console.log('Metfa Social ServiceWorker registered successfully:', registration.scope);
+              registration.onupdatefound = () => {
+                const installingWorker = registration.installing;
+                if (installingWorker) {
+                  installingWorker.onstatechange = () => {
+                    if (installingWorker.state === 'installed' && navigator.serviceWorker.controller) {
+                      console.log('[PWA] New version of Metfa Social available.');
+                      window.dispatchEvent(new CustomEvent('metfa_pwa_update_available', { detail: { registration } }));
+                    }
+                  };
+                }
+              };
+            })
+            .catch((error) => {
+              console.warn('Metfa Social ServiceWorker registration failed:', error);
+            });
+        });
+      }
+    </script>
   </body>
 </html>

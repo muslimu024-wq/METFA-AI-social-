@@ -1,12 +1,15 @@
 import { ChatAttachment, StudioSettings } from "../types/chat";
+import { getStoredApiKeys } from "../utils/apiKeysStore";
 
 export interface MultimodalResponse {
   text: string;
+  systemNotice?: string;
   generatedImageB64?: string;
   isImageGeneration?: boolean;
   modelUsed?: string;
   isFallback?: boolean;
   latencyMs?: number;
+  tokensUsed?: number;
 }
 
 export async function sendMultimodalMessage(
@@ -31,6 +34,14 @@ export async function sendMultimodalMessage(
       history = maybeHistory;
     }
 
+    const storedKeys = getStoredApiKeys();
+    const effectiveSettings: Partial<StudioSettings> = {
+      ...settings,
+      geminiApiKey: settings?.geminiApiKey || storedKeys.geminiApiKey,
+      openaiApiKey: settings?.openaiApiKey || storedKeys.openaiApiKey,
+      grokApiKey: settings?.grokApiKey || storedKeys.grokApiKey,
+    };
+
     const response = await fetch("/api/gemini/chat", {
       method: "POST",
       headers: {
@@ -40,7 +51,7 @@ export async function sendMultimodalMessage(
       body: JSON.stringify({
         prompt,
         attachments,
-        settings,
+        settings: effectiveSettings,
         history,
       }),
     });
@@ -61,6 +72,7 @@ export async function sendMultimodalMessage(
 
     return {
       text: data.text || "Response received.",
+      systemNotice: data.systemNotice,
       generatedImageB64: data.generatedImageB64,
       isImageGeneration: !!data.isImageGeneration,
       modelUsed: data.modelUsed,
@@ -89,6 +101,7 @@ export async function editImageWithPrompt(base64Image: string, mimeType: string,
   const timeoutId = setTimeout(() => controller.abort(), 26000);
 
   try {
+    const storedKeys = getStoredApiKeys();
     const response = await fetch("/api/gemini/edit-image", {
       method: "POST",
       headers: {
@@ -99,6 +112,7 @@ export async function editImageWithPrompt(base64Image: string, mimeType: string,
         base64Image,
         mimeType,
         prompt,
+        geminiApiKey: storedKeys.geminiApiKey,
       }),
     });
 
@@ -130,6 +144,7 @@ export async function upscaleImageWithGemini(base64Image: string, mimeType: stri
   const timeoutId = setTimeout(() => controller.abort(), 26000);
 
   try {
+    const storedKeys = getStoredApiKeys();
     const response = await fetch("/api/gemini/upscale", {
       method: "POST",
       headers: {
@@ -139,6 +154,7 @@ export async function upscaleImageWithGemini(base64Image: string, mimeType: stri
       body: JSON.stringify({
         base64Image,
         mimeType,
+        geminiApiKey: storedKeys.geminiApiKey,
       }),
     });
 
@@ -172,6 +188,7 @@ export async function enhancePromptWithAI(userPrompt: string): Promise<string> {
   const timeoutId = setTimeout(() => controller.abort(), 12000);
 
   try {
+    const storedKeys = getStoredApiKeys();
     const response = await fetch("/api/gemini/enhance-prompt", {
       method: "POST",
       headers: {
@@ -180,6 +197,7 @@ export async function enhancePromptWithAI(userPrompt: string): Promise<string> {
       signal: controller.signal,
       body: JSON.stringify({
         prompt: userPrompt,
+        geminiApiKey: storedKeys.geminiApiKey,
       }),
     });
 
@@ -203,6 +221,7 @@ export async function generateSocialCaptionAndHashtags(imagePrompt: string): Pro
   const timeoutId = setTimeout(() => controller.abort(), 12000);
 
   try {
+    const storedKeys = getStoredApiKeys();
     const response = await fetch("/api/gemini/social-caption", {
       method: "POST",
       headers: {
@@ -211,16 +230,17 @@ export async function generateSocialCaptionAndHashtags(imagePrompt: string): Pro
       signal: controller.signal,
       body: JSON.stringify({
         imagePrompt,
+        geminiApiKey: storedKeys.geminiApiKey,
       }),
     });
 
     clearTimeout(timeoutId);
     const data = await response.json().catch(() => ({}));
-    return data.caption || "Transformed scene with Metfa AI Studio. ✨ #MetfaAI #AIArtwork #DigitalArt #GenerativeArt";
+    return data.caption || "Transformed scene with Metfa Social Studio. ✨ #MetfaSocial #AIArtwork #DigitalArt #GenerativeArt";
   } catch (error: any) {
     clearTimeout(timeoutId);
     console.error("Error generating social caption with Gemini:", error);
-    return `Transformed scene with Metfa AI Studio. ✨ #MetfaAI #AIArtwork #DigitalArt #GenerativeArt`;
+    return `Transformed scene with Metfa Social Studio. ✨ #MetfaSocial #AIArtwork #DigitalArt #GenerativeArt`;
   }
 }
 

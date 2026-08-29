@@ -1,16 +1,45 @@
-import { SocialPage, SocialGroup, PostingIdentity, ReelHighlight, LiveStream } from '../types/community';
+import { SocialPage, SocialGroup, PostingIdentity, ReelHighlight, LiveStream, UserProfile } from '../types/community';
 import { addNotification } from './notificationStore';
+import { saveUserProfile, getUserProfile } from './communityStore';
+import { safeSetItem, safeGetItem } from './storageUtils';
+import {
+  AuthUser,
+  getActiveSSOUser,
+  persistSSOSession,
+  ssoLoginWithPhone,
+  ssoLoginWithGmail,
+  ssoLogout,
+  generateUniqueUsername,
+  generateUnifiedMetfaId
+} from '../services/authService';
 
+export type { AuthUser };
+
+const AUTH_USER_KEY = 'metfa_auth_user_v2';
 const PAGES_STORAGE_KEY = 'metfa_social_pages_v1';
 const GROUPS_STORAGE_KEY = 'metfa_social_groups_v1';
 const ACTIVE_IDENTITY_KEY = 'metfa_active_identity_v1';
 const REELS_STORAGE_KEY = 'metfa_reels_v1';
 const LIVE_STREAMS_KEY = 'metfa_live_streams_v1';
 
+export const INITIAL_AUTH_USER: AuthUser = {
+  id: 'usr_metfa_9281',
+  metfaId: 'MID-9281-ALEX',
+  name: 'Alex Rivera',
+  username: 'alex.rivera',
+  authType: 'gmail',
+  phoneOrEmail: 'alex.rivera.ai@gmail.com',
+  avatar: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=200&auto=format&fit=crop&q=80',
+  sessionToken: '',
+  tokenExpiry: 0,
+  createdAt: '2026-01-10',
+  isVerified: true,
+};
+
 export const INITIAL_PAGES: SocialPage[] = [
   {
     id: 'page_gemini_creators',
-    ownerId: 'user_default',
+    ownerId: 'usr_metfa_9281',
     name: 'Gemini AI Vision Lab',
     username: 'gemini.lab',
     handle: '@gemini.lab',
@@ -27,11 +56,11 @@ export const INITIAL_PAGES: SocialPage[] = [
   },
   {
     id: 'page_cyberpunk_art',
-    ownerId: 'user_default',
+    ownerId: 'usr_metfa_9281',
     name: 'Neo Tokyo Cyber Aesthetics',
     username: 'neotokyo.art',
     handle: '@neotokyo.art',
-    description: 'Cyberpunk, synthwave, futuristic UI designs, and neon-lit cityscape concept art rendered through Metfa AI.',
+    description: 'Cyberpunk, synthwave, futuristic UI designs, and neon-lit cityscape concept art rendered through Metfa Social.',
     category: 'Digital Art & Design',
     avatar: 'https://images.unsplash.com/photo-1578632767115-351597cf2477?w=200&auto=format&fit=crop&q=80',
     coverImage: 'https://images.unsplash.com/photo-1508739773434-c26b3d09e071?w=1000&auto=format&fit=crop&q=80',
@@ -57,8 +86,8 @@ export const INITIAL_GROUPS: SocialGroup[] = [
     membersCount: 1530,
     postsCount: 384,
     isJoined: true,
-    ownerId: 'user_default',
-    members: ['user_default', 'user_elena', 'user_marcus'],
+    ownerId: 'usr_metfa_9281',
+    members: ['usr_metfa_9281', 'user_elena', 'user_marcus'],
     rules: [
       'Share positive creative feedback',
       'Always share prompts or style presets when requested',
@@ -103,7 +132,9 @@ export const INITIAL_REELS: ReelHighlight[] = [
     likesCount: 1420,
     commentsCount: 88,
     sharesCount: 154,
+    savesCount: 128,
     isLiked: false,
+    isSaved: false,
     createdAt: '2h ago',
     promptUsed: 'Hyper-realistic neon cyberpunk city at night with flying vehicles and glowing holographic signs',
   },
@@ -124,9 +155,34 @@ export const INITIAL_REELS: ReelHighlight[] = [
     likesCount: 2890,
     commentsCount: 194,
     sharesCount: 310,
+    savesCount: 245,
     isLiked: true,
+    isSaved: true,
     createdAt: '5h ago',
     promptUsed: 'A colossal emerald forest dragon resting on mossy ancient boulders, cinematic rim lighting',
+  },
+  {
+    id: 'reel_alex_1',
+    title: 'Cyberpunk Drone Chase - 4K Inpainted',
+    caption: 'Dynamic lighting test rendered using Gemini 3.7 Flash & 4K super-resolution upscaling! 🌆✨ #NeoTokyo #MetfaCreative',
+    author: {
+      id: 'usr_metfa_9281',
+      name: 'Alex Rivera',
+      username: 'alex.rivera',
+      avatar: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=200&auto=format&fit=crop&q=80',
+      isVerified: true,
+    },
+    videoSrc: 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerBlazes.mp4',
+    thumbnailSrc: 'https://images.unsplash.com/photo-1578632767115-351597cf2477?w=600&auto=format&fit=crop&q=80',
+    duration: 18,
+    likesCount: 940,
+    commentsCount: 42,
+    sharesCount: 78,
+    savesCount: 86,
+    isLiked: true,
+    isSaved: false,
+    createdAt: '1h ago',
+    promptUsed: 'Futuristic police drone flying between neon holographic skyscrapers in torrential rain',
   },
 ];
 
@@ -152,9 +208,62 @@ export const INITIAL_LIVE_STREAMS: LiveStream[] = [
   },
 ];
 
+export { generateUniqueUsername, generateUnifiedMetfaId };
+
+/**
+ * Authentication management
+ */
+export const getAuthUser = (): AuthUser => {
+  return getActiveSSOUser();
+};
+
+export const saveAuthUser = (user: AuthUser): void => {
+  persistSSOSession(user);
+};
+
+export const loginWithPhone = (phoneNumber: string, name: string): AuthUser => {
+  const user = ssoLoginWithPhone(phoneNumber, name);
+
+  addNotification({
+    type: 'login',
+    title: 'Welcome to Metfa Social',
+    message: `Logged in successfully with phone ${phoneNumber}. Unified Metfa ID: ${user.metfaId}.`,
+    actor: {
+      name: user.name,
+      username: user.username,
+      avatar: user.avatar,
+    },
+    linkTab: 'profile',
+  });
+
+  return user;
+};
+
+export const loginWithGmail = (email: string, name: string, customAvatar?: string): AuthUser => {
+  const user = ssoLoginWithGmail(email, name, customAvatar);
+
+  addNotification({
+    type: 'login',
+    title: 'Metfa Unified ID Connected',
+    message: `Signed in as ${user.name} (${email}). Unified Metfa ID: ${user.metfaId}.`,
+    actor: {
+      name: user.name,
+      username: user.username,
+      avatar: user.avatar,
+    },
+    linkTab: 'profile',
+  });
+
+  return user;
+};
+
+export const logoutAuthUser = (): void => {
+  ssoLogout();
+};
+
 export const getPages = (): SocialPage[] => {
   try {
-    const raw = localStorage.getItem(PAGES_STORAGE_KEY);
+    const raw = safeGetItem(PAGES_STORAGE_KEY);
     if (raw) {
       const data = JSON.parse(raw);
       if (Array.isArray(data)) return data;
@@ -166,15 +275,19 @@ export const getPages = (): SocialPage[] => {
 };
 
 export const savePages = (pages: SocialPage[]): void => {
-  localStorage.setItem(PAGES_STORAGE_KEY, JSON.stringify(pages));
-  window.dispatchEvent(new CustomEvent('metfa_pages_updated', { detail: pages }));
+  safeSetItem(PAGES_STORAGE_KEY, JSON.stringify(pages));
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new CustomEvent('metfa_pages_updated', { detail: pages }));
+  }
 };
 
 export const createSocialPage = (page: Omit<SocialPage, 'id' | 'createdAt' | 'followersCount' | 'followingCount' | 'isFollowing'>): SocialPage => {
   const current = getPages();
+  const auth = getAuthUser();
   const newPage: SocialPage = {
     ...page,
     id: `page_${Date.now()}`,
+    ownerId: auth.id,
     followersCount: 1,
     followingCount: 0,
     isFollowing: true,
@@ -217,7 +330,7 @@ export const toggleFollowPage = (pageId: string): SocialPage[] => {
 
 export const getGroups = (): SocialGroup[] => {
   try {
-    const raw = localStorage.getItem(GROUPS_STORAGE_KEY);
+    const raw = safeGetItem(GROUPS_STORAGE_KEY);
     if (raw) {
       const data = JSON.parse(raw);
       if (Array.isArray(data)) return data;
@@ -229,19 +342,23 @@ export const getGroups = (): SocialGroup[] => {
 };
 
 export const saveGroups = (groups: SocialGroup[]): void => {
-  localStorage.setItem(GROUPS_STORAGE_KEY, JSON.stringify(groups));
-  window.dispatchEvent(new CustomEvent('metfa_groups_updated', { detail: groups }));
+  safeSetItem(GROUPS_STORAGE_KEY, JSON.stringify(groups));
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new CustomEvent('metfa_groups_updated', { detail: groups }));
+  }
 };
 
 export const createSocialGroup = (group: Omit<SocialGroup, 'id' | 'createdAt' | 'membersCount' | 'postsCount' | 'isJoined' | 'members'>): SocialGroup => {
   const current = getGroups();
+  const auth = getAuthUser();
   const newGroup: SocialGroup = {
     ...group,
     id: `group_${Date.now()}`,
+    ownerId: auth.id,
     membersCount: 1,
     postsCount: 0,
     isJoined: true,
-    members: ['user_default'],
+    members: [auth.id],
     createdAt: new Date().toISOString().split('T')[0],
   };
   const updated = [newGroup, ...current];
@@ -281,7 +398,7 @@ export const toggleJoinGroup = (groupId: string): SocialGroup[] => {
 
 export const getActiveIdentity = (): PostingIdentity => {
   try {
-    const raw = localStorage.getItem(ACTIVE_IDENTITY_KEY);
+    const raw = safeGetItem(ACTIVE_IDENTITY_KEY);
     if (raw) {
       const data = JSON.parse(raw);
       if (data && data.name && data.username) return data;
@@ -290,24 +407,27 @@ export const getActiveIdentity = (): PostingIdentity => {
     console.error('Error getting active identity:', err);
   }
 
+  const auth = getAuthUser();
   return {
     type: 'personal',
-    id: 'user_default',
-    name: 'You (Creator)',
-    username: 'metfa.creator',
-    avatar: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80',
-    badge: 'Pro Artist',
+    id: auth.id,
+    name: auth.name,
+    username: auth.username,
+    avatar: auth.avatar,
+    badge: auth.isVerified ? 'Verified Creator' : 'Creator',
   };
 };
 
 export const setActiveIdentity = (identity: PostingIdentity): void => {
-  localStorage.setItem(ACTIVE_IDENTITY_KEY, JSON.stringify(identity));
-  window.dispatchEvent(new CustomEvent('metfa_identity_changed', { detail: identity }));
+  safeSetItem(ACTIVE_IDENTITY_KEY, JSON.stringify(identity));
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new CustomEvent('metfa_identity_changed', { detail: identity }));
+  }
 };
 
 export const getReelHighlights = (): ReelHighlight[] => {
   try {
-    const raw = localStorage.getItem(REELS_STORAGE_KEY);
+    const raw = safeGetItem(REELS_STORAGE_KEY);
     if (raw) {
       const data = JSON.parse(raw);
       if (Array.isArray(data)) return data;
@@ -319,8 +439,33 @@ export const getReelHighlights = (): ReelHighlight[] => {
 };
 
 export const saveReelHighlights = (reels: ReelHighlight[]): void => {
-  localStorage.setItem(REELS_STORAGE_KEY, JSON.stringify(reels));
-  window.dispatchEvent(new CustomEvent('metfa_reels_updated', { detail: reels }));
+  // Cap reels to latest 20
+  const trimmed = reels.slice(0, 20);
+  safeSetItem(REELS_STORAGE_KEY, JSON.stringify(trimmed));
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new CustomEvent('metfa_reels_updated', { detail: reels }));
+  }
+};
+
+export const saveReelHighlight = (reel: ReelHighlight): void => {
+  const current = getReelHighlights();
+  const updated = [reel, ...current.filter((r) => r.id !== reel.id)];
+  saveReelHighlights(updated);
+};
+
+export const incrementReelShares = (reelId: string): ReelHighlight[] => {
+  const current = getReelHighlights();
+  const updated = current.map((r) => {
+    if (r.id === reelId) {
+      return {
+        ...r,
+        sharesCount: (r.sharesCount || 0) + 1,
+      };
+    }
+    return r;
+  });
+  saveReelHighlights(updated);
+  return updated;
 };
 
 export const addReelHighlight = (reel: Omit<ReelHighlight, 'id' | 'likesCount' | 'commentsCount' | 'sharesCount' | 'createdAt'>): ReelHighlight => {
@@ -340,7 +485,7 @@ export const addReelHighlight = (reel: Omit<ReelHighlight, 'id' | 'likesCount' |
 
 export const getLiveStreams = (): LiveStream[] => {
   try {
-    const raw = localStorage.getItem(LIVE_STREAMS_KEY);
+    const raw = safeGetItem(LIVE_STREAMS_KEY);
     if (raw) {
       const data = JSON.parse(raw);
       if (Array.isArray(data)) return data;
@@ -352,6 +497,37 @@ export const getLiveStreams = (): LiveStream[] => {
 };
 
 export const saveLiveStreams = (streams: LiveStream[]): void => {
-  localStorage.setItem(LIVE_STREAMS_KEY, JSON.stringify(streams));
-  window.dispatchEvent(new CustomEvent('metfa_livestreams_updated', { detail: streams }));
+  safeSetItem(LIVE_STREAMS_KEY, JSON.stringify(streams));
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new CustomEvent('metfa_livestreams_updated', { detail: streams }));
+  }
 };
+
+/**
+ * Permanently deletes a reel from storage and broadcasts the update event.
+ */
+export const deleteReelHighlight = (reelId: string): ReelHighlight[] => {
+  const current = getReelHighlights();
+  const updated = current.filter((r) => r.id !== reelId);
+  saveReelHighlights(updated);
+  return updated;
+};
+
+/**
+ * Updates an existing reel's metadata (title, caption).
+ */
+export const editReelHighlight = (reelId: string, updates: Partial<ReelHighlight>): ReelHighlight[] => {
+  const current = getReelHighlights();
+  const updated = current.map((r) => {
+    if (r.id === reelId) {
+      return {
+        ...r,
+        ...updates,
+      };
+    }
+    return r;
+  });
+  saveReelHighlights(updated);
+  return updated;
+};
+

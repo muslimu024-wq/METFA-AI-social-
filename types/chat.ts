@@ -22,6 +22,7 @@ export interface ChatMessage {
   isFallback?: boolean;
   latencyMs?: number;
   tokensUsed?: number;
+  systemNotice?: string;
   isError?: boolean;
   canRetry?: boolean;
   retryPayload?: {
@@ -31,6 +32,7 @@ export interface ChatMessage {
 }
 
 export interface StudioSettings {
+  engine?: 'gemini' | 'openai' | 'grok';
   model: string;
   temperature: number;
   systemInstruction?: string;
@@ -40,5 +42,11 @@ export interface StudioSettings {
   safetySettings?: string;
   autoEnhancePrompt?: boolean;
   voiceAutoRead?: boolean;
+  geminiApiKey?: string;
+  openaiApiKey?: string;
+  openaiModel?: string;
+  grokApiKey?: string;
+  grokModel?: string;
+  claudeApiKey?: string;
 }
 

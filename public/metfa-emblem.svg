@@ -1,0 +1,194 @@
+
+<svg width="512" height="512" viewBox="0 0 512 512" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <!-- Background Royal Blue Gradient -->
+    <linearGradient id="bgGrad" x1="256" y1="0" x2="256" y2="512" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#123CE6" />
+      <stop offset="35%" stop-color="#0A28C2" />
+      <stop offset="70%" stop-color="#051B9A" />
+      <stop offset="100%" stop-color="#021074" />
+    </linearGradient>
+
+    <!-- Subtle Radial Top Highlight -->
+    <radialGradient id="topGlow" cx="256" cy="60" r="300" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#3B66FF" stop-opacity="0.45" />
+      <stop offset="100%" stop-color="#123CE6" stop-opacity="0" />
+    </radialGradient>
+
+    <!-- Emblem Subtle 3D Top-to-Bottom White/Pearl Gradient -->
+    <linearGradient id="emblemPearl" x1="256" y1="60" x2="256" y2="390" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#FFFFFF" />
+      <stop offset="55%" stop-color="#F8FAFC" />
+      <stop offset="85%" stop-color="#E2E8F0" />
+      <stop offset="100%" stop-color="#CBD5E1" />
+    </linearGradient>
+
+    <!-- Emblem Drop Shadow for 3D Floating Effect -->
+    <filter id="emblemShadow" x="-15%" y="-15%" width="130%" height="130%" filterUnits="userSpaceOnUse">
+      <feDropShadow dx="0" dy="10" stdDeviation="12" flood-color="#010838" flood-opacity="0.55" />
+      <feDropShadow dx="0" dy="4" stdDeviation="4" flood-color="#000000" flood-opacity="0.3" />
+    </filter>
+
+    <!-- Inner Bevel Lighting -->
+    <filter id="emblemBevel" x="-10%" y="-10%" width="120%" height="120%">
+      <feDropShadow dx="0" dy="3" stdDeviation="2" flood-color="#FFFFFF" flood-opacity="0.9" />
+    </filter>
+  </defs>
+
+  <!-- Squircle / Full Background -->
+  <rect width="512" height="512" rx="114" fill="url(#bgGrad)" />
+         <rect width="512" height="512" rx="114" fill="url(#topGlow)" />
+         <rect x="1" y="1" width="510" height="510" rx="113" fill="none" stroke="#4A75FF" stroke-width="1.5" stroke-opacity="0.4" />
+
+  <!-- Scaled & Centered Emblem Group -->
+  <g transform="translate(15.36, 15.36) scale(0.94)">
+    <!-- Emblem Background Glow / Shadow Container -->
+    <g filter="url(#emblemShadow)">
+
+      <!-- MAIN CONTINUOUS METFA 3D EMBLEM -->
+      <!-- Outer & Inner Compound Path constructed for exact smooth vector fidelity -->
+      
+      <!-- 1. Bottom Main Arch and M Wings Contour -->
+      <path
+        d="M 256 368
+           C 214 368 184 340 162 298
+           C 142 260 120 236 88 236
+           C 52 236 28 266 28 308
+           C 28 348 56 376 96 376
+           C 134 376 172 342 206 288
+           C 224 260 240 234 256 234
+           C 272 234 288 260 306 288
+           C 340 342 378 376 416 376
+           C 456 376 484 348 484 308
+           C 484 266 460 236 424 236
+           C 392 236 370 260 350 298
+           C 328 340 298 368 256 368 Z"
+        fill="url(#emblemPearl)"
+        opacity="0"
+      />
+
+      <!-- Complete Precise Filled Geometry for Metfa Icon (Base 'M' + 2 Upright Crown Petals) -->
+      <path
+        fill-rule="evenodd"
+        clip-rule="evenodd"
+        d="
+          /* Outer Path Outline */
+          M 256 68
+          C 264 68 274 84 286 112
+          C 304 154 326 210 352 210
+          C 378 210 398 190 422 190
+          C 464 190 492 228 492 284
+          C 492 348 448 392 388 392
+          C 342 392 300 358 266 312
+          C 262 306 250 306 246 312
+          C 212 358 170 392 124 392
+          C 64 392 20 348 20 284
+          C 20 228 48 190 90 190
+          C 114 190 134 210 160 210
+          C 186 210 208 154 226 112
+          C 238 84 248 68 256 68 Z
+
+          /* Left Petal / Eye Hole */
+          M 214 138
+          C 202 168 186 210 170 210
+          C 154 210 142 188 150 162
+          C 158 136 182 118 204 118
+          C 212 118 218 126 214 138 Z
+
+          /* Right Petal / Eye Hole */
+          M 298 138
+          C 302 126 308 118 316 118
+          C 338 118 362 136 370 162
+          C 378 188 366 210 350 210
+          C 334 210 318 168 306 138 Z
+
+          /* Left Lower Loop Cutout */
+          M 92 236
+          C 72 236 56 256 56 288
+          C 56 322 82 348 116 348
+          C 144 348 172 322 196 282
+          C 168 252 134 236 92 236 Z
+
+          /* Right Lower Loop Cutout */
+          M 420 236
+          C 378 236 344 252 316 282
+          C 340 322 368 348 396 348
+          C 430 348 456 322 456 288
+          C 456 256 440 236 420 236 Z
+
+          /* Center Valley Cutout */
+          M 256 160
+          C 272 208 288 262 304 286
+          C 284 316 268 332 256 332
+          C 244 332 228 316 208 286
+          C 224 262 240 208 256 160 Z
+        "
+        fill="url(#emblemPearl)"
+      />
+
+      <!-- Detailed 3D Crisp Stroke Ribbon for exact matching to the user's high-res icon -->
+      <!-- Outer Base Wings -->
+      <path
+        d="M 58 330 C 58 358 84 378 118 378 C 158 378 196 342 234 290 C 244 276 268 276 278 290 C 316 342 354 378 394 378 C 428 378 454 358 454 330 C 454 286 426 230 382 230 C 352 230 334 258 310 292 C 290 320 274 336 256 336 C 238 336 222 320 202 292 C 178 258 160 230 130 230 C 86 230 58 286 58 330 Z"
+        fill="url(#emblemPearl)"
+      />
+
+      <!-- Upright Wings Arch Loops -->
+      <path
+        d="M 60 330 C 60 270 96 220 144 220 C 180 220 216 252 256 308 C 296 252 332 220 368 220 C 416 220 452 270 452 330 C 452 366 422 390 386 390 C 342 390 300 354 264 306 L 256 295 L 248 306 C 212 354 170 390 126 390 C 90 390 60 366 60 330 Z"
+        fill="url(#emblemPearl)"
+      />
+
+      <!-- Left Crown Petal (Smooth Teardrop) -->
+      <path
+        d="M 256 270 C 242 228 222 170 200 110 C 190 84 198 64 212 64 C 224 64 236 82 248 112 C 262 148 276 204 284 254 L 256 270 Z"
+        fill="url(#emblemPearl)"
+      />
+
+      <!-- Right Crown Petal (Smooth Teardrop) -->
+      <path
+        d="M 256 270 C 270 228 290 170 312 110 C 322 84 314 64 300 64 C 288 64 276 82 264 112 C 250 148 236 204 228 254 L 256 270 Z"
+        fill="url(#emblemPearl)"
+      />
+
+      <!-- Left Eye Loop (Hollow Teardrop) -->
+      <path
+        fill-rule="evenodd"
+        clip-rule="evenodd"
+        d="M 212 64 C 198 64 186 84 194 112 C 206 156 228 214 246 258 C 250 252 254 244 256 236 C 242 196 224 146 216 112 C 212 96 216 84 224 84 C 230 84 236 92 240 106 C 246 128 252 158 258 190 C 260 180 262 168 262 156 C 256 126 248 98 238 80 C 228 68 220 64 212 64 Z"
+        fill="url(#emblemPearl)"
+      />
+
+      <!-- Right Eye Loop (Hollow Teardrop) -->
+      <path
+        fill-rule="evenodd"
+        clip-rule="evenodd"
+        d="M 300 64 C 314 64 326 84 318 112 C 306 156 284 214 266 258 C 262 252 258 244 256 236 C 270 196 288 146 296 112 C 300 96 296 84 288 84 C 282 84 276 92 272 106 C 266 128 260 158 254 190 C 252 180 250 168 250 156 C 256 126 264 98 274 80 C 284 68 292 64 300 64 Z"
+        fill="url(#emblemPearl)"
+      />
+
+      <!-- Left Outer Wing Arch -->
+      <path
+        fill-rule="evenodd"
+        clip-rule="evenodd"
+        d="M 126 390 C 88 390 56 362 56 322 C 56 272 90 220 144 220 C 182 220 216 256 254 308 C 248 316 240 326 232 334 C 200 292 170 264 142 264 C 108 264 88 296 88 326 C 88 348 104 362 128 362 C 156 362 188 338 220 294 C 228 304 236 316 246 328 C 210 370 170 390 126 390 Z"
+        fill="url(#emblemPearl)"
+      />
+
+      <!-- Right Outer Wing Arch -->
+      <path
+        fill-rule="evenodd"
+        clip-rule="evenodd"
+        d="M 386 390 C 424 390 456 362 456 322 C 456 272 422 220 368 220 C 330 220 296 256 258 308 C 264 316 272 326 280 334 C 312 292 342 264 370 264 C 404 264 424 296 424 326 C 424 348 408 362 384 362 C 356 362 324 338 292 294 C 284 304 276 316 266 328 C 302 370 342 390 386 390 Z"
+        fill="url(#emblemPearl)"
+      />
+
+      <!-- Central Smile Bridge -->
+      <path
+        d="M 140 264 C 180 264 220 300 256 342 C 292 300 332 264 372 264 C 342 264 306 294 274 336 C 266 346 246 346 238 336 C 206 294 170 264 140 264 Z"
+        fill="url(#emblemPearl)"
+      />
+
+    </g>
+  </g>
+</svg>

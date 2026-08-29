@@ -1,5 +1,6 @@
 import { CommunityPost, UserProfile, PostComment, VoiceComment } from '../types/community';
 import { addNotification } from './notificationStore';
+import { safeSetItem, safeGetItem, compressImageDataUrl } from './storageUtils';
 
 const POSTS_STORAGE_KEY = 'metfa_community_posts_v2';
 const USER_PROFILE_KEY = 'metfa_user_profile_v2';
@@ -69,6 +70,19 @@ export const INITIAL_POSTS: CommunityPost[] = [
         timestamp: '1h ago',
         likesCount: 12,
       },
+      {
+        id: 'c_alex_2',
+        author: {
+          id: 'user_default',
+          name: 'Alex Rivera',
+          username: 'alex.rivera',
+          avatar: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=200&auto=format&fit=crop&q=80',
+          isVerified: true,
+        },
+        text: 'The volumetric fog and wet pavement specular highlights look incredible! Great work Elena.',
+        timestamp: '35m ago',
+        likesCount: 6,
+      },
     ],
     voiceComments: [
       {
@@ -125,11 +139,62 @@ export const INITIAL_POSTS: CommunityPost[] = [
     tags: ['Fantasy', 'ConceptArt', 'Photorealism', 'Nature'],
     feedType: 'trending',
   },
+  {
+    id: 'post_alex_1',
+    author: {
+      id: 'user_default',
+      name: 'Alex Rivera',
+      username: 'alex.rivera',
+      avatar: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=200&auto=format&fit=crop&q=80',
+      isVerified: true,
+    },
+    prompt: 'Bioluminescent cybernetic jellyfish drifting through deep twilight ocean trench, iridescent volumetric light rays, 8k octane render',
+    caption: 'Deep oceanic neural synthesis rendered with Gemini multimodal vision. Notice the subtle light refraction through the water! 🌊✨ #DeepOcean #OctaneRender #MetfaArt',
+    stylePreset: 'Photorealistic Studio',
+    imageSrc: 'https://images.unsplash.com/photo-1544551763-46a013bb70d5?w=1000&auto=format&fit=crop&q=80',
+    likesCount: 310,
+    remixCount: 45,
+    commentsCount: 2,
+    sharesCount: 22,
+    isLiked: true,
+    isBookmarked: false,
+    comments: [
+      {
+        id: 'c_alex_own',
+        author: {
+          id: 'user_default',
+          name: 'Alex Rivera',
+          username: 'alex.rivera',
+          avatar: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=200&auto=format&fit=crop&q=80',
+          isVerified: true,
+        },
+        text: 'Used the custom prompt enhancer for this one, really helped with the bioluminescence balance!',
+        timestamp: '30m ago',
+        likesCount: 4,
+      },
+      {
+        id: 'c_marcus_reply',
+        author: {
+          id: 'user_marcus',
+          name: 'Marcus Vance',
+          username: 'marcus_vfx',
+          avatar: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150&auto=format&fit=crop&q=80',
+          isVerified: true,
+        },
+        text: 'The caustic reflections on the tentacles look incredible Alex!',
+        timestamp: '20m ago',
+        likesCount: 2,
+      },
+    ],
+    createdAt: '1 hour ago',
+    tags: ['Underwater', 'Bioluminescence', '8K', 'DigitalArt'],
+    feedType: 'for_you',
+  },
 ];
 
 export const getCommunityPosts = (): CommunityPost[] => {
   try {
-    const raw = localStorage.getItem(POSTS_STORAGE_KEY);
+    const raw = safeGetItem(POSTS_STORAGE_KEY);
     if (raw) {
       const data = JSON.parse(raw);
       if (Array.isArray(data) && data.length > 0) return data;
@@ -141,8 +206,16 @@ export const getCommunityPosts = (): CommunityPost[] => {
 };
 
 export const saveCommunityPosts = (posts: CommunityPost[]): void => {
-  localStorage.setItem(POSTS_STORAGE_KEY, JSON.stringify(posts));
-  window.dispatchEvent(new CustomEvent('metfa_posts_updated', { detail: posts }));
+  try {
+    // Keep max 35 posts in storage to prevent quota overflow
+    const trimmed = posts.slice(0, 35);
+    safeSetItem(POSTS_STORAGE_KEY, JSON.stringify(trimmed));
+  } catch (err) {
+    console.warn('Error saving community posts:', err);
+  }
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new CustomEvent('metfa_posts_updated', { detail: posts }));
+  }
 };
 
 export const saveCommunityPost = (post: Omit<CommunityPost, 'id' | 'likesCount' | 'remixCount' | 'commentsCount' | 'sharesCount' | 'createdAt' | 'comments'>): CommunityPost => {
@@ -196,9 +269,24 @@ export const toggleLikePost = (postId: string): CommunityPost[] => {
   return updated;
 };
 
+export const incrementPostShares = (postId: string): CommunityPost[] => {
+  const current = getCommunityPosts();
+  const updated = current.map((p) => {
+    if (p.id === postId) {
+      return {
+        ...p,
+        sharesCount: (p.sharesCount || 0) + 1,
+      };
+    }
+    return p;
+  });
+  saveCommunityPosts(updated);
+  return updated;
+};
+
 export const getUserProfile = (): UserProfile => {
   try {
-    const raw = localStorage.getItem(USER_PROFILE_KEY);
+    const raw = safeGetItem(USER_PROFILE_KEY);
     if (raw) {
       const data = JSON.parse(raw);
       if (data && data.name && data.username) return data;
@@ -210,6 +298,148 @@ export const getUserProfile = (): UserProfile => {
 };
 
 export const saveUserProfile = (profile: UserProfile): void => {
-  localStorage.setItem(USER_PROFILE_KEY, JSON.stringify(profile));
-  window.dispatchEvent(new CustomEvent('metfa_profile_updated', { detail: profile }));
+  safeSetItem(USER_PROFILE_KEY, JSON.stringify(profile));
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new CustomEvent('metfa_profile_updated', { detail: profile }));
+  }
 };
+
+/**
+ * Validates whether the active user or profile owns the given post or comment.
+ * Accepts either full author/user objects or string IDs.
+ */
+export const isContentOwner = (
+  author: { id?: string; username?: string } | string | undefined | null,
+  userProfile?: { id?: string; username?: string } | string | null,
+  authUser?: { id?: string; username?: string } | string | null,
+  postingIdentity?: { id?: string; username?: string } | string | null
+): boolean => {
+  if (!author) return false;
+
+  const authorId = typeof author === 'string' ? author : author.id;
+  const authorUsername = typeof author === 'string' ? undefined : author.username;
+
+  const getId = (item?: { id?: string; username?: string } | string | null) =>
+    typeof item === 'string' ? item : item?.id;
+  const getUsername = (item?: { id?: string; username?: string } | string | null) =>
+    typeof item === 'string' ? undefined : item?.username;
+
+  const validIds = [
+    getId(userProfile),
+    getId(authUser),
+    'user_default',
+    'usr_metfa_9281',
+  ].filter(Boolean) as string[];
+
+  const validUsernames = [
+    getUsername(userProfile)?.toLowerCase(),
+    getUsername(authUser)?.toLowerCase(),
+    'alex.rivera',
+  ].filter(Boolean) as string[];
+
+  if (authorId && validIds.includes(authorId)) return true;
+  if (authorUsername && validUsernames.includes(authorUsername.toLowerCase())) return true;
+  
+  const postIdentityId = getId(postingIdentity);
+  if (postIdentityId && validIds.includes(postIdentityId)) return true;
+  const postIdentityUsername = getUsername(postingIdentity);
+  if (postIdentityUsername && validUsernames.includes(postIdentityUsername.toLowerCase())) return true;
+
+  return false;
+};
+
+/**
+ * Updates a community post's text, caption, prompt, tags, or styling presets.
+ */
+export const updateCommunityPost = (postId: string, updates: Partial<CommunityPost>): CommunityPost[] => {
+  const current = getCommunityPosts();
+  const updated = current.map((p) => {
+    if (p.id === postId) {
+      return {
+        ...p,
+        ...updates,
+      };
+    }
+    return p;
+  });
+  saveCommunityPosts(updated);
+  return updated;
+};
+
+/**
+ * Permanently removes a community post by ID from storage and dispatches state update.
+ */
+export const deleteCommunityPost = (postId: string): CommunityPost[] => {
+  const current = getCommunityPosts();
+  const updated = current.filter((p) => p.id !== postId);
+  saveCommunityPosts(updated);
+  return updated;
+};
+
+/**
+ * Updates the text of an existing comment on a post.
+ */
+export const updateComment = (postId: string, commentId: string, newText: string): CommunityPost[] => {
+  const current = getCommunityPosts();
+  const updated = current.map((p) => {
+    if (p.id === postId) {
+      const updatedComments = (p.comments || []).map((c) => {
+        if (c.id === commentId) {
+          return {
+            ...c,
+            text: newText.trim(),
+          };
+        }
+        return c;
+      });
+      return {
+        ...p,
+        comments: updatedComments,
+      };
+    }
+    return p;
+  });
+  saveCommunityPosts(updated);
+  return updated;
+};
+
+/**
+ * Deletes a comment from a post and decrements commentsCount.
+ */
+export const deleteComment = (postId: string, commentId: string): CommunityPost[] => {
+  const current = getCommunityPosts();
+  const updated = current.map((p) => {
+    if (p.id === postId) {
+      const updatedComments = (p.comments || []).filter((c) => c.id !== commentId);
+      return {
+        ...p,
+        comments: updatedComments,
+        commentsCount: Math.max(0, (p.commentsCount || 1) - 1),
+      };
+    }
+    return p;
+  });
+  saveCommunityPosts(updated);
+  return updated;
+};
+
+/**
+ * Deletes a voice comment from a post and decrements commentsCount.
+ */
+export const deleteVoiceComment = (postId: string, voiceCommentId: string): CommunityPost[] => {
+  const current = getCommunityPosts();
+  const updated = current.map((p) => {
+    if (p.id === postId) {
+      const updatedVoice = (p.voiceComments || []).filter((v) => v.id !== voiceCommentId);
+      return {
+        ...p,
+        voiceComments: updatedVoice,
+        commentsCount: Math.max(0, (p.commentsCount || 1) - 1),
+      };
+    }
+    return p;
+  });
+  saveCommunityPosts(updated);
+  return updated;
+};
+

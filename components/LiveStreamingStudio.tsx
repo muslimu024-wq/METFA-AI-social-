@@ -15,7 +15,6 @@ import {
   Wand2
 } from 'lucide-react';
 import { LiveStream, LiveStreamMessage, UserProfile } from '../types/community';
-import AccessRequestModal from './AccessRequestModal';
 
 interface LiveStreamingStudioProps {
   userProfile: UserProfile;
@@ -39,7 +38,7 @@ export const LiveStreamingStudio: React.FC<LiveStreamingStudioProps> = ({ userPr
     {
       id: 'lm_2',
       userId: 'user_ai',
-      userName: 'Metfa AI Copilot',
+      userName: 'Metfa Social Copilot',
       userAvatar: 'https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?w=100',
       text: '🤖 Live Tip: Try including "god rays, morning haze, 50mm f/1.4" in your lighting parameter prompt.',
       timestamp: 'Just now',
@@ -47,13 +46,37 @@ export const LiveStreamingStudio: React.FC<LiveStreamingStudioProps> = ({ userPr
     },
   ]);
   const [chatInput, setChatInput] = useState('');
-  const [showPermissionModal, setShowPermissionModal] = useState(false);
 
   const videoRef = useRef<HTMLVideoElement>(null);
   const mediaStreamRef = useRef<MediaStream | null>(null);
 
-  const handleStartLive = () => {
-    setShowPermissionModal(true);
+  const handleStartLive = async () => {
+    try {
+      localStorage.setItem('has_granted_permissions', 'true');
+      localStorage.setItem('metfa_media_permissions_granted', 'granted');
+    } catch {
+      // ignore
+    }
+
+    if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+        handlePermissionsGranted(stream);
+        return;
+      } catch (err: any) {
+        console.warn('getUserMedia video+audio notice, falling back to audio:', err);
+        try {
+          const audioOnlyStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+          handlePermissionsGranted(audioOnlyStream);
+          return;
+        } catch (err2) {
+          console.warn('Live stream media access:', err2);
+          handlePermissionsGranted();
+          return;
+        }
+      }
+    }
+    handlePermissionsGranted();
   };
 
   const handlePermissionsGranted = (stream?: MediaStream) => {
@@ -221,14 +244,6 @@ export const LiveStreamingStudio: React.FC<LiveStreamingStudioProps> = ({ userPr
           </div>
         </div>
       </div>
-
-      <AccessRequestModal
-        isOpen={showPermissionModal}
-        onClose={() => setShowPermissionModal(false)}
-        onPermissionGranted={handlePermissionsGranted}
-        title="Live Stream Device Permissions"
-        description="Metfa AI needs your camera and microphone access to broadcast live video to your community."
-      />
     </div>
   );
 };

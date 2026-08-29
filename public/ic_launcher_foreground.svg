@@ -1,0 +1,132 @@
+
+<svg width="512" height="512" viewBox="0 0 512 512" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <!-- Left Column Gradient (Vibrant Blue to Indigo/Purple) -->
+    <linearGradient id="gradLeftCol" x1="130" y1="410" x2="190" y2="150" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#0066FF" />
+      <stop offset="35%" stop-color="#2563EB" />
+      <stop offset="70%" stop-color="#4F46E5" />
+      <stop offset="100%" stop-color="#7C3AED" />
+    </linearGradient>
+
+    <!-- Left-to-Center Diagonal Ribbon (Purple to Vivid Magenta) -->
+    <linearGradient id="gradLeftDiag" x1="160" y1="160" x2="275" y2="315" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#7C3AED" />
+      <stop offset="35%" stop-color="#9333EA" />
+      <stop offset="75%" stop-color="#C026D3" />
+      <stop offset="100%" stop-color="#E11D48" />
+    </linearGradient>
+
+    <!-- Center-to-Right Diagonal Ribbon & Right Column (Ruby to Fiery Orange & Gold) -->
+    <linearGradient id="gradRightRibbon" x1="240" y1="310" x2="380" y2="150" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#E11D48" />
+      <stop offset="40%" stop-color="#F43F5E" />
+      <stop offset="70%" stop-color="#FB7185" />
+      <stop offset="100%" stop-color="#FB923C" />
+    </linearGradient>
+
+    <linearGradient id="gradRightCol" x1="330" y1="160" x2="385" y2="410" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#F43F5E" />
+      <stop offset="30%" stop-color="#FB923C" />
+      <stop offset="70%" stop-color="#F97316" />
+      <stop offset="100%" stop-color="#EA580C" />
+    </linearGradient>
+
+    <!-- 3D Ribbon Overlap Inner Shadow / Depth Gradient -->
+    <linearGradient id="foldShadow" x1="230" y1="220" x2="270" y2="310" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#000000" stop-opacity="0.25" />
+      <stop offset="100%" stop-color="#000000" stop-opacity="0.0" />
+    </linearGradient>
+
+    <!-- Community Person 1 (Left: Blue to Indigo) -->
+    <linearGradient id="gradPersonLeft" x1="190" y1="330" x2="230" y2="430" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#2563EB" />
+      <stop offset="60%" stop-color="#4F46E5" />
+      <stop offset="100%" stop-color="#6366F1" />
+    </linearGradient>
+
+    <!-- Community Person 2 (Center: Indigo to Purple) -->
+    <linearGradient id="gradPersonCenter" x1="235" y1="310" x2="275" y2="430" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#4F46E5" />
+      <stop offset="50%" stop-color="#7C3AED" />
+      <stop offset="100%" stop-color="#9333EA" />
+    </linearGradient>
+
+    <!-- Community Person 3 (Right: Purple to Magenta) -->
+    <linearGradient id="gradPersonRight" x1="280" y1="330" x2="325" y2="430" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#7C3AED" />
+      <stop offset="60%" stop-color="#A855F7" />
+      <stop offset="100%" stop-color="#C026D3" />
+    </linearGradient>
+
+    <!-- Drop Shadow Filter for 3D realism -->
+    <filter id="softShadow" x="-10%" y="-10%" width="120%" height="120%" filterUnits="userSpaceOnUse">
+      <feDropShadow dx="0" dy="10" stdDeviation="12" flood-color="#0F172A" flood-opacity="0.18" />
+    </filter>
+  </defs>
+
+  <g id="metfa-3d-emblem" filter="url(#softShadow)">
+    <!-- 1. Left Vertical Pillar with Rounded Pill Base and Top Arch -->
+    <path d="M 130 380 C 130 402 148 420 170 420 C 192 420 210 402 210 380 L 210 210 C 210 185 228 150 256 150 C 240 148 200 152 170 180 C 145 204 130 236 130 270 Z" fill="url(#gradLeftCol)" />
+
+    <!-- 2. Left Continuous 'M' Ribbon -->
+    <path d="M 170 420 C 148 420 130 402 130 380 L 130 235 C 130 185 168 145 218 145 C 248 145 272 160 290 182 L 256 312 L 212 188 C 202 165 186 155 170 155 C 145 155 130 175 130 200" fill="none" />
+
+    <!-- Solid Ribbon Geometry for Left Arm -->
+    <path d="M 130 380 C 130 402 148 420 170 420 C 192 420 210 402 210 380 L 210 230 L 295 315 C 304 324 318 324 327 315 L 412 230 L 412 380 C 412 402 394 420 372 420 C 350 420 332 402 332 380 L 332 280 L 278 334 C 266 346 246 346 234 334 L 188 288 L 188 380" fill="none" />
+
+    <!-- Seamless 'M' Shape Construction -->
+    <!-- Left Loop Base -->
+    <path d="M 132 375 C 132 401 153 422 179 422 C 205 422 226 401 226 375 L 226 235 L 298 318 C 305 326 317 326 324 318 L 396 235 L 396 375 C 396 401 417 422 443 422 C 469 422 490 401 490 375" fill="none" />
+
+    <!-- Main 3D Ribbon Body -->
+    <!-- Left Leg -->
+    <path d="M 132 375 C 132 403 155 425 183 425 C 211 425 234 403 234 375 L 234 235 C 234 195 258 165 292 150 C 265 142 228 148 198 172 C 158 204 132 254 132 315 Z" fill="url(#gradLeftCol)" />
+
+    <!-- Left to Center Fold Ribbon -->
+    <path d="M 172 188 L 292 315 C 302 325 318 325 328 315 L 256 238 L 172 188 Z" fill="url(#gradLeftDiag)" />
+
+    <!-- Smooth Full M Shape with Exact Ribbon Overlaps -->
+    <!-- Layer A: Full 'M' Outer Contour -->
+    <path d="M 132 370 L 132 230 C 132 170 175 125 230 125 C 262 125 292 140 312 165 C 332 140 362 125 394 125 C 449 125 492 170 492 230 L 492 370 C 492 398 469 421 441 421 C 413 421 390 398 390 370 L 390 245 C 390 215 372 195 348 195 C 324 195 306 215 306 245 L 306 250 L 256 305 L 206 250 L 206 245 C 206 215 188 195 164 195 C 140 195 132 215 132 245 Z" fill="none" />
+
+    <!-- Realized Left Stem -->
+    <rect x="132" y="210" width="76" height="165" rx="38" fill="url(#gradLeftCol)" />
+    <!-- Realized Right Stem -->
+    <rect x="304" y="210" width="76" height="165" rx="38" fill="url(#gradRightCol)" />
+
+    <!-- Top Left Arch -->
+    <path d="M 132 248 C 132 185 178 140 238 140 C 268 140 295 152 312 172 L 268 222 C 260 212 248 206 234 206 C 208 206 188 226 188 252 L 188 275 L 132 248 Z" fill="url(#gradLeftCol)" />
+
+    <!-- Top Right Arch to Center Fold -->
+    <path d="M 380 248 C 380 185 334 140 274 140 C 244 140 217 152 200 172 L 244 222 C 252 212 264 206 278 206 C 304 206 324 226 324 252 L 324 275 L 380 248 Z" fill="url(#gradRightRibbon)" />
+
+    <!-- Center V Connecting Fold Ribbon -->
+    <path d="M 188 236 L 256 312 C 264 321 278 321 286 312 L 324 270 L 284 224 L 256 256 L 228 224 Z" fill="url(#gradLeftDiag)" />
+
+    <!-- Right Side Dynamic Overlap -->
+    <path d="M 256 256 L 284 224 L 324 270 L 286 312 C 278 321 264 321 256 312 Z" fill="url(#gradRightRibbon)" />
+
+    <!-- ======================================================= -->
+    <!-- 3. THREE COMMUNITY SOCIAL FIGURES (PEOPLE) AT BOTTOM -->
+    <!-- ======================================================= -->
+
+    <!-- Center Person (Main Creator) -->
+    <!-- Head -->
+    <circle cx="256" cy="340" r="19" fill="url(#gradPersonCenter)" />
+    <!-- Torso Droplet -->
+    <path d="M 256 364 C 274 364 288 382 284 402 C 281 416 273 428 256 432 C 239 428 231 416 228 402 C 224 382 238 364 256 364 Z" fill="url(#gradPersonCenter)" />
+
+    <!-- Left Person (Social Member 1) -->
+    <!-- Head -->
+    <circle cx="212" cy="354" r="15" fill="url(#gradPersonLeft)" />
+    <!-- Torso Wing Droplet -->
+    <path d="M 212 374 C 225 374 234 388 230 404 C 226 418 214 428 190 434 C 180 436 172 432 178 424 C 190 408 198 392 202 380 C 204 376 208 374 212 374 Z" fill="url(#gradPersonLeft)" />
+
+    <!-- Right Person (Social Member 2) -->
+    <!-- Head -->
+    <circle cx="300" cy="354" r="15" fill="url(#gradPersonRight)" />
+    <!-- Torso Wing Droplet -->
+    <path d="M 300 374 C 287 374 278 388 282 404 C 286 418 298 428 322 434 C 332 436 340 432 334 424 C 322 408 314 392 310 380 C 308 376 304 374 300 374 Z" fill="url(#gradPersonRight)" />
+  </g>
+</svg>

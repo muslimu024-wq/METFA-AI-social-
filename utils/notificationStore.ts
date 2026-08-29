@@ -6,12 +6,12 @@ const INITIAL_NOTIFICATIONS: AppNotification[] = [
   {
     id: 'notif_welcome',
     type: 'system',
-    title: 'Welcome to Metfa AI Studio ✨',
+    title: 'Welcome to Metfa Social ✨',
     message: 'Explore next-generation multimodal vision intelligence, creative inpainting, 90s Reels, Pages, and Live Broadcasting.',
     timestamp: 'Just now',
     isRead: false,
     actor: {
-      name: 'Metfa AI System',
+      name: 'Metfa Social System',
       username: 'metfa.system',
       avatar: 'https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?w=150&auto=format&fit=crop&q=80',
     },

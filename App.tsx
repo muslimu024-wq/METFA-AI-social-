@@ -1,84 +1,142 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
+import { RotateCw, Sparkles, X } from 'lucide-react';
 import Header from './components/Header';
 import BottomNav from './components/BottomNav';
-import GeminiChatView from './components/GeminiChatView';
-import CommunityFeed from './components/CommunityFeed';
-import ReelsFeedView from './components/ReelsFeedView';
-import LiveStreamingStudio from './components/LiveStreamingStudio';
-import PagesDirectory from './components/PagesDirectory';
-import GroupsDirectory from './components/GroupsDirectory';
-import ProfileView from './components/ProfileView';
-import StudioSettingsDrawer from './components/StudioSettingsDrawer';
+import AuthModal from './components/AuthModal';
+import ApiKeysModal from './components/ApiKeysModal';
 import RewardedAdModal from './components/RewardedAdModal';
-import ShareToFeedModal from './components/ShareToFeedModal';
-import CreatePostModal from './components/CreatePostModal';
 import CreatePageModal from './components/CreatePageModal';
 import CreateGroupModal from './components/CreateGroupModal';
-
-import { ChatMessage, ChatAttachment, StudioSettings } from './types/chat';
-import { CommunityPost, ReelHighlight, UserProfile } from './types/community';
-import {
-  getChatSessions,
-  getCurrentSession,
-  saveSession,
-  createNewSession,
-  getStudioSettings,
-  saveStudioSettings
-} from './utils/chatStore';
-import {
-  getCommunityPosts,
-  saveCommunityPosts,
-  getUserProfile,
-  saveUserProfile
-} from './utils/communityStore';
-import {
-  getReelHighlights
-} from './utils/socialStore';
-import {
-  getDailyCredits,
-  consumeCredit,
-  addRewardCredits,
-  DailyCreditsData
-} from './utils/creditManager';
-import {
-  sendMultimodalMessage,
-  enhancePromptWithAI,
-  upscaleImageWithAI
-} from './services/geminiService';
-import { addNotification } from './utils/notificationStore';
+import { AIStudioModule } from './features/ai-studio';
+import { SocialEcosystemModule, SocialSubTab } from './features/social';
+import { getDailyCredits, addRewardCredits, DailyCreditsData } from './utils/creditManager';
+import { useAuth } from './context/AuthContext';
 
 export function App() {
-  // Navigation
-  const [activeTab, setActiveTab] = useState<'chat' | 'feed' | 'reels' | 'live' | 'pages' | 'groups' | 'profile'>('chat');
+  const { userProfile, isAuthenticated, metfaId } = useAuth();
 
-  // Chat State
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
-  const [isLoading, setIsLoading] = useState(false);
-  const [settings, setSettings] = useState<StudioSettings>(getStudioSettings());
+  // App Navigation: Social-First Architecture - Sync with PWA shortcuts and URL query params
+  const [activeTab, setActiveTab] = useState<'chat' | SocialSubTab>(() => {
+    try {
+      const params = new URLSearchParams(window.location.search);
+      const tabParam = params.get('tab');
+      if (tabParam === 'chat') return 'chat';
+      if (tabParam && ['feed', 'reels', 'notifications', 'live', 'pages', 'groups', 'profile'].includes(tabParam)) {
+        return tabParam as SocialSubTab;
+      }
+    } catch {}
+    return 'feed';
+  });
 
-  // Community & User State
-  const [userProfile, setUserProfile] = useState<UserProfile>(getUserProfile());
-  const [posts, setPosts] = useState<CommunityPost[]>(getCommunityPosts());
-  const [reels, setReels] = useState<ReelHighlight[]>(getReelHighlights());
-  const [creditsData, setCreditsData] = useState<DailyCreditsData>(getDailyCredits());
+  // Keep URL search query aligned with active tab
+  const handleNavigateTab = useCallback((tab: string) => {
+    setActiveTab(tab as any);
+    try {
+      const url = new URL(window.location.href);
+      if (tab === 'feed') {
+        url.searchParams.delete('tab');
+      } else {
+        url.searchParams.set('tab', tab);
+      }
+      window.history.replaceState({}, '', url.toString());
+    } catch {}
+  }, []);
 
-  // Modals & Drawers
-  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  // Shared Credits state for global header & badges
+  const [creditsData, setCreditsData] = useState<DailyCreditsData>(() => getDailyCredits());
+
+  // Global App Shell Modals
+  const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
+  const [isApiKeysOpen, setIsApiKeysOpen] = useState(false);
   const [isRewardedAdOpen, setIsRewardedAdOpen] = useState(false);
-  const [shareModalData, setShareModalData] = useState<{ prompt: string; imageSrc: string; stylePreset?: string } | null>(null);
-  const [isCreatePostOpen, setIsCreatePostOpen] = useState(false);
   const [isCreatePageOpen, setIsCreatePageOpen] = useState(false);
   const [isCreateGroupOpen, setIsCreateGroupOpen] = useState(false);
 
-  // Initialize Chat Session
+  // Automatically dismiss all active modals and overlays when navigating between tabs
   useEffect(() => {
-    const session = getCurrentSession();
-    if (session && session.messages) {
-      setMessages(session.messages);
+    setIsAuthModalOpen(false);
+    setIsApiKeysOpen(false);
+    setIsRewardedAdOpen(false);
+    setIsCreatePageOpen(false);
+    setIsCreateGroupOpen(false);
+    setShareModalData(null);
+  }, [activeTab]);
+
+  // PWA Install Prompt & Standalone Mode Detection
+  const [installPrompt, setInstallPrompt] = useState<any>(null);
+  const [isStandalone, setIsStandalone] = useState<boolean>(() => {
+    try {
+      return (
+        window.matchMedia('(display-mode: standalone)').matches ||
+        (window.navigator as any).standalone === true
+      );
+    } catch {
+      return false;
     }
+  });
+  const [pwaUpdateAvailable, setPwaUpdateAvailable] = useState<boolean>(false);
+  const [swRegistration, setSwRegistration] = useState<ServiceWorkerRegistration | null>(null);
+
+  // PWA Lifecycle Event Handlers
+  useEffect(() => {
+    const handleBeforeInstall = (e: Event) => {
+      e.preventDefault();
+      setInstallPrompt(e);
+    };
+
+    const handleAppInstalled = () => {
+      setInstallPrompt(null);
+      setIsStandalone(true);
+      console.log('[PWA] Metfa Social installed successfully as PWA!');
+    };
+
+    const handlePwaUpdate = (e: any) => {
+      if (e.detail?.registration) {
+        setSwRegistration(e.detail.registration);
+      }
+      setPwaUpdateAvailable(true);
+    };
+
+    window.addEventListener('beforeinstallprompt', handleBeforeInstall);
+    window.addEventListener('appinstalled', handleAppInstalled);
+    window.addEventListener('metfa_pwa_update_available', handlePwaUpdate);
+
+    return () => {
+      window.removeEventListener('beforeinstallprompt', handleBeforeInstall);
+      window.removeEventListener('appinstalled', handleAppInstalled);
+      window.removeEventListener('metfa_pwa_update_available', handlePwaUpdate);
+    };
   }, []);
 
-  // Listen to credits updates across tabs or components
+  const handleInstallPwa = async () => {
+    if (!installPrompt) return;
+    try {
+      await installPrompt.prompt();
+      const choice = await installPrompt.userChoice;
+      if (choice.outcome === 'accepted') {
+        console.log('[PWA] User accepted installation prompt');
+        setInstallPrompt(null);
+      }
+    } catch (err) {
+      console.warn('[PWA] Install prompt failed:', err);
+    }
+  };
+
+  const handleApplyUpdate = () => {
+    if (swRegistration?.waiting) {
+      swRegistration.waiting.postMessage({ type: 'SKIP_WAITING' });
+    }
+    window.location.reload();
+  };
+
+  // Cross-Module Bridge State: Share AI Studio Creation to Social Feed
+  const [shareModalData, setShareModalData] = useState<{
+    prompt: string;
+    imageSrc: string;
+    stylePreset?: string;
+  } | null>(null);
+
+  // Synchronize credits
   useEffect(() => {
     const handleCreditsUpdate = (e: any) => {
       if (e.detail) {
@@ -89,315 +147,132 @@ export function App() {
     return () => window.removeEventListener('metfa_credits_updated', handleCreditsUpdate);
   }, []);
 
-  const handleUpdateSettings = (newSettings: Partial<StudioSettings>) => {
-    const updated = { ...settings, ...newSettings };
-    setSettings(updated);
-    saveStudioSettings(updated);
-  };
-
-  const handleSendMessage = async (text: string, attachments: ChatAttachment[]) => {
-    // Check credits
-    if (creditsData.remainingCredits <= 0) {
-      setIsRewardedAdOpen(true);
-      return;
-    }
-
-    // Deduct 1 credit
-    const updatedCredits = consumeCredit();
-    setCreditsData(updatedCredits);
-
-    const userMsg: ChatMessage = {
-      id: `msg_${Date.now()}`,
-      role: 'user',
-      content: text,
-      attachments,
-      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-    };
-
-    const newMessages = [...messages, userMsg];
-    setMessages(newMessages);
-    setIsLoading(true);
-
-    try {
-      // Build conversation history for context
-      const chatHistory: Array<{ role: 'user' | 'assistant'; content: string }> = newMessages
-        .slice(-6)
-        .filter((m): m is ChatMessage & { role: 'user' | 'assistant' } => m.role === 'user' || m.role === 'assistant')
-        .map((m) => ({
-          role: m.role,
-          content: m.content,
-        }));
-
-      // Call our backend API
-      const result = await sendMultimodalMessage(
-        text,
-        attachments,
-        settings,
-        chatHistory
-      );
-
-      const assistantMsg: ChatMessage = {
-        id: `msg_ai_${Date.now()}`,
-        role: 'assistant',
-        content: result.text || 'Transformation complete.',
-        generatedImageB64: result.generatedImageB64,
-        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-      };
-
-      const finalMessages = [...newMessages, assistantMsg];
-      setMessages(finalMessages);
-
-      // Save to active session
-      const currentSession = getCurrentSession();
-      if (currentSession) {
-        currentSession.messages = finalMessages;
-        currentSession.updatedAt = new Date().toISOString();
-        saveSession(currentSession);
-      }
-
-      if (result.generatedImageB64) {
-        addNotification({
-          type: 'generation_done',
-          title: 'Scene Transformation Ready',
-          message: 'Your multimodal AI render has completed successfully.',
-          linkTab: 'chat',
-        });
-      }
-    } catch (err: any) {
-      console.error('Chat error:', err);
-
-      // Refund the consumed credit on failure so user is never penalized
-      const refunded = addRewardCredits(1);
-      setCreditsData(refunded);
-
-      const isUnavailable =
-        err?.message?.includes('503') ||
-        err?.message?.includes('heavy load') ||
-        err?.message?.includes('timed out') ||
-        err?.message?.includes('busy');
-
-      const friendlyErrorNotice = isUnavailable
-        ? `⚠️ **Gemini Service Notice**\n\nThe AI service is currently experiencing heavy global traffic or high latency. Metfa AI automatically attempted fallback models, but the request timed out.\n\n✨ **Your prompt credit was automatically refunded.** Please click **Try Again** below.`
-        : `⚠️ **Error generating response**\n\n${err.message || 'Please check your connection and try again.'}\n\n✨ **Your prompt credit was automatically refunded.**`;
-
-      const errorMsg: ChatMessage = {
-        id: `msg_err_${Date.now()}`,
-        role: 'assistant',
-        content: friendlyErrorNotice,
-        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-        isError: true,
-        canRetry: true,
-        retryPayload: {
-          text,
-          attachments,
-        },
-      };
-
-      const finalMessagesWithErr = [...newMessages, errorMsg];
-      setMessages(finalMessagesWithErr);
-
-      const currentSession = getCurrentSession();
-      if (currentSession) {
-        currentSession.messages = finalMessagesWithErr;
-        currentSession.updatedAt = new Date().toISOString();
-        saveSession(currentSession);
-      }
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
-  const handleRetryMessage = (payload?: { text: string; attachments: ChatAttachment[] }) => {
-    if (!payload) return;
-    handleSendMessage(payload.text, payload.attachments || []);
-  };
-
-  const handleClearChat = () => {
-    const newSess = createNewSession();
-    setMessages(newSess.messages);
-  };
-
-  const handleUpscaleImage = async (base64Image: string): Promise<string> => {
-    const enhanced = await upscaleImageWithAI(base64Image);
-    addNotification({
-      type: 'generation_done',
-      title: '4K Ultra HD Upscale Ready',
-      message: 'Your creation has been upscaled to crystal-clear 4K resolution.',
-      linkTab: 'chat',
-    });
-    return enhanced;
-  };
-
-  const handleRemixPrompt = (prompt: string, stylePreset?: string) => {
-    if (stylePreset) {
-      handleUpdateSettings({ stylePreset });
-    }
-    setActiveTab('chat');
-    // Pre-populate input or trigger instant generation
-    handleSendMessage(`[Remix Recipe]: ${prompt}`, []);
-  };
-
   const handleRewardClaimed = (amount: number) => {
     const updated = addRewardCredits(amount);
     setCreditsData(updated);
   };
 
-  const handlePostCreated = (newPostData: any) => {
-    const newPost: CommunityPost = {
-      ...newPostData,
-      id: `post_${Date.now()}`,
-      likesCount: 1,
-      remixCount: 0,
-      commentsCount: 0,
-      sharesCount: 0,
-      createdAt: 'Just now',
-      isLiked: true,
-      comments: [],
-    };
-    const updated = [newPost, ...posts];
-    setPosts(updated);
-    saveCommunityPosts(updated);
-    setActiveTab('feed');
+  // Cross-Module Action: Remix prompt from Social post into AI Studio
+  const handleRemixPrompt = useCallback((prompt: string, stylePreset?: string) => {
+    handleNavigateTab('chat');
+    // Dispatch event for AI Studio to catch prompt remix
+    window.dispatchEvent(
+      new CustomEvent('metfa_remix_prompt', {
+        detail: { prompt, stylePreset },
+      })
+    );
+  }, [handleNavigateTab]);
 
-    addNotification({
-      type: 'remix',
-      title: 'Post Published',
-      message: `Your artwork "${newPost.prompt.slice(0, 30)}..." is now live on the feed!`,
-      linkTab: 'feed',
-    });
-  };
+  const isSocialTab = activeTab !== 'chat';
 
   return (
     <div className="flex flex-col h-screen w-screen bg-gray-950 text-gray-100 font-sans antialiased overflow-hidden select-none">
-      {/* Top Navigation Header */}
+      {/* PWA New Version Update Banner */}
+      {pwaUpdateAvailable && (
+        <div className="bg-gradient-to-r from-purple-700 via-teal-600 to-indigo-700 text-white text-xs px-4 py-2 flex items-center justify-between shadow-lg z-50 shrink-0">
+          <div className="flex items-center gap-2">
+            <Sparkles className="w-4 h-4 text-amber-300 animate-spin" />
+            <span className="font-semibold">New Metfa Social update available!</span>
+            <span className="hidden sm:inline text-purple-100">Get the latest AI models & social features.</span>
+          </div>
+          <div className="flex items-center gap-3">
+            <button
+              type="button"
+              onClick={handleApplyUpdate}
+              className="px-3 py-1 bg-white text-purple-900 font-bold rounded-lg hover:bg-purple-50 transition flex items-center gap-1.5 shadow-sm"
+            >
+              <RotateCw className="w-3.5 h-3.5" />
+              <span>Update Now</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setPwaUpdateAvailable(false)}
+              className="p-1 hover:bg-white/20 rounded-md transition text-white/80 hover:text-white"
+              title="Dismiss update notice"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* 1. Global Metfa Unified Top Header */}
       <Header
         activeTab={activeTab}
-        onNavigateTab={(tab) => setActiveTab(tab as any)}
+        onNavigateTab={handleNavigateTab}
         creditsData={creditsData}
         onWatchAdClick={() => setIsRewardedAdOpen(true)}
-        onOpenSettings={() => setIsSettingsOpen(true)}
+        onOpenApiKeysModal={() => setIsApiKeysOpen(true)}
+        onOpenAuthModal={() => setIsAuthModalOpen(true)}
+        onCreatePageClick={() => setIsCreatePageOpen(true)}
+        onCreateGroupClick={() => setIsCreateGroupOpen(true)}
+        installPrompt={installPrompt}
+        onInstallPwa={handleInstallPwa}
+        isStandalone={isStandalone}
       />
 
-      {/* Main Viewport Container - Flex 1 and Min-H-0 ensures zero vertical overflow and dynamic expansion */}
+      {/* 2. Decoupled Feature Modules Viewport */}
       <main className="flex-1 min-h-0 flex flex-col relative overflow-hidden">
-        {activeTab === 'chat' && (
-          <GeminiChatView
-            messages={messages}
-            isLoading={isLoading}
-            onSendMessage={handleSendMessage}
-            onShareToFeed={(data) => setShareModalData(data)}
-            onUpscaleImage={handleUpscaleImage}
-            onClearChat={handleClearChat}
-            settings={settings}
-            onUpdateSettings={handleUpdateSettings}
-            onOpenSettings={() => setIsSettingsOpen(true)}
-            onEnhancePrompt={(p) => enhancePromptWithAI(p)}
-            creditsCount={creditsData.remainingCredits}
-            onRetryMessage={handleRetryMessage}
-          />
-        )}
-
-        {activeTab === 'feed' && (
-          <CommunityFeed
-            posts={posts}
-            onUpdatePosts={(p) => {
-              setPosts(p);
-              saveCommunityPosts(p);
+        {/* Module A: AI Studio (LLM routing, vision, multimodal tools, settings) */}
+        <div className={`w-full h-full flex flex-col flex-1 min-h-0 ${activeTab === 'chat' ? 'flex' : 'hidden'}`}>
+          <AIStudioModule
+            onShareToSocialFeed={(data) => {
+              setShareModalData(data);
+              handleNavigateTab('feed');
             }}
-            userProfile={userProfile}
-            onRemixPrompt={handleRemixPrompt}
-            onCreatePostClick={() => setIsCreatePostOpen(true)}
+            onNavigateToSocial={(tab) => handleNavigateTab(tab)}
           />
-        )}
+        </div>
 
-        {activeTab === 'reels' && (
-          <ReelsFeedView
-            reels={reels}
-            onUpdateReels={(r) => setReels(r)}
-            userProfile={userProfile}
-            onRemixPrompt={handleRemixPrompt}
-            onCreateReelClick={() => setIsCreatePostOpen(true)}
-          />
-        )}
-
-        {activeTab === 'live' && <LiveStreamingStudio userProfile={userProfile} />}
-
-        {activeTab === 'pages' && (
-          <PagesDirectory
-            userProfile={userProfile}
-            onCreatePageClick={() => setIsCreatePageOpen(true)}
-          />
-        )}
-
-        {activeTab === 'groups' && (
-          <GroupsDirectory
-            userProfile={userProfile}
-            onCreateGroupClick={() => setIsCreateGroupOpen(true)}
-          />
-        )}
-
-        {activeTab === 'profile' && (
-          <ProfileView
-            userProfile={userProfile}
-            onUpdateProfile={setUserProfile}
+        {/* Module B: Social Ecosystem (Feed, Reels, Live Streams, Pages, Groups, Profile) */}
+        <div className={`w-full h-full flex flex-col flex-1 min-h-0 ${isSocialTab ? 'flex' : 'hidden'}`}>
+          <SocialEcosystemModule
+            currentTab={isSocialTab ? (activeTab as SocialSubTab) : 'feed'}
+            onNavigateTab={handleNavigateTab}
             creditsData={creditsData}
-            userPosts={posts.filter((p) => p.author.id === userProfile.id)}
-            userReels={reels.filter((r) => r.author.id === userProfile.id)}
             onWatchAdClick={() => setIsRewardedAdOpen(true)}
+            onOpenAuthModal={() => setIsAuthModalOpen(true)}
+            onOpenApiKeysModal={() => setIsApiKeysOpen(true)}
+            onRemixPrompt={handleRemixPrompt}
+            shareModalData={shareModalData}
+            onCloseShareModal={() => setShareModalData(null)}
           />
-        )}
+        </div>
       </main>
 
-      {/* Persistent Bottom Tab Bar */}
-      <BottomNav activeTab={activeTab} onNavigateTab={(tab) => setActiveTab(tab as any)} />
-
-      {/* Studio Settings Drawer */}
-      <StudioSettingsDrawer
-        isOpen={isSettingsOpen}
-        onClose={() => setIsSettingsOpen(false)}
-        settings={settings}
-        onUpdateSettings={handleUpdateSettings}
-        creditsData={creditsData}
-        onWatchAdClick={() => {
-          setIsSettingsOpen(false);
-          setIsRewardedAdOpen(true);
-        }}
+      {/* 3. Global Persistent Bottom Navigation */}
+      <BottomNav
+        activeTab={activeTab}
+        onNavigateTab={handleNavigateTab}
       />
 
-      {/* Rewarded Ad Modal */}
+      {/* 4. Global SSO Auth Modal */}
+      <AuthModal
+        isOpen={isAuthModalOpen}
+        onClose={() => setIsAuthModalOpen(false)}
+      />
+
+      {/* 5. Global API Secrets & Key Configuration Modal */}
+      <ApiKeysModal
+        isOpen={isApiKeysOpen}
+        onClose={() => setIsApiKeysOpen(false)}
+      />
+
+      {/* 6. Prompt Credits Refill Modal */}
       <RewardedAdModal
         isOpen={isRewardedAdOpen}
         onClose={() => setIsRewardedAdOpen(false)}
         onRewardClaimed={handleRewardClaimed}
       />
 
-      {/* Share to Feed Modal */}
-      {shareModalData && (
-        <ShareToFeedModal
-          isOpen={true}
-          onClose={() => setShareModalData(null)}
-          postData={shareModalData}
-          userProfile={userProfile}
-          onPostCreated={handlePostCreated}
-        />
-      )}
-
-      {/* Create Post Modal */}
-      <CreatePostModal
-        isOpen={isCreatePostOpen}
-        onClose={() => setIsCreatePostOpen(false)}
-        userProfile={userProfile}
-        onPostCreated={handlePostCreated}
-      />
-
-      {/* Create Page Modal */}
+      {/* 7. Quick Page Creation Modal */}
       <CreatePageModal
         isOpen={isCreatePageOpen}
         onClose={() => setIsCreatePageOpen(false)}
         userProfile={userProfile}
       />
 
-      {/* Create Group Modal */}
+      {/* 8. Quick Group Creation Modal */}
       <CreateGroupModal
         isOpen={isCreateGroupOpen}
         onClose={() => setIsCreateGroupOpen(false)}
