@@ -1,7 +1,6 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import GeminiChatView from '../../components/GeminiChatView';
 import StudioSettingsDrawer from '../../components/StudioSettingsDrawer';
-import ApiKeysModal from '../../components/ApiKeysModal';
 import RewardedAdModal from '../../components/RewardedAdModal';
 import { ChatMessage, ChatAttachment, StudioSettings } from '../../types/chat';
 import {
@@ -46,7 +45,6 @@ export const AIStudioModule: React.FC<AIStudioProps> = ({
 
   // Local AI Studio Modals
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
-  const [isApiKeysOpen, setIsApiKeysOpen] = useState(false);
   const [isRewardedAdOpen, setIsRewardedAdOpen] = useState(false);
 
   // Helper to ensure 100% deduplicated message list by unique ID
@@ -60,14 +58,57 @@ export const AIStudioModule: React.FC<AIStudioProps> = ({
     return Array.from(map.values());
   }, []);
 
-  // Initialize Chat Session
+  // 1. Initial Load of Chat History & Settings
   useEffect(() => {
     const session = getCurrentSession();
     if (session && session.messages) {
       setMessages(deduplicateMessages(session.messages));
     }
+    setSettings(getStudioSettings());
+    setCreditsData(getDailyCredits());
   }, [deduplicateMessages]);
 
+  // 2. Global Event Listeners for Multi-AI synchronization
+  useEffect(() => {
+    const handleNewChat = () => {
+      const newSession = createNewSession();
+      setMessages([]);
+      saveSession(newSession);
+    };
+
+    const handleClearHistory = () => {
+      clearAllChatHistory();
+      setMessages([]);
+    };
+
+    const handleSwitchEngine = (e: any) => {
+      if (e.detail?.engine) {
+        const engine = e.detail.engine;
+        const model = engine === 'gemini' ? 'gemini-3.7-flash' : engine === 'openai' ? 'gpt-4o' : 'grok-2';
+        setSettings((prev) => {
+          const updated = { ...prev, engine, model };
+          saveStudioSettings(updated);
+          return updated;
+        });
+      }
+    };
+
+    const handleOpenSettingsModal = () => setIsSettingsOpen(true);
+
+    window.addEventListener('metfa_ai_new_chat', handleNewChat);
+    window.addEventListener('metfa_ai_clear_history', handleClearHistory);
+    window.addEventListener('metfa_ai_switch_engine', handleSwitchEngine);
+    window.addEventListener('metfa_ai_open_settings', handleOpenSettingsModal);
+
+    return () => {
+      window.removeEventListener('metfa_ai_new_chat', handleNewChat);
+      window.removeEventListener('metfa_ai_clear_history', handleClearHistory);
+      window.removeEventListener('metfa_ai_switch_engine', handleSwitchEngine);
+      window.removeEventListener('metfa_ai_open_settings', handleOpenSettingsModal);
+    };
+  }, []);
+
+  // Sync settings when updated
   const handleUpdateSettings = useCallback((newSettings: Partial<StudioSettings>) => {
     setSettings((prev) => {
       const updated = { ...prev, ...newSettings };
@@ -76,254 +117,166 @@ export const AIStudioModule: React.FC<AIStudioProps> = ({
     });
   }, []);
 
-  const handleSendMessage = useCallback(async (text: string, attachments: ChatAttachment[]) => {
-    // Prevent duplicate submissions if actively generating
-    if (isLoading) return;
+  // Send Message with Multi-AI Routing & Multimodal Support
+  const handleSendMessage = async (text: string, attachments: ChatAttachment[]) => {
+    if (!text.trim() && attachments.length === 0) return;
 
-    // Check credits
+    // Check Credits
     if (creditsData.remainingCredits <= 0) {
       setIsRewardedAdOpen(true);
       return;
     }
 
-    // Deduct 1 credit
+    // 1. Consume 1 Credit
     const updatedCredits = consumeCredit();
     setCreditsData(updatedCredits);
 
-    const userMsgId = `msg_user_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
-    const userMsg: ChatMessage = {
-      id: userMsgId,
+    const userMessageId = `user_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+    const userMessage: ChatMessage = {
+      id: userMessageId,
       role: 'user',
       content: text,
-      attachments,
-      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+      timestamp: new Date().toISOString(),
+      attachments: attachments.length > 0 ? attachments : undefined,
     };
 
-    // Append user message once to state and local storage
-    let currentHistory: ChatMessage[] = [];
-    setMessages((prevMessages) => {
-      const newMessages = deduplicateMessages([...prevMessages, userMsg]);
-      currentHistory = newMessages;
-      const currentSession = getCurrentSession();
-      if (currentSession) {
-        currentSession.messages = newMessages;
-        currentSession.updatedAt = new Date().toISOString();
-        saveSession(currentSession);
-      }
-      return newMessages;
-    });
-
+    // Append user message immediately
+    const updatedMessages = deduplicateMessages([...messages, userMessage]);
+    setMessages(updatedMessages);
     setIsLoading(true);
 
+    // Save to persistence
+    const currentSession = getCurrentSession();
+    if (currentSession) {
+      currentSession.messages = updatedMessages;
+      saveSession(currentSession);
+    }
+
     try {
-      const chatHistory: Array<{ role: 'user' | 'assistant'; content: string }> = currentHistory
-        .slice(-6)
-        .filter((m): m is ChatMessage & { role: 'user' | 'assistant' } => m.role === 'user' || m.role === 'assistant')
-        .map((m) => ({
-          role: m.role,
-          content: m.content,
-        }));
+      const history = messages
+        .filter((m) => m.role === 'user' || m.role === 'assistant')
+        .map((m) => ({ role: m.role as 'user' | 'assistant', content: m.content }));
 
-      const result = await sendMultimodalMessage(text, attachments, settings, chatHistory);
+      // 2. Call AI Service (routes to Gemini/OpenAI/Grok)
+      const aiResponse = await sendMultimodalMessage(
+        text,
+        attachments,
+        settings,
+        history
+      );
 
-      const assistantMsg: ChatMessage = {
-        id: `msg_ai_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`,
+      const assistantMessageId = `ai_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+      const assistantMessage: ChatMessage = {
+        id: assistantMessageId,
         role: 'assistant',
-        content: result.text || 'Transformation complete.',
-        systemNotice: result.systemNotice,
-        modelUsed: result.modelUsed,
-        isFallback: result.isFallback,
-        latencyMs: result.latencyMs,
-        tokensUsed: result.tokensUsed,
-        generatedImageB64: result.generatedImageB64,
-        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        content: aiResponse.text,
+        timestamp: new Date().toISOString(),
+        generatedImageB64: aiResponse.generatedImageB64,
+        isImageGeneration: Boolean(aiResponse.generatedImageB64 || aiResponse.isImageGeneration),
+        modelUsed: aiResponse.modelUsed || settings.model || 'gemini-3.7-flash',
+        isFallback: aiResponse.isFallback,
+        latencyMs: aiResponse.latencyMs,
+        tokensUsed: aiResponse.tokensUsed,
+        systemNotice: aiResponse.systemNotice,
       };
 
-      setMessages((current) => {
-        const finalMessages = deduplicateMessages([...current, assistantMsg]);
-        const currentSession = getCurrentSession();
-        if (currentSession) {
-          currentSession.messages = finalMessages;
-          currentSession.updatedAt = new Date().toISOString();
-          saveSession(currentSession);
-        }
-        return finalMessages;
-      });
+      const finalMessages = deduplicateMessages([...updatedMessages, assistantMessage]);
+      setMessages(finalMessages);
 
-      if (result.generatedImageB64) {
+      if (currentSession) {
+        currentSession.messages = finalMessages;
+        saveSession(currentSession);
+      }
+
+      // If image was generated, trigger helpful notification
+      if (aiResponse.generatedImageB64) {
         addNotification({
-          type: 'generation_done',
-          title: 'Scene Transformation Ready',
-          message: 'Your multimodal AI render has completed successfully.',
+          type: 'system',
+          title: 'Metfa AI Studio Creation',
+          message: 'Generated your visual creation in high definition!',
+          actor: {
+            name: 'Metfa AI Studio',
+            username: 'studio.ai',
+            avatar: '/logo.png',
+          },
           linkTab: 'chat',
         });
       }
     } catch (err: any) {
-      console.error('Chat error:', err);
-
-      if (err?.message?.includes('OpenAI') || err?.message?.includes('credits') || err?.message?.includes('Grok')) {
-        handleUpdateSettings({ engine: 'gemini', model: 'gemini-3.7-flash' });
-      }
-
-      const refunded = addRewardCredits(1);
-      setCreditsData(refunded);
-
-      const isUnavailable =
-        err?.message?.includes('503') ||
-        err?.message?.includes('heavy load') ||
-        err?.message?.includes('timed out') ||
-        err?.message?.includes('busy');
-
-      const friendlyErrorNotice = isUnavailable
-        ? `⚠️ **Gemini Service Notice**\n\nThe AI service is currently experiencing high load. Metfa Social attempted automatic fallbacks, but the request timed out.\n\n✨ **Your prompt credit was refunded.** Click **Try Again** below.`
-        : `⚠️ **Error generating response**\n\n${err.message || 'Please check your connection and try again.'}\n\n✨ **Your prompt credit was refunded.**`;
-
-      const errorMsg: ChatMessage = {
-        id: `msg_err_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`,
+      console.error('Inference execution error:', err);
+      const errorMessageId = `err_${Date.now()}`;
+      const errorMessage: ChatMessage = {
+        id: errorMessageId,
         role: 'assistant',
-        content: friendlyErrorNotice,
-        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        content: `**AI Service Notice:** ${err?.message || 'Unable to connect to AI server. Please try again.'}`,
+        timestamp: new Date().toISOString(),
         isError: true,
         canRetry: true,
-        retryPayload: {
-          text,
-          attachments,
-        },
+        retryPayload: { text, attachments },
       };
 
-      setMessages((current) => {
-        const finalMessagesWithErr = deduplicateMessages([...current, errorMsg]);
-        const currentSession = getCurrentSession();
-        if (currentSession) {
-          currentSession.messages = finalMessagesWithErr;
-          currentSession.updatedAt = new Date().toISOString();
-          saveSession(currentSession);
-        }
-        return finalMessagesWithErr;
-      });
+      const finalMessages = deduplicateMessages([...updatedMessages, errorMessage]);
+      setMessages(finalMessages);
+      if (currentSession) {
+        currentSession.messages = finalMessages;
+        saveSession(currentSession);
+      }
     } finally {
       setIsLoading(false);
     }
-  }, [isLoading, creditsData.remainingCredits, settings, handleUpdateSettings, deduplicateMessages]);
-
-  // Listen to credits updates and cross-module remix events
-  useEffect(() => {
-    const handleCreditsUpdate = (e: any) => {
-      if (e.detail) {
-        setCreditsData(e.detail);
-      }
-    };
-
-    const handleRemixEvent = (e: any) => {
-      if (e.detail?.prompt) {
-        if (e.detail.stylePreset) {
-          handleUpdateSettings({ stylePreset: e.detail.stylePreset });
-        }
-        handleSendMessage(`[Remix Recipe]: ${e.detail.prompt}`, []);
-      }
-    };
-
-    const handleSwitchEngineEvent = (e: any) => {
-      if (e.detail?.engine) {
-        const eng = e.detail.engine;
-        const model = eng === 'gemini' ? 'gemini-3.7-flash' : eng === 'openai' ? 'gpt-4o' : 'grok-2';
-        handleUpdateSettings({ engine: eng, model });
-      }
-    };
-
-    const handleOpenSettingsEvent = () => {
-      setIsSettingsOpen(true);
-    };
-
-    const handleOpenKeysEvent = () => {
-      setIsApiKeysOpen(true);
-    };
-
-    const handleNewChatEvent = () => {
-      const newSess = createNewSession();
-      setMessages(newSess.messages);
-    };
-
-    const handleClearHistoryEvent = () => {
-      const updated = clearAllChatHistory();
-      setMessages(updated);
-    };
-
-    window.addEventListener('metfa_credits_updated', handleCreditsUpdate);
-    window.addEventListener('metfa_remix_prompt', handleRemixEvent);
-    window.addEventListener('metfa_ai_switch_engine', handleSwitchEngineEvent);
-    window.addEventListener('metfa_ai_open_settings', handleOpenSettingsEvent);
-    window.addEventListener('metfa_ai_open_keys', handleOpenKeysEvent);
-    window.addEventListener('metfa_ai_new_chat', handleNewChatEvent);
-    window.addEventListener('metfa_ai_clear_history', handleClearHistoryEvent);
-
-    return () => {
-      window.removeEventListener('metfa_credits_updated', handleCreditsUpdate);
-      window.removeEventListener('metfa_remix_prompt', handleRemixEvent);
-      window.removeEventListener('metfa_ai_switch_engine', handleSwitchEngineEvent);
-      window.removeEventListener('metfa_ai_open_settings', handleOpenSettingsEvent);
-      window.removeEventListener('metfa_ai_open_keys', handleOpenKeysEvent);
-      window.removeEventListener('metfa_ai_new_chat', handleNewChatEvent);
-      window.removeEventListener('metfa_ai_clear_history', handleClearHistoryEvent);
-    };
-  }, [handleSendMessage, handleUpdateSettings]);
-
-  const handleRetryMessage = (payload?: { text: string; attachments: ChatAttachment[] }) => {
-    if (!payload) return;
-    handleSendMessage(payload.text, payload.attachments || []);
   };
 
-  const handleClearChat = () => {
-    const newSess = createNewSession();
-    setMessages(newSess.messages);
-  };
+  const handleRetryMessage = useCallback((payload?: { text: string; attachments: ChatAttachment[] }) => {
+    if (payload && (payload.text || (payload.attachments && payload.attachments.length > 0))) {
+      handleSendMessage(payload.text, payload.attachments || []);
+    }
+  }, [handleSendMessage]);
 
-  const handleDeleteMessage = (messageId: string) => {
-    const updated = deleteChatMessage(messageId);
-    setMessages(updated);
-  };
+  const handleClearChat = useCallback(() => {
+    setMessages([]);
+    const session = createNewSession();
+    saveSession(session);
+  }, []);
 
-  const handleClearAllHistory = () => {
-    const updated = clearAllChatHistory();
-    setMessages(updated);
-  };
+  const handleDeleteMessage = useCallback((messageId: string) => {
+    deleteChatMessage(messageId);
+    setMessages((prev) => prev.filter((m) => m.id !== messageId));
+  }, []);
 
-  const handleUpscaleImage = async (base64Image: string): Promise<string> => {
-    const enhanced = await upscaleImageWithAI(base64Image);
-    addNotification({
-      type: 'generation_done',
-      title: '4K Ultra HD Upscale Ready',
-      message: 'Your creation has been upscaled to crystal-clear 4K resolution.',
-      linkTab: 'chat',
-    });
-    return enhanced;
-  };
+  const handleClearAllHistory = useCallback(() => {
+    clearAllChatHistory();
+    setMessages([]);
+  }, []);
 
-  const handleRewardClaimed = (amount: number) => {
+  const handleRewardClaimed = useCallback((amount: number) => {
     const updated = addRewardCredits(amount);
     setCreditsData(updated);
-  };
+    setIsRewardedAdOpen(false);
+  }, []);
+
+  const handleShareToFeed = useCallback(
+    (postData: { prompt: string; imageSrc: string; stylePreset?: string }) => {
+      if (onShareToSocialFeed) {
+        onShareToSocialFeed(postData);
+      }
+    },
+    [onShareToSocialFeed]
+  );
 
   return (
-    <div className="w-full h-full flex flex-col flex-1 min-h-0 relative overflow-hidden">
-      {/* Primary Multimodal Viewport */}
+    <div className="w-full h-full flex flex-col relative overflow-hidden bg-[#04060C]">
       <GeminiChatView
         messages={messages}
         isLoading={isLoading}
         onSendMessage={handleSendMessage}
-        onShareToFeed={(postData) => {
-          if (onShareToSocialFeed) {
-            onShareToSocialFeed(postData);
-          }
-        }}
-        onUpscaleImage={handleUpscaleImage}
+        onShareToFeed={handleShareToFeed}
+        onUpscaleImage={(img) => upscaleImageWithAI(img)}
         onClearChat={handleClearChat}
         onDeleteMessage={handleDeleteMessage}
         onClearAllHistory={handleClearAllHistory}
         settings={settings}
         onUpdateSettings={handleUpdateSettings}
         onOpenSettings={() => setIsSettingsOpen(true)}
-        onOpenApiKeys={() => setIsApiKeysOpen(true)}
         onEnhancePrompt={(p) => enhancePromptWithAI(p)}
         creditsCount={creditsData.remainingCredits}
         creditsData={creditsData}
@@ -344,22 +297,7 @@ export const AIStudioModule: React.FC<AIStudioProps> = ({
         }}
       />
 
-      {/* BYO Keys Configuration */}
-      <ApiKeysModal
-        isOpen={isApiKeysOpen}
-        onClose={() => setIsApiKeysOpen(false)}
-        onKeysUpdated={(updatedKeys) => {
-          if (updatedKeys.geminiApiKey || updatedKeys.openaiApiKey || updatedKeys.grokApiKey) {
-            handleUpdateSettings({
-              geminiApiKey: updatedKeys.geminiApiKey,
-              openaiApiKey: updatedKeys.openaiApiKey,
-              grokApiKey: updatedKeys.grokApiKey,
-            });
-          }
-        }}
-      />
-
-      {/* Prompt Credits Refill Modal */}
+      {/* Credits Refill Modal */}
       <RewardedAdModal
         isOpen={isRewardedAdOpen}
         onClose={() => setIsRewardedAdOpen(false)}
@@ -369,5 +307,4 @@ export const AIStudioModule: React.FC<AIStudioProps> = ({
   );
 };
 
-export const AIToolsView = AIStudioModule;
 export default AIStudioModule;

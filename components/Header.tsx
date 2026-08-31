@@ -39,7 +39,6 @@ interface HeaderProps {
   creditsData: DailyCreditsData;
   onWatchAdClick?: () => void;
   onOpenSettings?: () => void;
-  onOpenApiKeysModal?: () => void;
   onOpenAuthModal?: () => void;
   onCreatePageClick?: () => void;
   onCreateGroupClick?: () => void;
@@ -55,7 +54,6 @@ export const Header: React.FC<HeaderProps> = ({
   creditsData,
   onWatchAdClick,
   onOpenSettings,
-  onOpenApiKeysModal,
   onOpenAuthModal,
   onCreatePageClick,
   onCreateGroupClick,
@@ -101,16 +99,14 @@ export const Header: React.FC<HeaderProps> = ({
               className="flex items-center gap-2.5 cursor-pointer group select-none shrink-0"
               title="Metfa Social - Home Feed"
             >
-              <div className="w-9 h-9 min-w-[36px] max-w-[36px] min-h-[36px] max-h-[36px] rounded-2xl bg-[#0A28BD] shadow-md shadow-blue-950/60 group-hover:scale-105 transition-transform shrink-0 overflow-hidden flex items-center justify-center border border-blue-400/40">
-                <img
-                  src="/logo.png"
-                  alt="Metfa Social Official Logo"
-                  className="w-full h-full max-w-[36px] max-h-[36px] object-contain rounded-xl block pointer-events-none"
-                  onError={(e) => {
-                    (e.currentTarget as HTMLImageElement).src = '/metfa-emblem.png';
-                  }}
-                />
-              </div>
+              <img
+                src="/logo.png"
+                alt="Metfa Social Official Logo"
+                className="w-9 h-9 min-w-[36px] max-w-[36px] min-h-[36px] max-h-[36px] rounded-2xl shadow-md shadow-blue-950/60 group-hover:scale-105 transition-transform shrink-0 object-cover block pointer-events-none"
+                onError={(e) => {
+                  (e.currentTarget as HTMLImageElement).src = '/metfa-emblem.png';
+                }}
+              />
               <h1 className="text-base sm:text-lg font-black tracking-tight text-white group-hover:text-blue-300 transition whitespace-nowrap flex items-baseline gap-1">
                 <span className="font-black text-white text-base sm:text-lg tracking-tight">metfa</span>
                 <span className="bg-gradient-to-r from-blue-400 via-indigo-300 to-teal-300 bg-clip-text text-transparent font-bold text-xs sm:text-sm">Social</span>
@@ -139,7 +135,6 @@ export const Header: React.FC<HeaderProps> = ({
             {activeTab === 'chat' && (
               <AISettingsDropdown
                 onOpenSettings={onOpenSettings}
-                onOpenApiKeysModal={onOpenApiKeysModal}
                 onNavigateTab={onNavigateTab}
               />
             )}
@@ -179,17 +174,15 @@ export const Header: React.FC<HeaderProps> = ({
             <div className="space-y-5">
               {/* Drawer Header */}
               <div className="flex items-center justify-between pb-4 border-b border-gray-800">
-                <div className="flex items-center gap-2">
-                  <div className="w-8 h-8 min-w-[32px] max-w-[32px] min-h-[32px] max-h-[32px] rounded-xl bg-[#0A28BD] border border-blue-400/40 overflow-hidden flex items-center justify-center shadow-md shrink-0">
-                    <img
-                      src="/logo.png"
-                      alt="Metfa Social"
-                      className="w-full h-full max-w-[32px] max-h-[32px] object-contain rounded-lg block pointer-events-none"
-                      onError={(e) => {
-                        (e.currentTarget as HTMLImageElement).src = '/metfa-emblem.png';
-                      }}
-                    />
-                  </div>
+                <div className="flex items-center gap-2.5">
+                  <img
+                    src="/logo.png"
+                    alt="Metfa Social"
+                    className="w-8 h-8 min-w-[32px] max-w-[32px] min-h-[32px] max-h-[32px] rounded-xl shadow-md shrink-0 object-cover block pointer-events-none"
+                    onError={(e) => {
+                      (e.currentTarget as HTMLImageElement).src = '/metfa-emblem.png';
+                    }}
+                  />
                   <div>
                     <h3 className="text-sm font-black text-white">Menu & Shortcuts</h3>
                     <p className="text-[10px] text-gray-400">Metfa Social & AI Ecosystem</p>
@@ -455,20 +448,6 @@ export const Header: React.FC<HeaderProps> = ({
 
             {/* Drawer Footer */}
             <div className="pt-4 border-t border-gray-800 space-y-2 text-xs text-gray-400">
-              {onOpenApiKeysModal && (
-                <button
-                  type="button"
-                  id="drawer-api-keys-btn"
-                  onClick={() => {
-                    setIsSideDrawerOpen(false);
-                    onOpenApiKeysModal();
-                  }}
-                  className="w-full py-2 px-3 rounded-xl bg-purple-950/40 border border-purple-800/40 hover:bg-purple-900/40 flex items-center gap-2 text-purple-300 hover:text-white transition"
-                >
-                  <Key className="w-4 h-4 text-purple-400" />
-                  <span>App Secrets & API Keys</span>
-                </button>
-              )}
               {onOpenSettings && (
                 <button
                   type="button"
@@ -482,6 +461,23 @@ export const Header: React.FC<HeaderProps> = ({
                   <span>Studio & Multi-AI Settings</span>
                 </button>
               )}
+
+              <button
+                type="button"
+                onClick={() => {
+                  setIsSideDrawerOpen(false);
+                  window.dispatchEvent(new CustomEvent('metfa_open_api_keys_modal'));
+                }}
+                className="w-full py-2 px-3 rounded-xl hover:bg-teal-950/40 border border-teal-500/20 hover:border-teal-500/50 flex items-center justify-between text-teal-300 hover:text-teal-200 transition"
+              >
+                <div className="flex items-center gap-2">
+                  <Key className="w-4 h-4 text-teal-400" />
+                  <span>App Secrets & API Keys</span>
+                </div>
+                <span className="text-[10px] bg-teal-500/20 text-teal-300 px-1.5 py-0.5 rounded font-mono">
+                  BYOK
+                </span>
+              </button>
 
               {/* PWA Install Button (When browser supports install prompt) */}
               {onInstallPwa && installPrompt && (

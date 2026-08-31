@@ -45,6 +45,10 @@ export function getStoredApiKeys(): AppApiKeys {
     }
 
     // Sanitize any revoked/placeholder keys
+    if (keys.geminiApiKey && (!keys.geminiApiKey.startsWith('AIza') || keys.geminiApiKey.includes('...') || keys.geminiApiKey.length < 20)) {
+      // If it is not a genuine Google AI key format, clear it so it doesn't send broken requests
+      keys.geminiApiKey = '';
+    }
     if (keys.openaiApiKey && (keys.openaiApiKey.startsWith('sk-proj-k4NuRPTm') || keys.openaiApiKey.includes('...'))) {
       keys.openaiApiKey = '';
     }

@@ -9,6 +9,13 @@ export interface SharePayload {
   authorUsername?: string;
 }
 
+export const getAppBaseUrl = (): string => {
+  if (typeof window !== 'undefined' && window.location?.origin) {
+    return window.location.origin;
+  }
+  return ((import.meta as any).env?.VITE_APP_URL as string) || 'https://metfa.ai';
+};
+
 /**
  * Triggers native Web Share API (navigator.share) when supported on mobile or desktop.
  * If not supported or if an unexpected error occurs, triggers fallback callback.
@@ -22,7 +29,7 @@ export async function executeNativeShare(
 ): Promise<boolean> {
   const currentUrl =
     payload.url ||
-    (typeof window !== 'undefined' ? window.location.href : 'https://metfa.ai');
+    (typeof window !== 'undefined' ? window.location.href : getAppBaseUrl());
 
   const shareTitle = payload.title || 'Metfa Social';
   const shareText =
@@ -61,7 +68,7 @@ export async function executeNativeShare(
  * Generate quick social share URLs
  */
 export function getSocialShareLinks(payload: SharePayload) {
-  const url = payload.url || (typeof window !== 'undefined' ? window.location.href : 'https://metfa.ai');
+  const url = payload.url || (typeof window !== 'undefined' ? window.location.href : getAppBaseUrl());
   const text = payload.text ? `${payload.text} - ${url}` : `Metfa Social: ${payload.title} ${url}`;
   const encodedUrl = encodeURIComponent(url);
   const encodedText = encodeURIComponent(text);

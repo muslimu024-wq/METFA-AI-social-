@@ -105,6 +105,14 @@
       ::-webkit-scrollbar-thumb:hover {
         background: rgba(148, 163, 184, 0.6);
       }
+
+      /* Multi-line clamp for post text */
+      .post-text {
+        display: -webkit-box;
+        -webkit-line-clamp: 3;
+        -webkit-box-orient: vertical;
+        overflow: hidden;
+      }
     </style>
   </head>
   <body class="bg-gray-950 text-gray-100 antialiased selection:bg-purple-500 selection:text-white min-h-screen">

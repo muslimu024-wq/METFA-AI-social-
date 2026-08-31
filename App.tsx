@@ -3,10 +3,10 @@ import { RotateCw, Sparkles, X } from 'lucide-react';
 import Header from './components/Header';
 import BottomNav from './components/BottomNav';
 import AuthModal from './components/AuthModal';
-import ApiKeysModal from './components/ApiKeysModal';
 import RewardedAdModal from './components/RewardedAdModal';
 import CreatePageModal from './components/CreatePageModal';
 import CreateGroupModal from './components/CreateGroupModal';
+import AISettingsModal from './components/AISettingsModal';
 import { AIStudioModule } from './features/ai-studio';
 import { SocialEcosystemModule, SocialSubTab } from './features/social';
 import { getDailyCredits, addRewardCredits, DailyCreditsData } from './utils/creditManager';
@@ -47,18 +47,18 @@ export function App() {
 
   // Global App Shell Modals
   const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
-  const [isApiKeysOpen, setIsApiKeysOpen] = useState(false);
   const [isRewardedAdOpen, setIsRewardedAdOpen] = useState(false);
   const [isCreatePageOpen, setIsCreatePageOpen] = useState(false);
   const [isCreateGroupOpen, setIsCreateGroupOpen] = useState(false);
+  const [isApiKeysModalOpen, setIsApiKeysModalOpen] = useState(false);
 
   // Automatically dismiss all active modals and overlays when navigating between tabs
   useEffect(() => {
     setIsAuthModalOpen(false);
-    setIsApiKeysOpen(false);
     setIsRewardedAdOpen(false);
     setIsCreatePageOpen(false);
     setIsCreateGroupOpen(false);
+    setIsApiKeysModalOpen(false);
     setShareModalData(null);
   }, [activeTab]);
 
@@ -68,18 +68,28 @@ export function App() {
     try {
       return (
         window.matchMedia('(display-mode: standalone)').matches ||
-        (window.navigator as any).standalone === true
+        (window.navigator as any).standalone === true ||
+        document.referrer.includes('android-app://')
       );
     } catch {
       return false;
     }
   });
-  const [pwaUpdateAvailable, setPwaUpdateAvailable] = useState<boolean>(false);
-  const [swRegistration, setSwRegistration] = useState<ServiceWorkerRegistration | null>(null);
 
-  // PWA Lifecycle Event Handlers
+  // PWA Update Available Notification State
+  const [pwaUpdateAvailable, setPwaUpdateAvailable] = useState<boolean>(false);
+  const [waitingWorker, setWaitingWorker] = useState<ServiceWorker | null>(null);
+
+  // Global Share to Social Modal Payload
+  const [shareModalData, setShareModalData] = useState<{
+    prompt: string;
+    imageSrc: string;
+    stylePreset?: string;
+  } | null>(null);
+
+  // Listen for PWA Install Prompt
   useEffect(() => {
-    const handleBeforeInstall = (e: Event) => {
+    const handleBeforeInstallPrompt = (e: Event) => {
       e.preventDefault();
       setInstallPrompt(e);
     };
@@ -87,99 +97,93 @@ export function App() {
     const handleAppInstalled = () => {
       setInstallPrompt(null);
       setIsStandalone(true);
-      console.log('[PWA] Metfa Social installed successfully as PWA!');
     };
 
-    const handlePwaUpdate = (e: any) => {
-      if (e.detail?.registration) {
-        setSwRegistration(e.detail.registration);
+    const handleSwUpdated = (e: any) => {
+      if (e.detail && e.detail.waiting) {
+        setWaitingWorker(e.detail.waiting);
+        setPwaUpdateAvailable(true);
       }
-      setPwaUpdateAvailable(true);
     };
 
-    window.addEventListener('beforeinstallprompt', handleBeforeInstall);
+    window.addEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
     window.addEventListener('appinstalled', handleAppInstalled);
-    window.addEventListener('metfa_pwa_update_available', handlePwaUpdate);
+    window.addEventListener('swUpdated', handleSwUpdated);
+
+    // Global listener to trigger Auth Modal from any deep action
+    const handleOpenAuth = () => setIsAuthModalOpen(true);
+    const handleOpenApiKeys = () => setIsApiKeysModalOpen(true);
+    window.addEventListener('metfa_open_auth_modal', handleOpenAuth);
+    window.addEventListener('metfa_open_api_keys_modal', handleOpenApiKeys);
 
     return () => {
-      window.removeEventListener('beforeinstallprompt', handleBeforeInstall);
+      window.removeEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
       window.removeEventListener('appinstalled', handleAppInstalled);
-      window.removeEventListener('metfa_pwa_update_available', handlePwaUpdate);
+      window.removeEventListener('swUpdated', handleSwUpdated);
+      window.removeEventListener('metfa_open_auth_modal', handleOpenAuth);
+      window.removeEventListener('metfa_open_api_keys_modal', handleOpenApiKeys);
     };
   }, []);
 
   const handleInstallPwa = async () => {
     if (!installPrompt) return;
     try {
-      await installPrompt.prompt();
-      const choice = await installPrompt.userChoice;
-      if (choice.outcome === 'accepted') {
-        console.log('[PWA] User accepted installation prompt');
+      installPrompt.prompt();
+      const { outcome } = await installPrompt.userChoice;
+      if (outcome === 'accepted') {
         setInstallPrompt(null);
       }
     } catch (err) {
-      console.warn('[PWA] Install prompt failed:', err);
+      console.error('PWA Install Error:', err);
     }
   };
 
-  const handleApplyUpdate = () => {
-    if (swRegistration?.waiting) {
-      swRegistration.waiting.postMessage({ type: 'SKIP_WAITING' });
+  const handleReloadApp = () => {
+    if (waitingWorker) {
+      waitingWorker.postMessage({ type: 'SKIP_WAITING' });
     }
     window.location.reload();
   };
 
-  // Cross-Module Bridge State: Share AI Studio Creation to Social Feed
-  const [shareModalData, setShareModalData] = useState<{
-    prompt: string;
-    imageSrc: string;
-    stylePreset?: string;
-  } | null>(null);
-
-  // Synchronize credits
-  useEffect(() => {
-    const handleCreditsUpdate = (e: any) => {
-      if (e.detail) {
-        setCreditsData(e.detail);
-      }
-    };
-    window.addEventListener('metfa_credits_updated', handleCreditsUpdate);
-    return () => window.removeEventListener('metfa_credits_updated', handleCreditsUpdate);
+  // Sync credits when updated anywhere in the app
+  const refreshCredits = useCallback(() => {
+    setCreditsData(getDailyCredits());
   }, []);
 
-  const handleRewardClaimed = (amount: number) => {
+  const handleRewardClaimed = useCallback((amount: number) => {
     const updated = addRewardCredits(amount);
     setCreditsData(updated);
-  };
+    setIsRewardedAdOpen(false);
+  }, []);
 
-  // Cross-Module Action: Remix prompt from Social post into AI Studio
-  const handleRemixPrompt = useCallback((prompt: string, stylePreset?: string) => {
+  // Handle Remixing prompt from Social Feed into AI Studio Chat
+  const handleRemixPrompt = useCallback((prompt: string) => {
     handleNavigateTab('chat');
-    // Dispatch event for AI Studio to catch prompt remix
-    window.dispatchEvent(
-      new CustomEvent('metfa_remix_prompt', {
-        detail: { prompt, stylePreset },
-      })
-    );
+    setTimeout(() => {
+      window.dispatchEvent(
+        new CustomEvent('metfa_remix_prompt', {
+          detail: { prompt },
+        })
+      );
+    }, 150);
   }, [handleNavigateTab]);
 
   const isSocialTab = activeTab !== 'chat';
 
   return (
-    <div className="flex flex-col h-screen w-screen bg-gray-950 text-gray-100 font-sans antialiased overflow-hidden select-none">
-      {/* PWA New Version Update Banner */}
+    <div className="flex flex-col h-screen h-[100dvh] w-full bg-[#04060C] text-gray-100 overflow-hidden font-sans select-none">
+      {/* PWA Update Ready Banner */}
       {pwaUpdateAvailable && (
-        <div className="bg-gradient-to-r from-purple-700 via-teal-600 to-indigo-700 text-white text-xs px-4 py-2 flex items-center justify-between shadow-lg z-50 shrink-0">
-          <div className="flex items-center gap-2">
-            <Sparkles className="w-4 h-4 text-amber-300 animate-spin" />
-            <span className="font-semibold">New Metfa Social update available!</span>
-            <span className="hidden sm:inline text-purple-100">Get the latest AI models & social features.</span>
+        <div className="bg-gradient-to-r from-purple-700 via-indigo-600 to-teal-600 text-white px-4 py-2 text-xs flex items-center justify-between shadow-md z-50 shrink-0">
+          <div className="flex items-center gap-2 font-medium">
+            <Sparkles className="w-4 h-4 animate-spin text-teal-300" />
+            <span>A new version of Metfa Social is ready!</span>
           </div>
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-2">
             <button
               type="button"
-              onClick={handleApplyUpdate}
-              className="px-3 py-1 bg-white text-purple-900 font-bold rounded-lg hover:bg-purple-50 transition flex items-center gap-1.5 shadow-sm"
+              onClick={handleReloadApp}
+              className="bg-white text-gray-900 font-bold px-3 py-1 rounded-lg text-xs hover:bg-gray-150 transition flex items-center gap-1 shadow-xs"
             >
               <RotateCw className="w-3.5 h-3.5" />
               <span>Update Now</span>
@@ -202,7 +206,6 @@ export function App() {
         onNavigateTab={handleNavigateTab}
         creditsData={creditsData}
         onWatchAdClick={() => setIsRewardedAdOpen(true)}
-        onOpenApiKeysModal={() => setIsApiKeysOpen(true)}
         onOpenAuthModal={() => setIsAuthModalOpen(true)}
         onCreatePageClick={() => setIsCreatePageOpen(true)}
         onCreateGroupClick={() => setIsCreateGroupOpen(true)}
@@ -232,7 +235,6 @@ export function App() {
             creditsData={creditsData}
             onWatchAdClick={() => setIsRewardedAdOpen(true)}
             onOpenAuthModal={() => setIsAuthModalOpen(true)}
-            onOpenApiKeysModal={() => setIsApiKeysOpen(true)}
             onRemixPrompt={handleRemixPrompt}
             shareModalData={shareModalData}
             onCloseShareModal={() => setShareModalData(null)}
@@ -252,31 +254,31 @@ export function App() {
         onClose={() => setIsAuthModalOpen(false)}
       />
 
-      {/* 5. Global API Secrets & Key Configuration Modal */}
-      <ApiKeysModal
-        isOpen={isApiKeysOpen}
-        onClose={() => setIsApiKeysOpen(false)}
-      />
-
-      {/* 6. Prompt Credits Refill Modal */}
+      {/* 5. Prompt Credits Refill Modal */}
       <RewardedAdModal
         isOpen={isRewardedAdOpen}
         onClose={() => setIsRewardedAdOpen(false)}
         onRewardClaimed={handleRewardClaimed}
       />
 
-      {/* 7. Quick Page Creation Modal */}
+      {/* 6. Quick Page Creation Modal */}
       <CreatePageModal
         isOpen={isCreatePageOpen}
         onClose={() => setIsCreatePageOpen(false)}
         userProfile={userProfile}
       />
 
-      {/* 8. Quick Group Creation Modal */}
+      {/* 7. Quick Group Creation Modal */}
       <CreateGroupModal
         isOpen={isCreateGroupOpen}
         onClose={() => setIsCreateGroupOpen(false)}
         userProfile={userProfile}
+      />
+
+      {/* 8. App Secrets & AI API Keys Modal */}
+      <AISettingsModal
+        isOpen={isApiKeysModalOpen}
+        onClose={() => setIsApiKeysModalOpen(false)}
       />
     </div>
   );

@@ -13,7 +13,7 @@ import {
   Mail,
   Globe
 } from 'lucide-react';
-import { SharePayload, getSocialShareLinks } from '../utils/shareUtils';
+import { SharePayload, getSocialShareLinks, getAppBaseUrl } from '../utils/shareUtils';
 
 interface SocialShareModalProps {
   isOpen: boolean;
@@ -34,7 +34,7 @@ export const SocialShareModal: React.FC<SocialShareModalProps> = ({
 
   const currentUrl =
     payload.url ||
-    (typeof window !== 'undefined' ? window.location.href : 'https://metfa.ai');
+    (typeof window !== 'undefined' ? window.location.href : getAppBaseUrl());
 
   const links = getSocialShareLinks(payload);
 

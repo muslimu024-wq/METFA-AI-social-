@@ -3,11 +3,15 @@ import {
   AuthUser,
   getActiveSSOUser,
   persistSSOSession,
-  ssoLoginWithPhone,
-  ssoLoginWithGmail,
-  ssoLogout,
-  parseSSOToken,
+  saveProfileAndEnterMetfa,
+  signInWithGoogleOAuth,
+  supabaseSignOut,
+  fetchSupabaseProfile,
+  upsertSupabaseProfile,
+  mapSupabaseUserToAuthUser,
+  INITIAL_GUEST_USER,
 } from '../services/authService';
+import { supabase, isSupabaseConfigured } from '../services/supabaseClient';
 import { UserProfile, PostingIdentity } from '../types/community';
 import { getUserProfile, saveUserProfile as doSaveUserProfile } from '../utils/communityStore';
 import { getActiveIdentity, setActiveIdentity as doSetActiveIdentity } from '../utils/socialStore';
@@ -17,12 +21,22 @@ interface AuthContextType {
   userProfile: UserProfile;
   activeIdentity: PostingIdentity;
   isAuthenticated: boolean;
+  isSupabaseConnected: boolean;
   sessionToken: string | null;
   metfaId: string;
-  loginPhone: (phoneNumber: string, name: string, customUsername?: string, customAvatar?: string) => AuthUser;
-  loginGmail: (email: string, name: string, customAvatar?: string, customUsername?: string) => AuthUser;
-  logout: () => void;
-  updateProfile: (profile: Partial<UserProfile>) => void;
+  loginPhone: (phoneNumber: string, name: string, customUsername?: string, customAvatar?: string) => Promise<{ user: AuthUser; profile: UserProfile; error?: string }>;
+  loginGmail: (email: string, name: string, customAvatar?: string, customUsername?: string) => Promise<{ user: AuthUser; profile: UserProfile; error?: string }>;
+  saveProfileAndEnter: (params: {
+    authMethod: 'gmail' | 'phone';
+    identifier: string;
+    fullName: string;
+    username?: string;
+    avatar: string;
+    password?: string;
+  }) => Promise<{ user: AuthUser; profile: UserProfile; error?: string }>;
+  signInWithGoogle: (params?: { email?: string; fullName?: string; avatar?: string }) => Promise<{ url?: string; error?: string; user?: AuthUser; profile?: UserProfile }>;
+  logout: () => Promise<void>;
+  updateProfile: (profile: Partial<UserProfile>) => Promise<void>;
   switchIdentity: (identity: PostingIdentity) => void;
   refreshAuth: () => void;
 }
@@ -33,6 +47,7 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   const [user, setUser] = useState<AuthUser>(() => getActiveSSOUser());
   const [userProfile, setUserProfile] = useState<UserProfile>(() => getUserProfile());
   const [activeIdentity, setActiveIdentityState] = useState<PostingIdentity>(() => getActiveIdentity());
+  const isSupabaseConnected = isSupabaseConfigured();
 
   const refreshAuth = useCallback(() => {
     const currentAuth = getActiveSSOUser();
@@ -43,6 +58,60 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     setActiveIdentityState(currentId);
   }, []);
 
+  // 1. Initialize Supabase Session on App Startup & Listen to Auth State Changes
+  useEffect(() => {
+    if (!isSupabaseConnected) {
+      console.info('[Metfa Auth] Supabase not yet configured. Running in local session mode.');
+      return;
+    }
+
+    let isMounted = true;
+
+    // Check initial session
+    supabase.auth.getSession().then(async ({ data: { session }, error }) => {
+      if (!isMounted) return;
+      if (error) {
+        console.warn('[Supabase] Get session error:', error.message);
+        return;
+      }
+      if (session?.user) {
+        const { authUser, userProfile: syncedProfile } = await mapSupabaseUserToAuthUser(session.user, session);
+        if (isMounted) {
+          setUser(authUser);
+          setUserProfile(syncedProfile);
+          persistSSOSession(authUser, syncedProfile);
+        }
+      }
+    });
+
+    // Subscribe to auth state changes (OAuth callbacks, token refresh, sign-in, sign-out)
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
+      if (!isMounted) return;
+      console.log(`[Supabase Auth Event]: ${event}`);
+
+      if (session?.user && (event === 'SIGNED_IN' || event === 'INITIAL_SESSION' || event === 'USER_UPDATED' || event === 'TOKEN_REFRESHED')) {
+        const { authUser, userProfile: syncedProfile } = await mapSupabaseUserToAuthUser(session.user, session);
+        if (isMounted) {
+          setUser(authUser);
+          setUserProfile(syncedProfile);
+          persistSSOSession(authUser, syncedProfile);
+        }
+      } else if (event === 'SIGNED_OUT') {
+        if (isMounted) {
+          const guestUser = INITIAL_GUEST_USER;
+          setUser(guestUser);
+          persistSSOSession(guestUser);
+        }
+      }
+    });
+
+    return () => {
+      isMounted = false;
+      subscription?.unsubscribe();
+    };
+  }, [isSupabaseConnected]);
+
+  // 2. Window Custom Event Listeners for UI state sync
   useEffect(() => {
     const handleAuthChanged = (e: any) => {
       if (e.detail) {
@@ -76,31 +145,79 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     };
   }, [refreshAuth]);
 
-  const loginPhone = useCallback((phoneNumber: string, name: string, customUsername?: string, customAvatar?: string): AuthUser => {
-    const loggedInUser = ssoLoginWithPhone(phoneNumber, name, customUsername, customAvatar);
-    setUser(loggedInUser);
-    const updatedProfile = getUserProfile();
-    setUserProfile(updatedProfile);
-    setActiveIdentityState(getActiveIdentity());
-    return loggedInUser;
-  }, []);
+  // Real Save Profile & Enter Metfa Handler
+  const saveProfileAndEnter = useCallback(
+    async (params: {
+      authMethod: 'gmail' | 'phone';
+      identifier: string;
+      fullName: string;
+      username?: string;
+      avatar: string;
+      password?: string;
+    }) => {
+      const result = await saveProfileAndEnterMetfa(params);
+      if (!result.error && result.user) {
+        setUser(result.user);
+        setUserProfile(result.profile);
+        const activeId: PostingIdentity = {
+          type: 'personal',
+          id: result.user.id,
+          name: result.user.name,
+          username: result.user.username,
+          avatar: result.user.avatar,
+          badge: result.user.isVerified ? 'Verified Creator' : 'Creator',
+        };
+        doSetActiveIdentity(activeId);
+        setActiveIdentityState(activeId);
+      }
+      return result;
+    },
+    []
+  );
 
-  const loginGmail = useCallback((email: string, name: string, customAvatar?: string, customUsername?: string): AuthUser => {
-    const loggedInUser = ssoLoginWithGmail(email, name, customAvatar, customUsername);
-    setUser(loggedInUser);
-    const updatedProfile = getUserProfile();
-    setUserProfile(updatedProfile);
-    setActiveIdentityState(getActiveIdentity());
-    return loggedInUser;
-  }, []);
+  const loginPhone = useCallback(
+    async (phoneNumber: string, name: string, customUsername?: string, customAvatar?: string) => {
+      return saveProfileAndEnter({
+        authMethod: 'phone',
+        identifier: phoneNumber,
+        fullName: name,
+        username: customUsername,
+        avatar: customAvatar || `https://api.dicebear.com/7.x/bottts/svg?seed=${name}`,
+      });
+    },
+    [saveProfileAndEnter]
+  );
 
-  const logout = useCallback(() => {
-    const guestUser = ssoLogout();
+  const loginGmail = useCallback(
+    async (email: string, name: string, customAvatar?: string, customUsername?: string) => {
+      return saveProfileAndEnter({
+        authMethod: 'gmail',
+        identifier: email,
+        fullName: name,
+        username: customUsername,
+        avatar: customAvatar || `https://api.dicebear.com/7.x/avataaars/svg?seed=${name}`,
+      });
+    },
+    [saveProfileAndEnter]
+  );
+
+  const signInWithGoogle = useCallback(async (params?: { email?: string; fullName?: string; avatar?: string }) => {
+    const res = await signInWithGoogleOAuth(params);
+    if (res.user && res.profile) {
+      setUser(res.user);
+      setUserProfile(res.profile);
+      refreshAuth();
+    }
+    return res;
+  }, [refreshAuth]);
+
+  const logout = useCallback(async () => {
+    const guestUser = await supabaseSignOut();
     setUser(guestUser);
     refreshAuth();
   }, [refreshAuth]);
 
-  const updateProfile = useCallback((updates: Partial<UserProfile>) => {
+  const updateProfile = useCallback(async (updates: Partial<UserProfile>) => {
     const current = getUserProfile();
     const updated: UserProfile = {
       ...current,
@@ -108,6 +225,15 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     };
     doSaveUserProfile(updated);
     setUserProfile(updated);
+
+    // If Supabase is connected and user is authenticated, persist to profiles table
+    if (isSupabaseConfigured() && user.id && !user.id.startsWith('guest_')) {
+      try {
+        await upsertSupabaseProfile(user.id, updated);
+      } catch (err) {
+        console.warn('[Supabase] Failed to sync profile updates to database:', err);
+      }
+    }
 
     // Also sync with AuthUser & ActiveIdentity
     const currentAuth = getActiveSSOUser();
@@ -117,7 +243,7 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       username: updated.username || currentAuth.username,
       avatar: updated.avatar || currentAuth.avatar,
     };
-    persistSSOSession(updatedAuth);
+    persistSSOSession(updatedAuth, updated);
     setUser(updatedAuth);
 
     const activeId: PostingIdentity = {
@@ -130,14 +256,14 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     };
     doSetActiveIdentity(activeId);
     setActiveIdentityState(activeId);
-  }, []);
+  }, [user.id]);
 
   const switchIdentity = useCallback((identity: PostingIdentity) => {
     doSetActiveIdentity(identity);
     setActiveIdentityState(identity);
   }, []);
 
-  const isAuthenticated = user.authType !== 'guest';
+  const isAuthenticated = user.authType !== 'guest' && Boolean(user.id);
 
   return (
     <AuthContext.Provider
@@ -146,10 +272,13 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         userProfile,
         activeIdentity,
         isAuthenticated,
+        isSupabaseConnected,
         sessionToken: user.sessionToken || null,
         metfaId: user.metfaId || 'MID-GUEST',
         loginPhone,
         loginGmail,
+        saveProfileAndEnter,
+        signInWithGoogle,
         logout,
         updateProfile,
         switchIdentity,
@@ -168,3 +297,5 @@ export const useAuth = (): AuthContextType => {
   }
   return context;
 };
+
+export default AuthContext;

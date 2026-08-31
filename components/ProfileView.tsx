@@ -60,7 +60,6 @@ interface ProfileViewProps {
   onOpenAuthModal?: () => void;
   onCreatePageClick?: () => void;
   onCreateGroupClick?: () => void;
-  onOpenSettings?: () => void;
 }
 
 const AVATAR_STYLES = [
@@ -86,7 +85,6 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
   onOpenAuthModal,
   onCreatePageClick,
   onCreateGroupClick,
-  onOpenSettings,
 }) => {
   const { user: authUser, activeIdentity, updateProfile, switchIdentity } = useAuth();
   const [isEditing, setIsEditing] = useState(false);

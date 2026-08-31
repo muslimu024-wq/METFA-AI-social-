@@ -18,7 +18,6 @@ import {
   Download,
   CheckCircle2,
   Flame,
-  Key,
   Film,
   Crop,
   Trash2,
@@ -46,7 +45,6 @@ interface GeminiChatViewProps {
   settings?: Partial<StudioSettings>;
   onUpdateSettings?: (settings: Partial<StudioSettings>) => void;
   onOpenSettings?: () => void;
-  onOpenApiKeys?: () => void;
   onEnhancePrompt?: (prompt: string) => Promise<string>;
   creditsCount: number;
   creditsData?: DailyCreditsData;
@@ -66,7 +64,6 @@ export const GeminiChatView: React.FC<GeminiChatViewProps> = ({
   settings,
   onUpdateSettings,
   onOpenSettings,
-  onOpenApiKeys,
   onEnhancePrompt,
   creditsCount,
   creditsData,
@@ -415,17 +412,6 @@ export const GeminiChatView: React.FC<GeminiChatViewProps> = ({
                             >
                               <Sparkles className="w-3.5 h-3.5 text-purple-700" />
                               <span>Switch to Gemini 3.7 Flash</span>
-                            </button>
-                          )}
-
-                          {onOpenApiKeys && (
-                            <button
-                              type="button"
-                              onClick={onOpenApiKeys}
-                              className="px-3 py-1.5 bg-gray-100 hover:bg-gray-200 border border-gray-300 text-gray-800 font-bold text-xs rounded-xl shadow-xs flex items-center gap-1.5 transition active:scale-95"
-                            >
-                              <Key className="w-3.5 h-3.5 text-amber-600" />
-                              <span>Configure API Keys</span>
                             </button>
                           )}
 

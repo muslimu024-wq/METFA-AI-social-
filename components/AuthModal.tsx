@@ -4,18 +4,16 @@ import {
   Phone,
   Mail,
   User,
-  Sparkles,
   ShieldCheck,
-  Check,
-  ArrowRight,
   Smartphone,
-  Lock,
-  Globe,
   LogIn,
   Camera,
-  AtSign
+  AtSign,
+  AlertCircle,
+  Loader2,
+  Lock,
 } from 'lucide-react';
-import { AuthUser } from '../utils/socialStore';
+import { AuthUser } from '../services/authService';
 import { useAuth } from '../context/AuthContext';
 import { compressImageDataUrl } from '../utils/storageUtils';
 
@@ -38,15 +36,17 @@ export const AuthModal: React.FC<AuthModalProps> = ({
   onClose,
   onAuthSuccess,
 }) => {
-  const { loginPhone, loginGmail } = useAuth();
-  const [authMethod, setAuthMethod] = useState<'phone' | 'gmail'>('phone');
+  const { saveProfileAndEnter, signInWithGoogle, isSupabaseConnected } = useAuth();
+  const [authMethod, setAuthMethod] = useState<'phone' | 'gmail'>('gmail');
   const [phoneNumber, setPhoneNumber] = useState('');
   const [phoneCountryCode, setPhoneCountryCode] = useState('+1');
   const [fullName, setFullName] = useState('');
   const [customUsername, setCustomUsername] = useState('');
+  const [password, setPassword] = useState('');
   const [selectedAvatar, setSelectedAvatar] = useState<string>(AVATAR_PRESETS[0]);
   const [gmailEmail, setGmailEmail] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isGoogleLoading, setIsGoogleLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
@@ -68,7 +68,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
     }
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMsg('');
 
@@ -77,60 +77,69 @@ export const AuthModal: React.FC<AuthModalProps> = ({
         setErrorMsg('Please enter a valid mobile phone number.');
         return;
       }
-      setIsSubmitting(true);
-      try {
-        const fullPhone = `${phoneCountryCode} ${phoneNumber.trim()}`;
-        const user = loginPhone(
-          fullPhone,
-          fullName.trim() || 'Mobile Creator',
-          customUsername.trim() || undefined,
-          selectedAvatar
-        );
-        setIsSubmitting(false);
-        onAuthSuccess?.(user);
-        onClose();
-      } catch (err: any) {
-        setIsSubmitting(false);
-        setErrorMsg(err?.message || 'Failed to sign in. Please try again.');
-      }
     } else {
       if (!gmailEmail.trim() || !gmailEmail.includes('@')) {
         setErrorMsg('Please enter a valid email address.');
         return;
       }
-      setIsSubmitting(true);
-      try {
-        const user = loginGmail(
-          gmailEmail.trim(),
-          fullName.trim() || gmailEmail.split('@')[0],
-          selectedAvatar,
-          customUsername.trim() || undefined
-        );
-        setIsSubmitting(false);
-        onAuthSuccess?.(user);
-        onClose();
-      } catch (err: any) {
-        setIsSubmitting(false);
-        setErrorMsg(err?.message || 'Failed to sign in. Please try again.');
-      }
     }
-  };
 
-  const handleQuickDemoGmail = () => {
+    if (!fullName.trim()) {
+      setErrorMsg('Please enter your full name or creator display name.');
+      return;
+    }
+
     setIsSubmitting(true);
     try {
-      const user = loginGmail(
-        'creator@metfa.ai',
-        fullName.trim() || 'Metfa Creator',
-        selectedAvatar,
-        customUsername.trim() || undefined
-      );
+      const identifier = authMethod === 'phone'
+        ? `${phoneCountryCode} ${phoneNumber.trim()}`
+        : gmailEmail.trim();
+
+      const result = await saveProfileAndEnter({
+        authMethod,
+        identifier,
+        fullName: fullName.trim(),
+        username: customUsername.trim() || undefined,
+        avatar: selectedAvatar,
+        password: password.trim() || undefined,
+      });
+
       setIsSubmitting(false);
-      onAuthSuccess?.(user);
+      if (result.error) {
+        setErrorMsg(result.error);
+        return;
+      }
+
+      onAuthSuccess?.(result.user);
       onClose();
     } catch (err: any) {
       setIsSubmitting(false);
-      setErrorMsg(err?.message || 'Failed to sign in.');
+      setErrorMsg(err?.message || 'Authentication failed. Please check network connection.');
+    }
+  };
+
+  const handleGoogleSignIn = async () => {
+    setErrorMsg('');
+    setIsGoogleLoading(true);
+    try {
+      const result = await signInWithGoogle({
+        email: gmailEmail.trim() || undefined,
+        fullName: fullName.trim() || undefined,
+        avatar: selectedAvatar,
+      });
+      setIsGoogleLoading(false);
+      if (result.error) {
+        setErrorMsg(result.error);
+        return;
+      }
+      if (result.user) {
+        onAuthSuccess?.(result.user);
+        onClose();
+      }
+      // If OAuth redirect URL returned, browser redirects automatically
+    } catch (err: any) {
+      setIsGoogleLoading(false);
+      setErrorMsg(err?.message || 'Failed to initialize Google sign in.');
     }
   };
 
@@ -149,16 +158,14 @@ export const AuthModal: React.FC<AuthModalProps> = ({
         {/* Modal Header */}
         <div className="flex items-center justify-between pb-4 border-b border-gray-800 mb-4">
           <div className="flex items-center gap-3">
-            <div className="w-10 h-10 min-w-[40px] max-w-[40px] min-h-[40px] max-h-[40px] rounded-2xl bg-[#0A28BD] border border-blue-400/40 p-0.5 shadow-lg shadow-blue-950/60 overflow-hidden flex items-center justify-center shrink-0">
-              <img
-                src="/logo.png"
-                alt="Metfa Social"
-                className="w-full h-full max-w-[40px] max-h-[40px] object-contain rounded-xl block pointer-events-none"
-                onError={(e) => {
-                  (e.currentTarget as HTMLImageElement).src = '/metfa-emblem.png';
-                }}
-              />
-            </div>
+            <img
+              src="/logo.png"
+              alt="Metfa Social"
+              className="w-10 h-10 min-w-[40px] max-w-[40px] min-h-[40px] max-h-[40px] rounded-2xl shadow-lg shadow-blue-950/60 object-cover block shrink-0 pointer-events-none"
+              onError={(e) => {
+                (e.currentTarget as HTMLImageElement).src = '/metfa-emblem.png';
+              }}
+            />
             <div>
               <h3 className="text-base font-black text-white flex items-center gap-1.5">
                 <span>Join Metfa Social</span>
@@ -224,24 +231,8 @@ export const AuthModal: React.FC<AuthModalProps> = ({
           </div>
         </div>
 
-        {/* Tabs: Mobile Phone vs Gmail */}
+        {/* Tabs: Gmail vs Mobile Phone */}
         <div className="grid grid-cols-2 gap-2 bg-gray-950 p-1.5 rounded-2xl border border-gray-800 mb-4">
-          <button
-            type="button"
-            onClick={() => {
-              setAuthMethod('phone');
-              setErrorMsg('');
-            }}
-            className={`py-2 px-3 rounded-xl text-xs font-bold transition flex items-center justify-center gap-2 ${
-              authMethod === 'phone'
-                ? 'bg-purple-600 text-white shadow-md'
-                : 'text-gray-400 hover:text-white'
-            }`}
-          >
-            <Smartphone className="w-3.5 h-3.5" />
-            <span>Mobile Phone</span>
-          </button>
-
           <button
             type="button"
             onClick={() => {
@@ -257,24 +248,42 @@ export const AuthModal: React.FC<AuthModalProps> = ({
             <Mail className="w-3.5 h-3.5" />
             <span>Gmail / Email</span>
           </button>
+
+          <button
+            type="button"
+            onClick={() => {
+              setAuthMethod('phone');
+              setErrorMsg('');
+            }}
+            className={`py-2 px-3 rounded-xl text-xs font-bold transition flex items-center justify-center gap-2 ${
+              authMethod === 'phone'
+                ? 'bg-purple-600 text-white shadow-md'
+                : 'text-gray-400 hover:text-white'
+            }`}
+          >
+            <Smartphone className="w-3.5 h-3.5" />
+            <span>Mobile Phone</span>
+          </button>
         </div>
 
         {/* Form Body */}
         <form onSubmit={handleSubmit} className="space-y-3.5">
           {errorMsg && (
-            <div className="p-2.5 rounded-xl bg-rose-950/80 border border-rose-800/80 text-rose-300 text-xs font-medium">
-              {errorMsg}
+            <div className="p-3 rounded-xl bg-rose-950/80 border border-rose-800/80 text-rose-300 text-xs font-medium flex items-start gap-2">
+              <AlertCircle className="w-4 h-4 shrink-0 text-rose-400 mt-0.5" />
+              <span>{errorMsg}</span>
             </div>
           )}
 
           <div>
             <label className="text-xs font-bold text-gray-300 block mb-1">
-              Full Name
+              Full Name / Display Name
             </label>
             <div className="relative">
               <User className="w-4 h-4 text-gray-500 absolute left-3.5 top-1/2 -translate-y-1/2" />
               <input
                 type="text"
+                required
                 value={fullName}
                 onChange={(e) => setFullName(e.target.value)}
                 placeholder="e.g. Elena Rostova or Alex Rivera"
@@ -325,6 +334,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                   <Phone className="w-4 h-4 text-gray-500 absolute left-3.5 top-1/2 -translate-y-1/2" />
                   <input
                     type="tel"
+                    required
                     value={phoneNumber}
                     onChange={(e) => setPhoneNumber(e.target.value)}
                     placeholder="1712 345678"
@@ -336,12 +346,13 @@ export const AuthModal: React.FC<AuthModalProps> = ({
           ) : (
             <div>
               <label className="text-xs font-bold text-gray-300 block mb-1">
-                Gmail or Corporate Email
+                Email Address
               </label>
               <div className="relative">
                 <Mail className="w-4 h-4 text-gray-500 absolute left-3.5 top-1/2 -translate-y-1/2" />
                 <input
                   type="email"
+                  required
                   value={gmailEmail}
                   onChange={(e) => setGmailEmail(e.target.value)}
                   placeholder="yourname@gmail.com"
@@ -351,14 +362,34 @@ export const AuthModal: React.FC<AuthModalProps> = ({
             </div>
           )}
 
+          <div>
+            <label className="text-xs font-bold text-gray-300 block mb-1 flex items-center justify-between">
+              <span>Account Password</span>
+              <span className="text-[10px] text-gray-500 font-normal">Optional (auto-secured)</span>
+            </label>
+            <div className="relative">
+              <Lock className="w-4 h-4 text-gray-500 absolute left-3.5 top-1/2 -translate-y-1/2" />
+              <input
+                type="password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                placeholder="Choose a password for multi-device access"
+                className="w-full bg-gray-950 border border-gray-800 rounded-xl pl-10 pr-3 py-2 text-xs text-white placeholder:text-gray-600 focus:outline-none focus:border-purple-500 font-medium"
+              />
+            </div>
+          </div>
+
           {/* Submit Button */}
           <button
             type="submit"
-            disabled={isSubmitting}
-            className="w-full py-2.5 bg-gradient-to-r from-purple-600 via-purple-500 to-teal-500 hover:from-purple-500 hover:to-teal-400 text-white text-xs font-bold rounded-2xl shadow-lg flex items-center justify-center gap-2 transition active:scale-98 cursor-pointer mt-2"
+            disabled={isSubmitting || isGoogleLoading}
+            className="w-full py-2.5 bg-gradient-to-r from-purple-600 via-purple-500 to-teal-500 hover:from-purple-500 hover:to-teal-400 text-white text-xs font-bold rounded-2xl shadow-lg flex items-center justify-center gap-2 transition active:scale-98 cursor-pointer mt-2 disabled:opacity-50"
           >
             {isSubmitting ? (
-              <span className="animate-pulse">Setting up Account...</span>
+              <>
+                <Loader2 className="w-4 h-4 animate-spin" />
+                <span>Saving Profile & Entering Metfa...</span>
+              </>
             ) : (
               <>
                 <LogIn className="w-4 h-4" />
@@ -367,33 +398,43 @@ export const AuthModal: React.FC<AuthModalProps> = ({
             )}
           </button>
 
-          {/* Quick 1-click Google Sign-in demo button */}
+          {/* Google OAuth Section */}
           <div className="relative my-3">
             <div className="absolute inset-0 flex items-center">
               <div className="w-full border-t border-gray-800" />
             </div>
             <div className="relative flex justify-center text-[10px]">
-              <span className="bg-gray-900 px-2 text-gray-500 font-semibold">Or 1-Tap Access</span>
+              <span className="bg-gray-900 px-2 text-gray-500 font-semibold">Or Continue With</span>
             </div>
           </div>
 
           <button
             type="button"
-            onClick={handleQuickDemoGmail}
-            className="w-full py-2 bg-gray-950 hover:bg-gray-850 border border-gray-800 text-gray-200 text-xs font-bold rounded-xl flex items-center justify-center gap-2 transition cursor-pointer"
+            onClick={handleGoogleSignIn}
+            disabled={isGoogleLoading || isSubmitting}
+            className="w-full py-2 bg-gray-950 hover:bg-gray-850 border border-gray-800 text-gray-200 text-xs font-bold rounded-xl flex items-center justify-center gap-2 transition cursor-pointer disabled:opacity-50"
           >
-            <img
-              src="https://www.gstatic.com/images/branding/product/1x/gsa_512dp.png"
-              alt="Google"
-              className="w-4 h-4 object-contain"
-            />
-            <span>Instant Sign in with Google</span>
+            {isGoogleLoading ? (
+              <>
+                <Loader2 className="w-4 h-4 animate-spin text-purple-400" />
+                <span>Connecting with Google OAuth...</span>
+              </>
+            ) : (
+              <>
+                <img
+                  src="https://www.gstatic.com/images/branding/product/1x/gsa_512dp.png"
+                  alt="Google"
+                  className="w-4 h-4 object-contain"
+                />
+                <span>Instant Sign in with Google</span>
+              </>
+            )}
           </button>
         </form>
 
         <div className="mt-4 pt-3 border-t border-gray-800/80 flex items-center justify-center gap-2 text-[11px] text-gray-500">
           <ShieldCheck className="w-3.5 h-3.5 text-teal-400" />
-          <span>Encrypted storage & unified creator profile</span>
+          <span>{isSupabaseConnected ? 'Persistent Supabase Cloud Auth & Database' : 'Secure local creator profile'}</span>
         </div>
       </div>
     </div>

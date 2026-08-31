@@ -32,7 +32,6 @@ export interface SocialEcosystemProps {
   creditsData: DailyCreditsData;
   onWatchAdClick?: () => void;
   onOpenAuthModal?: () => void;
-  onOpenApiKeysModal?: () => void;
   onRemixPrompt?: (prompt: string, stylePreset?: string) => void;
   shareModalData?: { prompt: string; imageSrc: string; stylePreset?: string } | null;
   onCloseShareModal?: () => void;
@@ -44,7 +43,6 @@ export const SocialEcosystemModule: React.FC<SocialEcosystemProps> = ({
   creditsData,
   onWatchAdClick,
   onOpenAuthModal,
-  onOpenApiKeysModal,
   onRemixPrompt,
   shareModalData,
   onCloseShareModal,
@@ -199,7 +197,6 @@ export const SocialEcosystemModule: React.FC<SocialEcosystemProps> = ({
           onOpenAuthModal={onOpenAuthModal}
           onCreatePageClick={() => setIsCreatePageOpen(true)}
           onCreateGroupClick={() => setIsCreateGroupOpen(true)}
-          onOpenSettings={onOpenApiKeysModal}
         />
       )}
 

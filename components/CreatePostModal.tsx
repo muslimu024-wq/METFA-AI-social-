@@ -15,13 +15,19 @@ import {
   Trash2,
   HelpCircle,
   Hash,
-  Smile
+  Smile,
+  Music,
+  ShieldCheck,
 } from 'lucide-react';
 import { CommunityPost, UserProfile } from '../types/community';
+import { AudioTrack } from '../types/audio';
 import { getPages, getGroups } from '../utils/socialStore';
+import { recordTrackUsage } from '../utils/audioStore';
 import { generateAICaptionAndHashtags, refineTextWithAI } from '../services/aiAssistantService';
 import { saveMediaItem, fileToBase64 } from '../utils/mediaStorage';
 import { compressImageDataUrl } from '../utils/storageUtils';
+import AudioTrackPickerModal from './AudioTrackPickerModal';
+import AudioLicenseInfoModal from './AudioLicenseInfoModal';
 
 interface CreatePostModalProps {
   isOpen: boolean;
@@ -56,6 +62,9 @@ export const CreatePostModal: React.FC<CreatePostModalProps> = ({
   const [videoSrc, setVideoSrc] = useState<string | undefined>(undefined);
   const [selectedIdentity, setSelectedIdentity] = useState('personal');
   const [stylePreset, setStylePreset] = useState('Cyberpunk 2088');
+  const [selectedAudioTrack, setSelectedAudioTrack] = useState<AudioTrack | null>(null);
+  const [isAudioPickerOpen, setIsAudioPickerOpen] = useState(false);
+  const [isLicenseModalOpen, setIsLicenseModalOpen] = useState(false);
 
   // AI Assistant States
   const [isAIAssistantOpen, setIsAIAssistantOpen] = useState(false);
@@ -193,6 +202,10 @@ export const CreatePostModal: React.FC<CreatePostModalProps> = ({
 
     const primaryImage = mediaGallery[0] || (postMode === 'media' ? 'https://images.unsplash.com/photo-1508739773434-c26b3d09e071?w=1000' : undefined);
 
+    if (selectedAudioTrack) {
+      recordTrackUsage(selectedAudioTrack.id);
+    }
+
     onPostCreated({
       author: {
         id: userProfile.id,
@@ -213,6 +226,7 @@ export const CreatePostModal: React.FC<CreatePostModalProps> = ({
       videoSrc: mediaType === 'video' ? videoSrc : undefined,
       textBackgroundPreset: postMode === 'text' && selectedGradient !== 'none' ? selectedGradient : undefined,
       postType: postMode === 'text' ? 'text' : 'media',
+      audioTrack: selectedAudioTrack || undefined,
       tags: aiGeneratedTags.length > 0 ? aiGeneratedTags : ['MetfaAI', 'SocialFirst'],
       feedType: 'for_you',
     });
@@ -402,7 +416,64 @@ export const CreatePostModal: React.FC<CreatePostModalProps> = ({
             </div>
           )}
 
-          {/* 4. ✨ Integrated AI Assistant Panel */}
+          {/* 4. Licensed Audio Soundtrack Attachment */}
+          <div className="bg-gray-950/90 border border-purple-500/20 rounded-2xl p-3 space-y-2">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-bold text-gray-200 flex items-center gap-1.5">
+                <Music className="w-3.5 h-3.5 text-purple-400" />
+                <span>Background Audio Soundtrack</span>
+              </span>
+              <button
+                type="button"
+                onClick={() => setIsAudioPickerOpen(true)}
+                className="text-[11px] font-bold text-teal-400 hover:text-teal-300 transition flex items-center gap-1"
+              >
+                <Plus className="w-3 h-3" />
+                <span>{selectedAudioTrack ? 'Change Audio' : 'Add Music'}</span>
+              </button>
+            </div>
+
+            {selectedAudioTrack ? (
+              <div className="p-2.5 bg-purple-950/30 border border-purple-500/40 rounded-xl flex items-center justify-between gap-3">
+                <div className="flex items-center gap-2.5 min-w-0">
+                  <img
+                    src={selectedAudioTrack.cover_url}
+                    alt={selectedAudioTrack.title}
+                    className="w-10 h-10 rounded-lg object-cover border border-purple-500/30 shrink-0"
+                  />
+                  <div className="min-w-0">
+                    <h4 className="text-xs font-bold text-white truncate">{selectedAudioTrack.title}</h4>
+                    <p className="text-[10px] text-purple-300 truncate font-mono">
+                      {selectedAudioTrack.artist} • {selectedAudioTrack.genre}
+                    </p>
+                    <button
+                      type="button"
+                      onClick={() => setIsLicenseModalOpen(true)}
+                      className="text-[9px] text-teal-400 font-bold hover:underline flex items-center gap-1 mt-0.5"
+                    >
+                      <ShieldCheck className="w-3 h-3" />
+                      <span>{selectedAudioTrack.license_type}</span>
+                    </button>
+                  </div>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => setSelectedAudioTrack(null)}
+                  className="p-1.5 rounded-lg bg-gray-800 text-gray-400 hover:text-rose-400 hover:bg-rose-950/30 transition shrink-0"
+                  title="Remove soundtrack"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            ) : (
+              <p className="text-[11px] text-gray-500">
+                Attach licensed or royalty-free audio with verified rights certificate.
+              </p>
+            )}
+          </div>
+
+          {/* 5. ✨ Integrated AI Assistant Panel */}
           <div className="bg-gray-950/90 border border-purple-500/20 rounded-2xl p-3 space-y-2.5">
             <div className="flex items-center justify-between">
               <button
@@ -540,6 +611,23 @@ export const CreatePostModal: React.FC<CreatePostModalProps> = ({
           </button>
         </div>
       </div>
+
+      {/* Audio Track Picker Modal */}
+      <AudioTrackPickerModal
+        isOpen={isAudioPickerOpen}
+        onClose={() => setIsAudioPickerOpen(false)}
+        onSelectTrack={(track) => setSelectedAudioTrack(track)}
+        selectedTrackId={selectedAudioTrack?.id}
+      />
+
+      {/* Audio License Certificate Modal */}
+      {selectedAudioTrack && isLicenseModalOpen && (
+        <AudioLicenseInfoModal
+          isOpen={isLicenseModalOpen}
+          track={selectedAudioTrack}
+          onClose={() => setIsLicenseModalOpen(false)}
+        />
+      )}
     </div>
   );
 };

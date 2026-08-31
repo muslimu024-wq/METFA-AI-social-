@@ -1,5 +1,5 @@
-const CACHE_NAME = 'metfa-social-v2';
-const MEDIA_CACHE_NAME = 'metfa-media-v2';
+const CACHE_NAME = 'metfa-social-v3';
+const MEDIA_CACHE_NAME = 'metfa-media-v3';
 
 const STATIC_ASSETS = [
   '/',
@@ -50,7 +50,7 @@ self.addEventListener('install', (event) => {
   );
 });
 
-// Activate Event - Clean up stale legacy caches
+// Activate Event - Clean up stale legacy caches immediately
 self.addEventListener('activate', (event) => {
   event.waitUntil(
     caches
@@ -60,6 +60,7 @@ self.addEventListener('activate', (event) => {
         return Promise.all(
           keys.map((key) => {
             if (!allowedCaches.includes(key)) {
+              console.log('[SW] Deleting stale cache:', key);
               return caches.delete(key);
             }
           })
@@ -91,8 +92,15 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // Strictly skip caching API endpoints (Network only)
-  if (url.pathname.startsWith('/api/')) {
+  // Strictly skip caching API endpoints, Vite modules, and TypeScript/JavaScript source modules
+  if (
+    url.pathname.startsWith('/api/') ||
+    url.pathname.startsWith('/@') ||
+    url.pathname.endsWith('.tsx') ||
+    url.pathname.endsWith('.ts') ||
+    url.pathname.endsWith('.jsx') ||
+    url.pathname.includes('/node_modules/')
+  ) {
     return;
   }
 
@@ -161,23 +169,18 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // Strategy 4: Local Static Assets (Stale-While-Revalidate in CACHE_NAME)
+  // Strategy 4: Local Static Assets (Network-first with cache fallback for images/icons)
   if (url.origin === self.location.origin) {
     event.respondWith(
-      caches.open(CACHE_NAME).then((cache) => {
-        return cache.match(request).then((cachedResponse) => {
-          const fetchPromise = fetch(request)
-            .then((networkResponse) => {
-              if (networkResponse && networkResponse.status === 200) {
-                cache.put(request, networkResponse.clone());
-              }
-              return networkResponse;
-            })
-            .catch(() => cachedResponse);
-
-          return cachedResponse || fetchPromise;
-        });
-      })
+      fetch(request)
+        .then((networkResponse) => {
+          if (networkResponse && networkResponse.status === 200) {
+            const copy = networkResponse.clone();
+            caches.open(CACHE_NAME).then((cache) => cache.put(request, copy));
+          }
+          return networkResponse;
+        })
+        .catch(() => caches.match(request))
     );
   }
 });

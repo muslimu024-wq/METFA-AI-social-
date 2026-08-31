@@ -4,23 +4,20 @@ import {
   Sparkles,
   Bot,
   Flame,
-  Key,
   RefreshCw,
   Trash2,
   Check,
-  ChevronDown
+  Key,
 } from 'lucide-react';
 import { getStudioSettings, saveStudioSettings } from '../utils/chatStore';
 
 interface AISettingsDropdownProps {
   onOpenSettings?: () => void;
-  onOpenApiKeysModal?: () => void;
   onNavigateTab?: (tab: string) => void;
 }
 
 export const AISettingsDropdown: React.FC<AISettingsDropdownProps> = ({
   onOpenSettings,
-  onOpenApiKeysModal,
   onNavigateTab,
 }) => {
   const [isOpen, setIsOpen] = useState(false);
@@ -84,15 +81,6 @@ export const AISettingsDropdown: React.FC<AISettingsDropdownProps> = ({
       onOpenSettings();
     } else {
       window.dispatchEvent(new CustomEvent('metfa_ai_open_settings'));
-    }
-  };
-
-  const handleOpenKeysModal = () => {
-    setIsOpen(false);
-    if (onOpenApiKeysModal) {
-      onOpenApiKeysModal();
-    } else {
-      window.dispatchEvent(new CustomEvent('metfa_ai_open_keys'));
     }
   };
 
@@ -220,14 +208,17 @@ export const AISettingsDropdown: React.FC<AISettingsDropdownProps> = ({
 
             <button
               type="button"
-              id="dropdown-open-custom-api-keys"
-              onClick={handleOpenKeysModal}
-              className="w-full px-3 py-2 rounded-xl text-left text-xs font-semibold text-gray-200 hover:bg-teal-950/40 hover:text-teal-300 flex items-center gap-2.5 transition cursor-pointer"
+              id="dropdown-open-api-keys"
+              onClick={() => {
+                setIsOpen(false);
+                window.dispatchEvent(new CustomEvent('metfa_open_api_keys_modal'));
+              }}
+              className="w-full px-3 py-2 rounded-xl text-left text-xs font-semibold text-teal-200 hover:bg-teal-950/40 hover:text-teal-300 flex items-center gap-2.5 transition cursor-pointer"
             >
               <Key className="w-4 h-4 text-teal-400 shrink-0" />
               <div className="flex-1 min-w-0">
-                <div>Custom API Keys</div>
-                <div className="text-[10px] text-gray-400 font-normal">Configure Gemini, OpenAI & Grok keys</div>
+                <div>App Secrets & API Keys</div>
+                <div className="text-[10px] text-gray-400 font-normal">Gemini, OpenAI, Grok, Claude</div>
               </div>
             </button>
           </div>

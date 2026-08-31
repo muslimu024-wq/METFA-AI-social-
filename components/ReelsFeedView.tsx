@@ -17,8 +17,11 @@ import {
   Flag,
   CheckCircle2,
   X,
+  Music,
+  ShieldCheck,
 } from 'lucide-react';
 import { ReelHighlight, UserProfile } from '../types/community';
+import { AudioTrack } from '../types/audio';
 import {
   getReelHighlights,
   saveReelHighlights,
@@ -26,11 +29,13 @@ import {
   deleteReelHighlight,
   editReelHighlight,
 } from '../utils/socialStore';
+import { getAudioTracks } from '../utils/audioStore';
 import { isContentOwner } from '../utils/communityStore';
 import { toggleSaveReel, isReelSaved } from '../utils/bookmarkStore';
 import { executeNativeShare, SharePayload } from '../utils/shareUtils';
 import SocialShareModal from './SocialShareModal';
 import ConfirmActionModal from './ConfirmActionModal';
+import AudioLicenseInfoModal from './AudioLicenseInfoModal';
 
 interface ReelsFeedViewProps {
   reels: ReelHighlight[];
@@ -63,6 +68,7 @@ export const ReelsFeedView: React.FC<ReelsFeedViewProps> = ({
     onConfirm: () => void;
   } | null>(null);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
+  const [inspectingAudioTrack, setInspectingAudioTrack] = useState<AudioTrack | null>(null);
 
   const showToast = (msg: string) => {
     setToastMessage(msg);
@@ -327,6 +333,50 @@ export const ReelsFeedView: React.FC<ReelsFeedViewProps> = ({
                   {reel.caption}
                 </p>
 
+                {/* Audio Track Badge */}
+                {reel.musicTrack && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const trackString = reel.musicTrack || 'Original Sound';
+                      const allTracks = getAudioTracks();
+                      const match = allTracks.find(
+                        (t) =>
+                          trackString.toLowerCase().includes(t.title.toLowerCase()) ||
+                          t.title.toLowerCase().includes(trackString.toLowerCase())
+                      );
+                      setInspectingAudioTrack(
+                        match ||
+                          reel.audioTrack || {
+                            id: `track_${reel.id}`,
+                            title: trackString.split('•')[0]?.trim() || trackString,
+                            artist: trackString.split('•')[1]?.trim() || 'Metfa Sound Studio',
+                            audio_url: 'https://actions.google.com/sounds/v1/science_fiction/scifi_engine_hum.ogg',
+                            cover_url: reel.thumbnailSrc || 'https://images.unsplash.com/photo-1508700115892-45ecd05ae2ad?w=400&q=80',
+                            duration: reel.duration || 30,
+                            genre: 'Electronic',
+                            mood: 'Energetic',
+                            track_type: 'royalty_free',
+                            license_type: 'Royalty-Free Commercial',
+                            license_source: 'Metfa Audio Catalog',
+                            attribution_required: false,
+                            commercial_use_allowed: true,
+                            territories: ['Worldwide'],
+                            license_start: '2025-01-01T00:00:00.000Z',
+                            license_expiry: null,
+                            status: 'active',
+                          }
+                      );
+                    }}
+                    className="flex items-center gap-1 text-[10px] text-purple-300 hover:text-teal-300 font-mono bg-black/50 hover:bg-black/80 px-2.5 py-1 rounded-full border border-purple-500/30 transition cursor-pointer max-w-full truncate"
+                    title="Inspect audio license & rights certificate"
+                  >
+                    <Music className="w-3 h-3 text-teal-400 shrink-0" />
+                    <span className="truncate">{reel.musicTrack}</span>
+                    <ShieldCheck className="w-3 h-3 text-teal-400 shrink-0 ml-0.5" />
+                  </button>
+                )}
+
                 {reel.promptUsed && (
                   <button
                     type="button"
@@ -504,6 +554,15 @@ export const ReelsFeedView: React.FC<ReelsFeedViewProps> = ({
           isDestructive={true}
           onConfirm={confirmModal.onConfirm}
           onClose={() => setConfirmModal(null)}
+        />
+      )}
+
+      {/* Audio License Certificate Modal */}
+      {inspectingAudioTrack && (
+        <AudioLicenseInfoModal
+          isOpen={!!inspectingAudioTrack}
+          track={inspectingAudioTrack}
+          onClose={() => setInspectingAudioTrack(null)}
         />
       )}
 

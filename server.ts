@@ -1,12 +1,68 @@
 import express from "express";
 import path from "path";
+import fs from "fs";
 import { createServer as createViteServer } from "vite";
 import { GoogleGenAI } from "@google/genai";
 import { checkContentSafety, METFA_AI_SAFETY_SYSTEM_INSTRUCTION } from "./utils/contentSafety";
 
 async function startServer() {
   const app = express();
-  const PORT = 3000;
+  const PORT = Number(process.env.PORT) || 3000;
+
+  // Enable trust proxy for reverse proxies (Nginx, Cloudflare, Cloud Run, AWS ALB)
+  // Ensures req.protocol, req.secure, and req.ip reflect the custom domain's SSL state
+  app.set("trust proxy", 1);
+
+  // =========================================================================
+  // PRODUCTION CUSTOM DOMAIN, HTTPS & SECURITY HEADERS MIDDLEWARE
+  // =========================================================================
+  app.use((req, res, next) => {
+    // 1. Security Headers
+    res.setHeader("X-Content-Type-Options", "nosniff");
+    res.setHeader("X-XSS-Protection", "1; mode=block");
+    res.setHeader("Referrer-Policy", "strict-origin-when-cross-origin");
+
+    // 2. CORS Support: Allow same-origin and configured custom domains
+    const allowedOrigins = process.env.ALLOWED_ORIGINS?.split(",").map((o) => o.trim()) || [];
+    const origin = req.headers.origin;
+    if (origin) {
+      if (allowedOrigins.length === 0 || allowedOrigins.includes("*") || allowedOrigins.includes(origin)) {
+        res.setHeader("Access-Control-Allow-Origin", origin);
+        res.setHeader("Access-Control-Allow-Credentials", "true");
+        res.setHeader("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
+        res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Requested-With");
+      }
+    }
+
+    if (req.method === "OPTIONS") {
+      return res.sendStatus(204);
+    }
+
+    // 3. Canonical Domain & HTTPS Redirection in Production
+    if (process.env.NODE_ENV === "production") {
+      const canonicalDomain = process.env.CANONICAL_DOMAIN?.trim();
+      const forceHttps = process.env.FORCE_HTTPS === "true" || process.env.FORCE_HTTPS === "1";
+      const isHttp = req.headers["x-forwarded-proto"] === "http";
+      const currentHost = (req.headers.host || "").toLowerCase();
+
+      // Check if domain redirect is needed (e.g. www to non-www or custom domain enforcement)
+      if (canonicalDomain && currentHost && currentHost !== canonicalDomain.toLowerCase()) {
+        return res.redirect(301, `https://${canonicalDomain}${req.originalUrl || req.url}`);
+      }
+
+      // Force HTTPS if requested
+      if (forceHttps && isHttp) {
+        return res.redirect(301, `https://${req.headers.host}${req.originalUrl || req.url}`);
+      }
+
+      // HSTS header for secure production custom domains
+      if (req.secure || req.headers["x-forwarded-proto"] === "https") {
+        res.setHeader("Strict-Transport-Security", "max-age=31536000; includeSubDomains; preload");
+      }
+    }
+
+    next();
+  });
 
   // Support base64 image and attachment payloads up to 50MB
   app.use(express.json({ limit: "50mb" }));
@@ -16,15 +72,35 @@ async function startServer() {
   // =========================================================================
   // ENVIRONMENT VARIABLE KEY RESOLVERS (Vite / Node server standard)
   // =========================================================================
+  const isValidGeminiApiKey = (key?: string | null): boolean => {
+    if (!key || typeof key !== "string") return false;
+    const trimmed = key.trim();
+    if (trimmed.length < 20) return false;
+    if (!trimmed.startsWith("AIza")) return false; // Genuine Google AI API keys start with AIza
+    if (
+      trimmed.toLowerCase().includes("invalid") ||
+      trimmed.toLowerCase().includes("dummy") ||
+      trimmed.toLowerCase().includes("placeholder") ||
+      trimmed.includes("...")
+    ) {
+      return false;
+    }
+    return true;
+  };
+
   const getGeminiApiKey = (customKey?: string): string | null => {
     // 1. Explicit user key from request payload
-    if (typeof customKey === "string" && customKey.trim().length > 5) {
-      return customKey.trim();
+    if (isValidGeminiApiKey(customKey)) {
+      return customKey!.trim();
     }
-    // 2. Standard server-side GEMINI_API_KEY
-    const envKey = process.env.GEMINI_API_KEY?.trim() || process.env.VITE_GEMINI_API_KEY?.trim();
-    if (envKey && envKey.length > 5) {
-      return envKey;
+    // 2. Server-side GEMINI_API_KEY or VITE_GEMINI_API_KEY (if valid)
+    const envKey = process.env.GEMINI_API_KEY?.trim();
+    if (isValidGeminiApiKey(envKey)) {
+      return envKey!;
+    }
+    const viteKey = process.env.VITE_GEMINI_API_KEY?.trim();
+    if (isValidGeminiApiKey(viteKey)) {
+      return viteKey!;
     }
     return null;
   };
@@ -121,8 +197,7 @@ async function startServer() {
     const validModels = options.models
       .map((m) => {
         if (!m || typeof m !== "string") return "gemini-3.7-flash";
-        if (m === "gemini-3.6-flash" || m === "gemini-2.5-flash" || m === "gemini-flash-latest") return "gemini-3.7-flash";
-        if (m === "gemini-2.5-flash-lite") return "gemini-3.1-flash-lite";
+        if (m === "gemini-3.6-flash") return "gemini-3.7-flash";
         if (
           !m.startsWith("gemini-") &&
           !m.startsWith("veo-") &&
@@ -136,12 +211,22 @@ async function startServer() {
       .filter((m, idx, arr) => arr.indexOf(m) === idx);
 
     // Ensure fallback models are always present in the chain
-    if (!validModels.includes("gemini-3.7-flash") && !validModels[0]?.includes("-image")) {
-      validModels.push("gemini-3.7-flash");
+    if (!validModels[0]?.includes("-image")) {
+      const standardFallbackChain = [
+        "gemini-3.7-flash",
+        "gemini-3.1-flash-lite",
+        "gemini-2.5-flash",
+        "gemini-2.5-flash-lite",
+      ];
+      for (const modelName of standardFallbackChain) {
+        if (!validModels.includes(modelName)) {
+          validModels.push(modelName);
+        }
+      }
     }
-    if (!validModels.includes("gemini-3.1-flash-lite") && !validModels[0]?.includes("-image")) {
-      validModels.push("gemini-3.1-flash-lite");
-    }
+
+    let activeAi = ai;
+    let attemptedEnvFallback = false;
 
     for (let i = 0; i < validModels.length; i++) {
       const model = validModels[i];
@@ -156,7 +241,7 @@ async function startServer() {
         );
 
         const response = await withTimeout(
-          ai.models.generateContent({
+          activeAi.models.generateContent({
             model,
             contents: options.contents,
             config: options.config,
@@ -185,13 +270,54 @@ async function startServer() {
         const errCode =
           err?.code || (err?.name === "TimeoutError" ? "TIMEOUT_EXCEEDED" : err?.status || "503");
 
-        console.warn(`[Gemini API] Model "${model}" failed after ${durationMs}ms (Error: ${errMsg})`);
+        console.log(`[Gemini API] Model "${model}" failover triggered (${durationMs}ms): ${errMsg.slice(0, 120)}`);
         errors.push({
           model,
           error: errMsg,
           code: String(errCode),
           durationMs,
         });
+
+        // If failure was due to invalid API key (400 / 401 / API_KEY_INVALID / UNAUTHENTICATED) on a custom key,
+        // automatically fallback to system environment GEMINI_API_KEY (if valid) or abort immediately
+        if (
+          errMsg.includes("API_KEY_INVALID") ||
+          errMsg.includes("API key not valid") ||
+          errMsg.includes("ACCESS_TOKEN_TYPE_UNSUPPORTED") ||
+          errMsg.includes("UNAUTHENTICATED") ||
+          err?.status === 400 ||
+          err?.status === 401
+        ) {
+          const validEnvKey =
+            (isValidGeminiApiKey(process.env.GEMINI_API_KEY) && process.env.GEMINI_API_KEY?.trim()) ||
+            (isValidGeminiApiKey(process.env.VITE_GEMINI_API_KEY) && process.env.VITE_GEMINI_API_KEY?.trim());
+
+          if (!attemptedEnvFallback && validEnvKey) {
+            console.log("[Gemini API] Key authentication error. Automatically switching to system GEMINI_API_KEY...");
+            attemptedEnvFallback = true;
+            activeAi = new GoogleGenAI({
+              apiKey: validEnvKey,
+              httpOptions: {
+                headers: {
+                  "User-Agent": "aistudio-build",
+                },
+              },
+            });
+            // Retry current model with valid environment key
+            i--;
+            continue;
+          } else {
+            // No alternate valid key to try - break to avoid repetitive 401 calls
+            throw new Error(
+              `Gemini authentication error: ${errMsg}`
+            );
+          }
+        }
+
+        // If 503 high demand or 429 quota spike occurred, wait a brief delay before trying next model
+        if (errMsg.includes("503") || errMsg.includes("high demand") || errMsg.includes("429") || errMsg.includes("quota")) {
+          await new Promise((resolve) => setTimeout(resolve, 350));
+        }
 
         if (isLast) {
           console.error(`[Gemini API] All fallback models exhausted for request.`);
@@ -624,6 +750,17 @@ ${METFA_AI_SAFETY_SYSTEM_INSTRUCTION}`;
 
       try {
         // Skip unconfigured optional BYO engines if another configured engine is available
+        if (currentEngine === "gemini" && !getGeminiApiKey(settings?.geminiApiKey)) {
+          if (requestedEngine === "gemini") {
+            console.log("[AI Pipeline] Gemini key not configured. Falling back to alternative engines seamlessly.");
+          }
+          pipelineErrors.push({
+            engine: "gemini",
+            error: "Gemini API key not configured. Add your key in Settings > API Keys.",
+          });
+          continue;
+        }
+
         if (currentEngine === "openai" && !getOpenAiApiKey(settings?.openaiApiKey)) {
           if (requestedEngine === "openai") {
             console.log("[AI Pipeline] OpenAI key not provided. Falling back to Gemini seamlessly.");
@@ -1233,6 +1370,66 @@ Output strictly in JSON: {"replies": ["reply 1", "reply 2", "reply 3"]}`;
     res.sendFile(icoPath);
   });
 
+  // Dynamic robots.txt that points to custom domain sitemap
+  app.get("/robots.txt", (req, res) => {
+    const protocol = req.headers["x-forwarded-proto"] || req.protocol || "https";
+    const host = req.headers.host || "localhost:3000";
+    const baseUrl = process.env.APP_URL?.trim() || `${protocol}://${host}`;
+
+    res.setHeader("Content-Type", "text/plain");
+    res.setHeader("Cache-Control", "public, max-age=86400");
+    res.send(`User-agent: *
+Allow: /
+Disallow: /api/
+
+Sitemap: ${baseUrl}/sitemap.xml
+`);
+  });
+
+  // Dynamic sitemap.xml for custom domain SEO
+  app.get("/sitemap.xml", (req, res) => {
+    const protocol = req.headers["x-forwarded-proto"] || req.protocol || "https";
+    const host = req.headers.host || "localhost:3000";
+    const baseUrl = process.env.APP_URL?.trim() || `${protocol}://${host}`;
+    const today = new Date().toISOString().split("T")[0];
+
+    res.setHeader("Content-Type", "application/xml");
+    res.setHeader("Cache-Control", "public, max-age=86400");
+    res.send(`<?xml version="1.0" encoding="UTF-8"?>
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+  <url>
+    <loc>${baseUrl}/</loc>
+    <lastmod>${today}</lastmod>
+    <changefreq>daily</changefreq>
+    <priority>1.0</priority>
+  </url>
+  <url>
+    <loc>${baseUrl}/?tab=feed</loc>
+    <lastmod>${today}</lastmod>
+    <changefreq>daily</changefreq>
+    <priority>0.9</priority>
+  </url>
+  <url>
+    <loc>${baseUrl}/?tab=chat</loc>
+    <lastmod>${today}</lastmod>
+    <changefreq>weekly</changefreq>
+    <priority>0.9</priority>
+  </url>
+  <url>
+    <loc>${baseUrl}/?tab=reels</loc>
+    <lastmod>${today}</lastmod>
+    <changefreq>daily</changefreq>
+    <priority>0.8</priority>
+  </url>
+  <url>
+    <loc>${baseUrl}/?tab=groups</loc>
+    <lastmod>${today}</lastmod>
+    <changefreq>weekly</changefreq>
+    <priority>0.7</priority>
+  </url>
+</urlset>`);
+  });
+
   // Vite middleware for development vs Static file serving for production
   if (process.env.NODE_ENV !== "production") {
     const vite = await createViteServer({
@@ -1240,6 +1437,18 @@ Output strictly in JSON: {"replies": ["reply 1", "reply 2", "reply 3"]}`;
       appType: "spa",
     });
     app.use(vite.middlewares);
+    app.use("*", async (req, res, next) => {
+      const url = req.originalUrl;
+      try {
+        const indexPath = path.resolve(process.cwd(), "index.html");
+        let template = fs.readFileSync(indexPath, "utf-8");
+        template = await vite.transformIndexHtml(url, template);
+        res.status(200).set({ "Content-Type": "text/html" }).end(template);
+      } catch (e) {
+        vite.ssrFixStacktrace(e as Error);
+        next(e);
+      }
+    });
   } else {
     const distPath = path.join(process.cwd(), "dist");
     app.use(express.static(distPath));

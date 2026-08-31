@@ -54,6 +54,7 @@ import SocialShareModal from './SocialShareModal';
 import ConfirmActionModal from './ConfirmActionModal';
 import EditPostModal from './EditPostModal';
 import { AiRecipeBox } from './AiRecipeBox';
+import { PostContent } from './PostContent';
 import { useAuth } from '../context/AuthContext';
 
 interface CommunityFeedProps {
@@ -889,13 +890,21 @@ export const CommunityFeed: React.FC<CommunityFeedProps> = ({
                     hasGradient ? GRADIENT_PRESETS[post.textBackgroundPreset!] : 'bg-gray-950/60 text-gray-100 text-left'
                   }`}
                 >
-                  <p
-                    className={`${
-                      hasGradient ? 'text-lg sm:text-xl font-black text-white leading-relaxed' : 'text-sm sm:text-base text-gray-200 leading-relaxed font-normal'
-                    }`}
-                  >
-                    {post.caption || post.prompt}
-                  </p>
+                  <PostContent
+                    text={post.caption || post.prompt}
+                    charLimit={hasGradient ? 220 : 180}
+                    className="w-full"
+                    textClassName={
+                      hasGradient
+                        ? 'text-lg sm:text-xl font-black text-white leading-relaxed text-center'
+                        : 'text-sm sm:text-base text-gray-200 leading-relaxed font-normal text-left'
+                    }
+                    buttonClassName={
+                      hasGradient
+                        ? 'text-white/90 hover:text-white underline font-bold text-xs mt-2'
+                        : 'text-blue-400 hover:text-blue-300 font-semibold text-sm mt-1'
+                    }
+                  />
                 </div>
               ) : (
                 /* Photo / Video / Gallery */
@@ -934,7 +943,12 @@ export const CommunityFeed: React.FC<CommunityFeedProps> = ({
               {/* Post Caption (if media post) & Prompt Card (Default Closed / Opt-in) */}
               <div className="p-4 space-y-3">
                 {!isPureTextPost && post.caption && (
-                   <p className="text-sm text-gray-200 leading-relaxed font-normal">{post.caption}</p>
+                  <PostContent
+                    text={post.caption}
+                    charLimit={160}
+                    textClassName="text-sm text-gray-200 leading-relaxed font-normal"
+                    buttonClassName="text-blue-400 hover:text-blue-300 font-semibold text-sm mt-1"
+                  />
                 )}
 
                 {/* Prompt Recipe Card (if AI Artwork - Strictly Opt-In) */}

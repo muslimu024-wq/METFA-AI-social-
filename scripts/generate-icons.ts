@@ -3,58 +3,79 @@ import path from 'path';
 import sharp from 'sharp';
 
 /**
- * High-Precision Vector Generator for Metfa Social Official App Icon & Logos
- * Strictly matching the user's provided logo (file_00000000bdc482108fa02cd20becf6a7.png)
- *
- * Symmetrical 3D white continuous ribbon emblem:
- * - 2 upright teardrop leaf/crown loops at top
- * - Central V connection
- * - 2 wide M wings on left & right with loop cutouts
- * - Lower smiling cradle arch connecting the wings
- * - Deep royal blue squircle background with subtle top-to-bottom gradient
+ * High-Precision Vector & Raster Generator for METFA Master Brand Asset
+ * Reconstructed with mathematical precision directly from the user's master artwork
+ * 
+ * Symmetrical 3D white organic emblem:
+ * - 2 upright teardrop leaf loops with sharp pointed crown tips
+ * - Central deep 'V' convergence
+ * - 2 wide sculpted M-wings with smooth outer arches and diagonal oval cutouts
+ * - Lower smiling cradle arch spanning seamlessly between left and right wings
+ * - Central open blue viewport between V-notch and cradle
+ * - Smooth pearl-white 3D tubular lighting with deep realistic drop shadows
+ * - Rich royal blue squircle canvas with ambient top glow and bottom vignette
  */
 
-function buildMetfaSvg(options: { isMaskable?: boolean; size?: number; emblemOnly?: boolean }) {
-  const { isMaskable = false, size = 512, emblemOnly = false } = options;
+export function generateMasterMetfaSvg(options: { isMaskable?: boolean; size?: number; emblemOnly?: boolean }) {
+  const { isMaskable = false, size = 1024, emblemOnly = false } = options;
 
-  // Scale and translate for maskable vs standard
+  // Maskable icons require ~20% safe-zone margin
   const scale = isMaskable ? 0.72 : (emblemOnly ? 0.94 : 0.88);
-  const translate = isMaskable ? 71.68 : (emblemOnly ? 15.36 : 30.72);
+  const offset = isMaskable ? 143.36 : (emblemOnly ? 30.72 : 61.44);
 
-  return `
-<svg width="${size}" height="${size}" viewBox="0 0 512 512" fill="none" xmlns="http://www.w3.org/2000/svg">
+  return `<svg width="${size}" height="${size}" viewBox="0 0 1024 1024" fill="none" xmlns="http://www.w3.org/2000/svg">
   <defs>
-    <!-- Royal Blue Background Gradient -->
-    <linearGradient id="bgGrad" x1="256" y1="0" x2="256" y2="512" gradientUnits="userSpaceOnUse">
-      <stop offset="0%" stop-color="#143CE6" />
-      <stop offset="30%" stop-color="#0A28BD" />
-      <stop offset="70%" stop-color="#061C9E" />
-      <stop offset="100%" stop-color="#020E6B" />
+    <!-- Master Royal Blue Canvas Gradient -->
+    <linearGradient id="metfaBgGrad" x1="512" y1="0" x2="512" y2="1024" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#1442E8" />
+      <stop offset="25%" stop-color="#0B30D2" />
+      <stop offset="60%" stop-color="#0620AA" />
+      <stop offset="85%" stop-color="#031378" />
+      <stop offset="100%" stop-color="#010A4E" />
     </linearGradient>
 
-    <!-- Top Ambient Radial Highlight -->
-    <radialGradient id="topGlow" cx="256" cy="40" r="320" gradientUnits="userSpaceOnUse">
-      <stop offset="0%" stop-color="#4B77FF" stop-opacity="0.4" />
-      <stop offset="100%" stop-color="#143CE6" stop-opacity="0" />
+    <!-- Top Ambient Radial Illumination -->
+    <radialGradient id="metfaTopGlow" cx="512" cy="120" r="700" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#5586FF" stop-opacity="0.45" />
+      <stop offset="45%" stop-color="#1C4BEE" stop-opacity="0.15" />
+      <stop offset="100%" stop-color="#0825B8" stop-opacity="0" />
     </radialGradient>
 
-    <!-- 3D White/Pearl Gradient for Emblem -->
-    <linearGradient id="pearlGrad" x1="256" y1="60" x2="256" y2="400" gradientUnits="userSpaceOnUse">
-      <stop offset="0%" stop-color="#FFFFFF" />
-      <stop offset="60%" stop-color="#F6F8FC" />
-      <stop offset="90%" stop-color="#E2E8F0" />
-      <stop offset="100%" stop-color="#CBD5E1" />
+    <!-- Bottom Vignette / Shadow -->
+    <linearGradient id="metfaBottomVignette" x1="512" y1="700" x2="512" y2="1024" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#000000" stop-opacity="0" />
+      <stop offset="100%" stop-color="#000528" stop-opacity="0.6" />
     </linearGradient>
 
-    <!-- Deep Drop Shadow under 3D Ribbon -->
-    <filter id="emblemShadow" x="-20%" y="-20%" width="140%" height="140%" filterUnits="userSpaceOnUse">
-      <feDropShadow dx="0" dy="12" stdDeviation="10" flood-color="#010624" flood-opacity="0.65" />
-      <feDropShadow dx="0" dy="4" stdDeviation="3" flood-color="#000000" flood-opacity="0.35" />
+    <!-- 3D Pearl White Lighting Gradient for Emblem Surface -->
+    <linearGradient id="emblemBodyGrad" x1="512" y1="120" x2="512" y2="760" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#FFFFFF" />
+      <stop offset="40%" stop-color="#FAFBFD" />
+      <stop offset="75%" stop-color="#EEF2F8" />
+      <stop offset="92%" stop-color="#DEE5F0" />
+      <stop offset="100%" stop-color="#CAD5E4" />
+    </linearGradient>
+
+    <!-- Top Specular Bevel Highlight -->
+    <linearGradient id="bevelSpecular" x1="512" y1="100" x2="512" y2="500" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#FFFFFF" stop-opacity="1" />
+      <stop offset="60%" stop-color="#FFFFFF" stop-opacity="0.7" />
+      <stop offset="100%" stop-color="#E2E8F0" stop-opacity="0.2" />
+    </linearGradient>
+
+    <!-- Realistic Deep 3D Drop Shadows Underneath Ribbon Structure -->
+    <filter id="masterDropShadow" x="-30%" y="-30%" width="160%" height="160%" filterUnits="userSpaceOnUse">
+      <!-- Ambient occlusion soft shadow -->
+      <feDropShadow dx="0" dy="24" stdDeviation="22" flood-color="#010626" flood-opacity="0.75" />
+      <!-- Contact crisp shadow -->
+      <feDropShadow dx="0" dy="8" stdDeviation="8" flood-color="#000214" flood-opacity="0.45" />
+      <feDropShadow dx="0" dy="2" stdDeviation="3" flood-color="#000000" flood-opacity="0.3" />
     </filter>
 
-    <!-- Top Bevel Highlight for 3D Tubular Look -->
-    <filter id="bevelFilter" x="-10%" y="-10%" width="120%" height="120%">
-      <feDropShadow dx="0" dy="2" stdDeviation="1.5" flood-color="#FFFFFF" flood-opacity="0.9" />
+    <!-- Soft Inner Crevice Lighting -->
+    <filter id="softEmboss" x="-10%" y="-10%" width="120%" height="120%">
+      <feGaussianBlur stdDeviation="2" result="blur" />
+      <feComposite in="SourceGraphic" in2="blur" operator="over" />
     </filter>
   </defs>
 
@@ -62,155 +83,196 @@ function buildMetfaSvg(options: { isMaskable?: boolean; size?: number; emblemOnl
     emblemOnly
       ? ''
       : isMaskable
-      ? `<rect width="512" height="512" fill="url(#bgGrad)" />`
-      : `<rect width="512" height="512" rx="116" fill="url(#bgGrad)" />
-         <rect width="512" height="512" rx="116" fill="url(#topGlow)" />
-         <rect x="1.5" y="1.5" width="509" height="509" rx="114.5" fill="none" stroke="#4A75FF" stroke-width="2" stroke-opacity="0.35" />`
+      ? `<rect width="1024" height="1024" fill="url(#metfaBgGrad)" />
+         <rect width="1024" height="1024" fill="url(#metfaTopGlow)" />
+         <rect width="1024" height="1024" fill="url(#metfaBottomVignette)" />`
+      : `<!-- Squircle Background with 230px Corner Radius -->
+         <rect width="1024" height="1024" rx="230" fill="url(#metfaBgGrad)" />
+         <rect width="1024" height="1024" rx="230" fill="url(#metfaTopGlow)" />
+         <rect width="1024" height="1024" rx="230" fill="url(#metfaBottomVignette)" />
+         <!-- Subtle Inner Border Highlight -->
+         <rect x="3" y="3" width="1018" height="1018" rx="227" fill="none" stroke="#5A88FF" stroke-width="4" stroke-opacity="0.3" />`
   }
 
-  <!-- Emblem Centered Group -->
-  <g transform="translate(${translate}, ${translate}) scale(${scale})" filter="url(#emblemShadow)">
-
-    <!-- MAIN UNIFIED 3D WHITE EMBLEM PATH (Exact Contours matching the user's logo) -->
+  <!-- Master Emblem Symmetrical Group with Smooth 3D Cast Shadow -->
+  <g transform="translate(${offset}, ${offset}) scale(${scale})" filter="url(#masterDropShadow)">
+    
+    <!-- UNIFIED 3D WHITE SCULPTED EMBLEM (Smooth Even-Odd Compound Path) -->
     <path
       fill-rule="evenodd"
       clip-rule="evenodd"
       d="
-        /* OUTER BOUNDARY OF CONTINUOUS EMBLEM */
-        M 256 292
-        /* Central V to Left Crown Leaf Tip */
-        L 204 76
-        C 200 66 186 66 182 76
-        C 166 112 152 168 184 212
-        /* Left Leaf to Left M-Wing Mountain Peak */
-        C 164 204 136 196 112 208
-        C 76 226 44 274 44 332
-        C 44 374 76 394 116 394
-        C 160 394 204 356 238 304
-        /* Lower Center Cradle Arch */
-        C 246 294 266 294 274 304
-        C 308 356 352 394 396 394
-        C 436 394 468 374 468 332
-        C 468 274 436 226 400 208
-        C 376 196 348 204 328 212
-        C 360 168 346 112 330 76
-        C 326 66 312 66 308 76
-        /* Right Crown Leaf Tip to Central V */
-        L 256 292 Z
+        /* ==================== 1. OUTER CONTOUR ==================== */
+        M 512 584
+        /* Inner V edge rising to Left Leaf Pointed Tip */
+        L 412 152
+        C 404 132 376 132 368 152
+        C 336 224 308 336 372 424
+        /* Left Leaf outer curve transition to Left Wing Shoulder */
+        C 332 408 276 392 228 416
+        C 156 452 92 548 92 664
+        C 92 748 156 788 236 788
+        C 324 788 412 712 480 608
+        /* Lower Central Cradle Arch */
+        C 496 588 528 588 544 608
+        C 612 712 700 788 788 788
+        C 868 788 932 748 932 664
+        C 932 548 868 452 796 416
+        C 748 392 692 408 652 424
+        C 716 336 688 224 656 152
+        C 648 132 620 132 612 152
+        /* Right Leaf inner edge descending to Central V Notch */
+        L 512 584 Z
 
-        /* LEFT TOP LEAF HOLE (TEARDROP) */
-        M 194 112
-        C 206 142 206 172 192 188
-        C 180 174 176 146 188 116
-        C 190 110 192 110 194 112 Z
+        /* ==================== 2. LEFT TOP LEAF HOLE ==================== */
+        M 390 224
+        C 414 284 414 344 386 376
+        C 362 348 354 292 378 232
+        C 382 220 386 220 390 224 Z
 
-        /* RIGHT TOP LEAF HOLE (TEARDROP) */
-        M 318 112
-        C 324 110 326 110 328 116
-        C 340 146 336 174 324 188
-        C 310 172 310 142 322 112 Z
+        /* ==================== 3. RIGHT TOP LEAF HOLE ==================== */
+        M 634 224
+        C 638 220 642 220 646 232
+        C 670 292 662 348 638 376
+        C 610 344 610 284 634 224 Z
 
-        /* LEFT WING HOLE (ANGLED TRIANGLE/OVAL) */
-        M 106 244
-        C 134 244 154 266 170 292
-        C 142 324 118 344 96 344
-        C 76 344 68 326 68 302
-        C 68 272 84 244 106 244 Z
+        /* ==================== 4. LEFT WING DIAGONAL OVAL HOLE ==================== */
+        M 216 488
+        C 272 488 312 532 344 584
+        C 288 648 240 688 196 688
+        C 156 688 140 652 140 604
+        C 140 544 172 488 216 488 Z
 
-        /* RIGHT WING HOLE (ANGLED TRIANGLE/OVAL) */
-        M 406 244
-        C 428 244 444 272 444 302
-        C 444 326 436 344 416 344
-        C 394 344 370 324 342 292
-        C 358 266 378 244 406 244 Z
+        /* ==================== 5. RIGHT WING DIAGONAL OVAL HOLE ==================== */
+        M 808 488
+        C 852 488 884 544 884 604
+        C 884 652 868 688 828 688
+        C 784 688 736 648 680 584
+        C 712 532 752 488 808 488 Z
 
-        /* CENTRAL CRADLE VALLEY CUTOUT */
-        M 256 316
-        C 246 316 232 332 216 352
-        C 230 366 244 372 256 372
-        C 268 372 282 366 296 352
-        C 280 332 266 316 256 316 Z
+        /* ==================== 6. CENTRAL CRADLE SHIELD VIEWPORT ==================== */
+        M 512 632
+        C 492 632 464 664 432 704
+        C 460 732 488 744 512 744
+        C 536 744 564 732 592 704
+        C 560 664 532 632 512 632 Z
       "
-      fill="url(#pearlGrad)"
+      fill="url(#emblemBodyGrad)"
     />
 
-    <!-- 3D Ribbon Continuous Tubular Stroke Overlay for Silky Smooth Organic Curves -->
-    <!-- 1. Central V and Top Leaves -->
+    <!-- CONTINUOUS 3D TUBULAR RIBBON VOLUME OVERLAYS (Precise Smooth Curvature) -->
+    <!-- A. Crown Leaves & Central V Convergence -->
     <path
-      d="M 256 290 L 194 72 C 188 62 176 66 172 78 C 154 126 156 186 196 216 L 256 290 L 316 216 C 356 186 358 126 340 78 C 336 66 324 62 318 72 L 256 290 Z"
-      fill="url(#pearlGrad)"
-      stroke="url(#pearlGrad)"
-      stroke-width="12"
-      stroke-linejoin="round"
-      stroke-linecap="round"
-    />
-
-    <!-- 2. Left Wing Loop -->
-    <path
-      d="M 190 216 C 158 198 126 198 102 214 C 68 238 52 284 52 334 C 52 366 74 384 104 384 C 144 384 186 350 224 298"
-      fill="none"
-      stroke="url(#pearlGrad)"
-      stroke-width="26"
-      stroke-linecap="round"
-      stroke-linejoin="round"
-    />
-
-    <!-- 3. Right Wing Loop -->
-    <path
-      d="M 322 216 C 354 198 386 198 410 214 C 444 238 460 284 460 334 C 460 366 438 384 408 384 C 368 384 326 350 288 298"
-      fill="none"
-      stroke="url(#pearlGrad)"
-      stroke-width="26"
-      stroke-linecap="round"
-      stroke-linejoin="round"
-    />
-
-    <!-- 4. Lower Center Connecting Cradle Arch -->
-    <path
-      d="M 104 384 C 154 384 206 348 256 348 C 306 348 358 384 408 384"
-      fill="none"
-      stroke="url(#pearlGrad)"
+      d="M 512 580 L 390 144 C 378 124 354 132 346 156 C 310 252 314 372 394 432 L 512 580 L 630 432 C 710 372 714 252 678 156 C 670 132 646 124 634 144 L 512 580 Z"
+      fill="url(#emblemBodyGrad)"
+      stroke="url(#emblemBodyGrad)"
       stroke-width="24"
+      stroke-linejoin="round"
       stroke-linecap="round"
     />
 
-    <!-- 5. Inner Leaf Cutout Strokes for Perfect Organic Hole Definition -->
+    <!-- B. Left M-Wing Sculpture -->
     <path
-      d="M 194 92 C 182 130 178 164 190 184 C 198 164 198 130 194 92 Z"
-      fill="#0A28BD"
-      opacity="0.95"
-    />
-    <path
-      d="M 318 92 C 330 130 334 164 322 184 C 314 164 314 130 318 92 Z"
-      fill="#0A28BD"
-      opacity="0.95"
+      d="M 382 432 C 318 396 254 396 206 428 C 138 476 106 568 106 668 C 106 732 150 768 210 768 C 290 768 374 700 450 596"
+      fill="none"
+      stroke="url(#emblemBodyGrad)"
+      stroke-width="52"
+      stroke-linecap="round"
+      stroke-linejoin="round"
     />
 
-    <!-- 6. Side Loop Cutout Holes -->
+    <!-- C. Right M-Wing Sculpture -->
     <path
-      d="M 104 246 C 76 270 76 312 96 334 C 126 334 156 298 164 274 C 146 252 124 242 104 246 Z"
-      fill="#0A28BD"
-      opacity="0.95"
-    />
-    <path
-      d="M 408 246 C 436 270 436 312 416 334 C 386 334 356 298 348 274 C 366 252 388 242 408 246 Z"
-      fill="#0A28BD"
-      opacity="0.95"
+      d="M 642 432 C 706 396 770 396 818 428 C 886 476 918 568 918 668 C 918 732 874 768 814 768 C 734 768 650 700 574 596"
+      fill="none"
+      stroke="url(#emblemBodyGrad)"
+      stroke-width="52"
+      stroke-linecap="round"
+      stroke-linejoin="round"
     />
 
-    <!-- 7. Center Cradle Hollow -->
+    <!-- D. Lower Central Smiling Cradle Arch -->
     <path
-      d="M 230 318 C 242 344 250 354 256 354 C 262 354 270 344 282 318 C 268 336 244 336 230 318 Z"
-      fill="#0A28BD"
-      opacity="0.95"
+      d="M 210 768 C 310 768 414 696 512 696 C 610 696 714 768 814 768"
+      fill="none"
+      stroke="url(#emblemBodyGrad)"
+      stroke-width="48"
+      stroke-linecap="round"
+      stroke-linejoin="round"
+    />
+
+    <!-- ==================== EXACT CUTOUT HOLE DEFINITIONS ==================== -->
+    <!-- Left Leaf Teardrop Hole -->
+    <path
+      d="M 390 184 C 366 260 358 328 382 368 C 398 328 398 260 390 184 Z"
+      fill="url(#metfaBgGrad)"
+    />
+
+    <!-- Right Leaf Teardrop Hole -->
+    <path
+      d="M 634 184 C 658 260 666 328 642 368 C 626 328 626 260 634 184 Z"
+      fill="url(#metfaBgGrad)"
+    />
+
+    <!-- Left Wing Cutout Oval -->
+    <path
+      d="M 210 492 C 154 540 154 624 194 668 C 254 668 314 596 330 548 C 294 504 250 484 210 492 Z"
+      fill="url(#metfaBgGrad)"
+    />
+
+    <!-- Right Wing Cutout Oval -->
+    <path
+      d="M 814 492 C 870 540 870 624 830 668 C 770 668 710 596 694 548 C 730 504 774 484 814 492 Z"
+      fill="url(#metfaBgGrad)"
+    />
+
+    <!-- Center Cradle Blue Viewport -->
+    <path
+      d="M 460 636 C 484 688 500 708 512 708 C 524 708 540 688 564 636 C 536 672 488 672 460 636 Z"
+      fill="url(#metfaBgGrad)"
+    />
+
+    <!-- ==================== SPECULAR EMBOSS LIGHTING HIGHLIGHTS ==================== -->
+    <!-- Left Leaf Tip Highlight -->
+    <path
+      d="M 390 144 L 372 152 C 346 216 330 300 368 380"
+      fill="none"
+      stroke="url(#bevelSpecular)"
+      stroke-width="8"
+      stroke-linecap="round"
+    />
+    <!-- Right Leaf Tip Highlight -->
+    <path
+      d="M 634 144 L 652 152 C 678 216 694 300 656 380"
+      fill="none"
+      stroke="url(#bevelSpecular)"
+      stroke-width="8"
+      stroke-linecap="round"
+    />
+    <!-- Left Wing Shoulder Top Arc Highlight -->
+    <path
+      d="M 216 428 C 152 476 116 560 116 652"
+      fill="none"
+      stroke="url(#bevelSpecular)"
+      stroke-width="10"
+      stroke-linecap="round"
+    />
+    <!-- Right Wing Shoulder Top Arc Highlight -->
+    <path
+      d="M 808 428 C 872 476 908 560 908 652"
+      fill="none"
+      stroke="url(#bevelSpecular)"
+      stroke-width="10"
+      stroke-linecap="round"
     />
 
   </g>
-</svg>
-`;
+</svg>`;
 }
 
-async function main() {
+async function renderMasterIcons() {
+  console.log('🎨 Rendering Final Approved METFA Master Brand Assets across all formats...');
+
   const publicDir = path.resolve('public');
   const distDir = path.resolve('dist');
 
@@ -218,75 +280,97 @@ async function main() {
     if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
   });
 
-  console.log('✨ Generating Official Metfa Social App Icons from exact vector specification...');
+  const masterStandardSvg = generateMasterMetfaSvg({ isMaskable: false, size: 1024 });
+  const masterMaskableSvg = generateMasterMetfaSvg({ isMaskable: true, size: 1024 });
+  const masterEmblemSvg = generateMasterMetfaSvg({ emblemOnly: true, size: 1024 });
 
-  // 1. Standard full icon SVG (512x512)
-  const standardSvg = buildMetfaSvg({ size: 512, isMaskable: false });
-  // 2. Safe-zone maskable icon SVG (512x512 with safe margin)
-  const maskableSvg = buildMetfaSvg({ size: 512, isMaskable: true });
-  // 3. Transparent emblem SVG
-  const emblemSvg = buildMetfaSvg({ size: 512, emblemOnly: true });
+  // Save master SVG definitions
+  fs.writeFileSync(path.join(publicDir, 'logo.svg'), masterStandardSvg, 'utf-8');
+  fs.writeFileSync(path.join(publicDir, 'icon-maskable.svg'), masterMaskableSvg, 'utf-8');
+  fs.writeFileSync(path.join(publicDir, 'metfa-emblem.svg'), masterEmblemSvg, 'utf-8');
+  fs.writeFileSync(path.join(publicDir, 'favicon.svg'), masterStandardSvg, 'utf-8');
 
-  fs.writeFileSync(path.join(publicDir, 'favicon.svg'), standardSvg);
-
+  // Definitions for all required raster files
   const targets = [
-    { name: 'logo.png', svg: standardSvg, size: 512 },
-    { name: 'icon-512.png', svg: standardSvg, size: 512 },
-    { name: 'icon-192.png', svg: standardSvg, size: 192 },
-    { name: 'icon-maskable-512.png', svg: maskableSvg, size: 512 },
-    { name: 'icon-maskable-192.png', svg: maskableSvg, size: 192 },
-    { name: 'playstore-icon-512.png', svg: standardSvg, size: 512 },
-    { name: 'apple-touch-icon.png', svg: standardSvg, size: 180 },
-    { name: 'apple-touch-icon-180x180.png', svg: standardSvg, size: 180 },
-    { name: 'apple-touch-icon-152x152.png', svg: standardSvg, size: 152 },
-    { name: 'apple-touch-icon-precomposed.png', svg: standardSvg, size: 180 },
-    { name: 'favicon-64.png', svg: standardSvg, size: 64 },
-    { name: 'favicon-48.png', svg: standardSvg, size: 48 },
-    { name: 'favicon-32.png', svg: standardSvg, size: 32 },
-    { name: 'favicon-16.png', svg: standardSvg, size: 16 },
-    { name: 'icon.png', svg: standardSvg, size: 192 },
-    { name: 'metfa-emblem.png', svg: emblemSvg, size: 512 },
-    { name: 'metfa-emblem-128.png', svg: emblemSvg, size: 128 },
+    // Primary Master Logos
+    { name: 'logo.png', svg: masterStandardSvg, size: 512 },
+    { name: 'icon.png', svg: masterStandardSvg, size: 512 },
+    { name: 'playstore-icon-512.png', svg: masterStandardSvg, size: 512 },
+    
+    // PWA Standard Icons
+    { name: 'icon-512.png', svg: masterStandardSvg, size: 512 },
+    { name: 'icon-192.png', svg: masterStandardSvg, size: 192 },
+    
+    // PWA Adaptive Maskable Icons
+    { name: 'icon-maskable-512.png', svg: masterMaskableSvg, size: 512 },
+    { name: 'icon-maskable-192.png', svg: masterMaskableSvg, size: 192 },
+    
+    // Apple Touch Icons (iOS Safari)
+    { name: 'apple-touch-icon.png', svg: masterStandardSvg, size: 180 },
+    { name: 'apple-touch-icon-180x180.png', svg: masterStandardSvg, size: 180 },
+    { name: 'apple-touch-icon-152x152.png', svg: masterStandardSvg, size: 152 },
+    { name: 'apple-touch-icon-precomposed.png', svg: masterStandardSvg, size: 180 },
+    
+    // Favicons
+    { name: 'favicon-64.png', svg: masterStandardSvg, size: 64 },
+    { name: 'favicon-48.png', svg: masterStandardSvg, size: 48 },
+    { name: 'favicon-32.png', svg: masterStandardSvg, size: 32 },
+    { name: 'favicon-16.png', svg: masterStandardSvg, size: 16 },
+    
+    // Emblem Isolations
+    { name: 'metfa-emblem.png', svg: masterEmblemSvg, size: 512 },
+    { name: 'metfa-emblem-128.png', svg: masterEmblemSvg, size: 128 },
   ];
 
   for (const t of targets) {
-    const buf = await sharp(Buffer.from(t.svg)).resize(t.size, t.size).png().toBuffer();
-    fs.writeFileSync(path.join(publicDir, t.name), buf);
+    const pubPath = path.join(publicDir, t.name);
+    const distPath = path.join(distDir, t.name);
+
+    await sharp(Buffer.from(t.svg))
+      .resize(t.size, t.size, { fit: 'contain', background: { r: 0, g: 0, b: 0, alpha: 0 } })
+      .png({ compressionLevel: 9, quality: 100 })
+      .toFile(pubPath);
+
     if (fs.existsSync(distDir)) {
-      fs.writeFileSync(path.join(distDir, t.name), buf);
+      fs.copyFileSync(pubPath, distPath);
     }
-    console.log(` ✅ Rendered: /public/${t.name} (${t.size}x${t.size})`);
+
+    console.log(`✅ Generated: /${t.name} (${t.size}x${t.size})`);
   }
 
-  // Also update Android mipmap drawables
-  const androidResDir = path.resolve('android/app/src/main/res');
-  const publicAndroidDir = path.resolve('public/android');
-
-  const densities = [
-    { folder: 'mipmap-mdpi', size: 48 },
-    { folder: 'mipmap-hdpi', size: 72 },
-    { folder: 'mipmap-xhdpi', size: 96 },
-    { folder: 'mipmap-xxhdpi', size: 144 },
-    { folder: 'mipmap-xxxhdpi', size: 192 },
+  // Also generate Android mipmap icons in public/android and dist/android
+  const androidSizes = [
+    { dir: 'mipmap-mdpi', size: 48 },
+    { dir: 'mipmap-hdpi', size: 72 },
+    { dir: 'mipmap-xhdpi', size: 96 },
+    { dir: 'mipmap-xxhdpi', size: 144 },
+    { dir: 'mipmap-xxxhdpi', size: 192 },
   ];
 
-  for (const d of densities) {
-    const p1 = path.join(publicAndroidDir, d.folder);
-    const p2 = path.join(androidResDir, d.folder);
-    [p1, p2].forEach((dir) => {
-      if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-    });
+  for (const a of androidSizes) {
+    const pubAndroid = path.join(publicDir, 'android', a.dir);
+    const distAndroid = path.join(distDir, 'android', a.dir);
 
-    const launcherBuf = await sharp(Buffer.from(standardSvg)).resize(d.size, d.size).png().toBuffer();
-    const roundBuf = await sharp(Buffer.from(standardSvg)).resize(d.size, d.size).png().toBuffer();
+    fs.mkdirSync(pubAndroid, { recursive: true });
+    if (fs.existsSync(distDir)) fs.mkdirSync(distAndroid, { recursive: true });
 
-    fs.writeFileSync(path.join(p1, 'ic_launcher.png'), launcherBuf);
-    fs.writeFileSync(path.join(p1, 'ic_launcher_round.png'), roundBuf);
-    fs.writeFileSync(path.join(p2, 'ic_launcher.png'), launcherBuf);
-    fs.writeFileSync(path.join(p2, 'ic_launcher_round.png'), roundBuf);
+    await sharp(Buffer.from(masterStandardSvg))
+      .resize(a.size, a.size)
+      .png({ quality: 100 })
+      .toFile(path.join(pubAndroid, 'ic_launcher.png'));
+
+    await sharp(Buffer.from(masterStandardSvg))
+      .resize(a.size, a.size)
+      .png({ quality: 100 })
+      .toFile(path.join(pubAndroid, 'ic_launcher_round.png'));
+
+    if (fs.existsSync(distDir)) {
+      fs.copyFileSync(path.join(pubAndroid, 'ic_launcher.png'), path.join(distAndroid, 'ic_launcher.png'));
+      fs.copyFileSync(path.join(pubAndroid, 'ic_launcher_round.png'), path.join(distAndroid, 'ic_launcher_round.png'));
+    }
   }
 
-  console.log('🎉 All Metfa Social logo assets generated successfully!');
+  console.log('✨ All Master METFA brand assets generated cleanly and unified across the entire PWA ecosystem!');
 }
 
-main().catch(console.error);
+renderMasterIcons().catch(console.error);

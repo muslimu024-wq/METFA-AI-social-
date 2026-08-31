@@ -221,11 +221,12 @@ export const saveAuthUser = (user: AuthUser): void => {
   persistSSOSession(user);
 };
 
-export const loginWithPhone = (phoneNumber: string, name: string): AuthUser => {
-  const user = ssoLoginWithPhone(phoneNumber, name);
+export const loginWithPhone = async (phoneNumber: string, name: string): Promise<AuthUser> => {
+  const res = await ssoLoginWithPhone(phoneNumber, name);
+  const user = res.user;
 
   addNotification({
-    type: 'login',
+    type: 'system',
     title: 'Welcome to Metfa Social',
     message: `Logged in successfully with phone ${phoneNumber}. Unified Metfa ID: ${user.metfaId}.`,
     actor: {
@@ -239,11 +240,12 @@ export const loginWithPhone = (phoneNumber: string, name: string): AuthUser => {
   return user;
 };
 
-export const loginWithGmail = (email: string, name: string, customAvatar?: string): AuthUser => {
-  const user = ssoLoginWithGmail(email, name, customAvatar);
+export const loginWithGmail = async (email: string, name: string, customAvatar?: string): Promise<AuthUser> => {
+  const res = await ssoLoginWithGmail(email, name, customAvatar);
+  const user = res.user;
 
   addNotification({
-    type: 'login',
+    type: 'system',
     title: 'Metfa Unified ID Connected',
     message: `Signed in as ${user.name} (${email}). Unified Metfa ID: ${user.metfaId}.`,
     actor: {

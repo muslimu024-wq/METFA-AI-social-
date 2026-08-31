@@ -18,11 +18,17 @@ import {
   X,
   Play,
   Pause,
+  Music,
+  ShieldCheck,
 } from 'lucide-react';
 import { CommunityPost, UserProfile } from '../types/community';
+import { AudioTrack } from '../types/audio';
 import { isContentOwner } from '../utils/communityStore';
 import { isPostSaved, toggleSavePost } from '../utils/bookmarkStore';
+import { formatDuration } from '../utils/audioStore';
 import { AiRecipeBox } from './AiRecipeBox';
+import AudioLicenseInfoModal from './AudioLicenseInfoModal';
+import { PostContent } from './PostContent';
 
 const GRADIENT_PRESETS: { [key: string]: string } = {
   sunset: 'bg-gradient-to-br from-orange-500 via-rose-500 to-purple-600',
@@ -87,7 +93,10 @@ export const PostCard: React.FC<PostCardProps> = ({
 
   // Voice playback state
   const [isPlayingVoiceId, setIsPlayingVoiceId] = useState<string | null>(null);
+  const [isPlayingTrack, setIsPlayingTrack] = useState(false);
+  const [isLicenseModalOpen, setIsLicenseModalOpen] = useState(false);
   const audioRef = useRef<HTMLAudioElement | null>(null);
+  const trackAudioRef = useRef<HTMLAudioElement | null>(null);
 
   // 10-second Voice Note Recording state
   const [isRecordingVoice, setIsRecordingVoice] = useState(false);
@@ -472,15 +481,21 @@ export const PostCard: React.FC<PostCardProps> = ({
             hasGradient ? GRADIENT_PRESETS[post.textBackgroundPreset!] : 'bg-gray-950/60 text-gray-100 text-left'
           }`}
         >
-          <p
-            className={`${
+          <PostContent
+            text={post.caption || post.prompt}
+            charLimit={hasGradient ? 220 : 180}
+            className="w-full"
+            textClassName={
               hasGradient
-                ? 'text-lg sm:text-xl font-black text-white leading-relaxed'
-                : 'text-sm sm:text-base text-gray-200 leading-relaxed font-normal'
-            }`}
-          >
-            {post.caption || post.prompt}
-          </p>
+                ? 'text-lg sm:text-xl font-black text-white leading-relaxed text-center'
+                : 'text-sm sm:text-base text-gray-200 leading-relaxed font-normal text-left'
+            }
+            buttonClassName={
+              hasGradient
+                ? 'text-white/90 hover:text-white underline font-bold text-xs mt-2'
+                : 'text-blue-400 hover:text-blue-300 font-semibold text-sm mt-1'
+            }
+          />
         </div>
       ) : (
         <div className="relative group bg-gray-950 max-h-[520px] overflow-hidden flex items-center justify-center">
@@ -518,7 +533,12 @@ export const PostCard: React.FC<PostCardProps> = ({
       {!isInlineEditing && (
         <div className="p-4 space-y-3">
           {!isPureTextPost && post.caption && (
-            <p className="text-sm text-gray-200 leading-relaxed font-normal">{post.caption}</p>
+            <PostContent
+              text={post.caption}
+              charLimit={160}
+              textClassName="text-sm text-gray-200 leading-relaxed font-normal"
+              buttonClassName="text-blue-400 hover:text-blue-300 font-semibold text-sm mt-1"
+            />
           )}
 
           {post.prompt && post.prompt !== post.caption && (
@@ -527,6 +547,65 @@ export const PostCard: React.FC<PostCardProps> = ({
               stylePreset={post.stylePreset}
               onRemixPrompt={onRemixPrompt}
             />
+          )}
+
+          {post.audioTrack && (
+            <div className="p-2.5 rounded-2xl bg-purple-950/25 border border-purple-500/30 flex items-center justify-between gap-3">
+              <div className="flex items-center gap-2.5 min-w-0">
+                <div className="relative group shrink-0">
+                  <img
+                    src={post.audioTrack.cover_url}
+                    alt={post.audioTrack.title}
+                    className="w-10 h-10 rounded-xl object-cover border border-purple-500/30"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (!trackAudioRef.current) {
+                        const audio = new Audio(post.audioTrack!.audio_url);
+                        trackAudioRef.current = audio;
+                        audio.onended = () => setIsPlayingTrack(false);
+                        audio.onerror = () => setIsPlayingTrack(false);
+                      }
+                      if (isPlayingTrack) {
+                        trackAudioRef.current.pause();
+                        setIsPlayingTrack(false);
+                      } else {
+                        trackAudioRef.current.play().catch(() => setIsPlayingTrack(false));
+                        setIsPlayingTrack(true);
+                      }
+                    }}
+                    className="absolute inset-0 bg-black/40 hover:bg-black/60 rounded-xl flex items-center justify-center text-white transition cursor-pointer"
+                  >
+                    {isPlayingTrack ? (
+                      <Pause className="w-4 h-4 text-teal-400" />
+                    ) : (
+                      <Play className="w-4 h-4 text-purple-300 fill-purple-300 ml-0.5" />
+                    )}
+                  </button>
+                </div>
+
+                <div className="min-w-0">
+                  <div className="flex items-center gap-1.5">
+                    <Music className="w-3 h-3 text-purple-400 shrink-0" />
+                    <h4 className="text-xs font-bold text-white truncate">{post.audioTrack.title}</h4>
+                  </div>
+                  <p className="text-[10px] text-purple-300 truncate font-mono">
+                    {post.audioTrack.artist} • {formatDuration(post.audioTrack.duration)}
+                  </p>
+                </div>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => setIsLicenseModalOpen(true)}
+                className="px-2 py-1 rounded-lg bg-teal-950/80 border border-teal-500/40 text-teal-300 hover:text-white text-[10px] font-bold flex items-center gap-1 shrink-0 transition"
+                title="View verified licensing certificate"
+              >
+                <ShieldCheck className="w-3 h-3 text-teal-400" />
+                <span>{post.audioTrack.license_type}</span>
+              </button>
+            </div>
           )}
 
           {post.tags && post.tags.length > 0 && (
@@ -736,6 +815,15 @@ export const PostCard: React.FC<PostCardProps> = ({
             </button>
           </form>
         </div>
+      )}
+
+      {/* Audio License Certificate Modal */}
+      {isLicenseModalOpen && post.audioTrack && (
+        <AudioLicenseInfoModal
+          isOpen={isLicenseModalOpen}
+          track={post.audioTrack}
+          onClose={() => setIsLicenseModalOpen(false)}
+        />
       )}
     </article>
   );

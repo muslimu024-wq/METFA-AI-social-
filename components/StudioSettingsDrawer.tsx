@@ -1,20 +1,14 @@
-import React, { useState } from 'react';
+import React from 'react';
 import {
   X,
   Sliders,
   Sparkles,
   Zap,
-  Shield,
-  Layers,
   Video,
-  Database,
-  Cpu,
-  Key,
-  Eye,
-  EyeOff,
   Bot,
   Flame,
-  CheckCircle2
+  CheckCircle2,
+  Key,
 } from 'lucide-react';
 import { StudioSettings } from '../types/chat';
 import { DailyCreditsData } from '../utils/creditManager';
@@ -36,10 +30,6 @@ export const StudioSettingsDrawer: React.FC<StudioSettingsDrawerProps> = ({
   creditsData,
   onWatchAdClick,
 }) => {
-  const [showGeminiKey, setShowGeminiKey] = useState(false);
-  const [showOpenAIKey, setShowOpenAIKey] = useState(false);
-  const [showGrokKey, setShowGrokKey] = useState(false);
-
   if (!isOpen) return null;
 
   const currentEngine = settings.engine || 'gemini';
@@ -119,7 +109,7 @@ export const StudioSettingsDrawer: React.FC<StudioSettingsDrawerProps> = ({
                       model: 'gemini-3.7-flash',
                     })
                   }
-                  className={`p-2.5 rounded-2xl border text-center transition flex flex-col items-center gap-1 ${
+                  className={`p-2.5 rounded-2xl border text-center transition flex flex-col items-center gap-1 cursor-pointer ${
                     currentEngine === 'gemini'
                       ? 'bg-purple-600 text-white border-purple-400 shadow-md'
                       : 'bg-gray-950 text-gray-400 border-gray-800 hover:text-white'
@@ -127,7 +117,7 @@ export const StudioSettingsDrawer: React.FC<StudioSettingsDrawerProps> = ({
                 >
                   <Sparkles className="w-4 h-4 text-teal-300" />
                   <span className="text-xs font-bold">Google Gemini</span>
-                  <span className="text-[9px] opacity-80">Built-in Fast</span>
+                  <span className="text-[9px] opacity-80">Primary Fast</span>
                 </button>
 
                 <button
@@ -138,7 +128,7 @@ export const StudioSettingsDrawer: React.FC<StudioSettingsDrawerProps> = ({
                       model: 'gpt-4o',
                     })
                   }
-                  className={`p-2.5 rounded-2xl border text-center transition flex flex-col items-center gap-1 ${
+                  className={`p-2.5 rounded-2xl border text-center transition flex flex-col items-center gap-1 cursor-pointer ${
                     currentEngine === 'openai'
                       ? 'bg-emerald-600 text-white border-emerald-400 shadow-md'
                       : 'bg-gray-950 text-gray-400 border-gray-800 hover:text-white'
@@ -157,7 +147,7 @@ export const StudioSettingsDrawer: React.FC<StudioSettingsDrawerProps> = ({
                       model: 'grok-2',
                     })
                   }
-                  className={`p-2.5 rounded-2xl border text-center transition flex flex-col items-center gap-1 ${
+                  className={`p-2.5 rounded-2xl border text-center transition flex flex-col items-center gap-1 cursor-pointer ${
                     currentEngine === 'grok'
                       ? 'bg-blue-600 text-white border-blue-400 shadow-md'
                       : 'bg-gray-950 text-gray-400 border-gray-800 hover:text-white'
@@ -172,131 +162,53 @@ export const StudioSettingsDrawer: React.FC<StudioSettingsDrawerProps> = ({
 
             {/* Engine Specific Model Selectors */}
             {currentEngine === 'gemini' && (
-              <div className="space-y-3">
-                <div>
-                  <label className="text-xs font-bold text-gray-300 uppercase tracking-wider block mb-2">
-                    Gemini Model Flavor
-                  </label>
-                  <select
-                    value={settings.model || 'gemini-3.7-flash'}
-                    onChange={(e) => onUpdateSettings({ model: e.target.value })}
-                    className="w-full bg-gray-950 border border-gray-800 rounded-xl px-3 py-2.5 text-xs text-white focus:outline-none focus:border-purple-500 font-medium"
-                  >
-                    <option value="gemini-3.7-flash">⚡ Gemini 3.7 Flash (Primary - Fast Multimodal & Reasoning)</option>
-                    <option value="gemini-3.1-flash-lite">🌱 Gemini 3.1 Flash Lite (Ultra-lightweight Fast)</option>
-                    <option value="gemini-3.1-flash-lite-image">🎨 Gemini 3.1 Flash Lite Image (Visual Inpainting)</option>
-                  </select>
-                </div>
-
-                <div>
-                  <label className="text-xs font-bold text-gray-300 uppercase tracking-wider block mb-1.5 flex items-center justify-between">
-                    <span>Google Gemini API Key</span>
-                    <span className="text-[10px] text-gray-500 font-normal">Optional (BYO Key)</span>
-                  </label>
-                  <div className="relative">
-                    <Key className="w-3.5 h-3.5 text-gray-500 absolute left-3 top-1/2 -translate-y-1/2" />
-                    <input
-                      type={showGeminiKey ? 'text' : 'password'}
-                      value={settings.geminiApiKey || ''}
-                      onChange={(e) => onUpdateSettings({ geminiApiKey: e.target.value })}
-                      placeholder="AIzaSy..."
-                      className="w-full bg-gray-950 border border-gray-800 rounded-xl pl-9 pr-9 py-2 text-xs text-white focus:outline-none focus:border-purple-500 font-mono"
-                    />
-                    <button
-                      type="button"
-                      onClick={() => setShowGeminiKey(!showGeminiKey)}
-                      className="p-1 text-gray-500 hover:text-white absolute right-2.5 top-1/2 -translate-y-1/2"
-                    >
-                      {showGeminiKey ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
-                    </button>
-                  </div>
-                </div>
+              <div>
+                <label className="text-xs font-bold text-gray-300 uppercase tracking-wider block mb-2">
+                  Gemini Model Flavor
+                </label>
+                <select
+                  value={settings.model || 'gemini-3.7-flash'}
+                  onChange={(e) => onUpdateSettings({ model: e.target.value })}
+                  className="w-full bg-gray-950 border border-gray-800 rounded-xl px-3 py-2.5 text-xs text-white focus:outline-none focus:border-purple-500 font-medium"
+                >
+                  <option value="gemini-3.7-flash">⚡ Gemini 3.7 Flash (Primary - Fast Multimodal & Reasoning)</option>
+                  <option value="gemini-3.1-flash-lite">🌱 Gemini 3.1 Flash Lite (Ultra-lightweight Fast)</option>
+                  <option value="gemini-3.1-flash-lite-image">🎨 Gemini 3.1 Flash Lite Image (Visual Inpainting)</option>
+                </select>
               </div>
             )}
 
             {currentEngine === 'openai' && (
-              <div className="space-y-3">
-                <div>
-                  <label className="text-xs font-bold text-gray-300 uppercase tracking-wider block mb-2">
-                    OpenAI Model
-                  </label>
-                  <select
-                    value={settings.model || 'gpt-4o'}
-                    onChange={(e) => onUpdateSettings({ model: e.target.value })}
-                    className="w-full bg-gray-950 border border-gray-800 rounded-xl px-3 py-2.5 text-xs text-white focus:outline-none focus:border-emerald-500 font-medium"
-                  >
-                    <option value="gpt-4o">🟢 GPT-4o (High-Intelligence Flagship)</option>
-                    <option value="gpt-4o-mini">🟢 GPT-4o Mini (Affordable & Fast)</option>
-                    <option value="o3-mini">🟢 o3-mini (Advanced Reasoning)</option>
-                  </select>
-                </div>
-
-                <div>
-                  <label className="text-xs font-bold text-gray-300 uppercase tracking-wider block mb-1.5 flex items-center justify-between">
-                    <span>OpenAI API Key</span>
-                    <span className="text-[10px] text-gray-500 font-normal">Optional (BYO Key)</span>
-                  </label>
-                  <div className="relative">
-                    <Key className="w-3.5 h-3.5 text-gray-500 absolute left-3 top-1/2 -translate-y-1/2" />
-                    <input
-                      type={showOpenAIKey ? 'text' : 'password'}
-                      value={settings.openaiApiKey || ''}
-                      onChange={(e) => onUpdateSettings({ openaiApiKey: e.target.value })}
-                      placeholder="sk-proj-..."
-                      className="w-full bg-gray-950 border border-gray-800 rounded-xl pl-9 pr-9 py-2 text-xs text-white focus:outline-none focus:border-emerald-500 font-mono"
-                    />
-                    <button
-                      type="button"
-                      onClick={() => setShowOpenAIKey(!showOpenAIKey)}
-                      className="p-1 text-gray-500 hover:text-white absolute right-2.5 top-1/2 -translate-y-1/2"
-                    >
-                      {showOpenAIKey ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
-                    </button>
-                  </div>
-                </div>
+              <div>
+                <label className="text-xs font-bold text-gray-300 uppercase tracking-wider block mb-2">
+                  OpenAI Model
+                </label>
+                <select
+                  value={settings.model || 'gpt-4o'}
+                  onChange={(e) => onUpdateSettings({ model: e.target.value })}
+                  className="w-full bg-gray-950 border border-gray-800 rounded-xl px-3 py-2.5 text-xs text-white focus:outline-none focus:border-emerald-500 font-medium"
+                >
+                  <option value="gpt-4o">🟢 GPT-4o (High-Intelligence Flagship)</option>
+                  <option value="gpt-4o-mini">🟢 GPT-4o Mini (Affordable & Fast)</option>
+                  <option value="o3-mini">🟢 o3-mini (Advanced Reasoning)</option>
+                </select>
               </div>
             )}
 
             {currentEngine === 'grok' && (
-              <div className="space-y-3">
-                <div>
-                  <label className="text-xs font-bold text-gray-300 uppercase tracking-wider block mb-2">
-                    xAI Grok Model
-                  </label>
-                  <select
-                    value={settings.model || 'grok-2'}
-                    onChange={(e) => onUpdateSettings({ model: e.target.value })}
-                    className="w-full bg-gray-950 border border-gray-800 rounded-xl px-3 py-2.5 text-xs text-white focus:outline-none focus:border-blue-500 font-medium"
-                  >
-                    <option value="grok-2">⚡ Grok-2 (State of the Art)</option>
-                    <option value="grok-2-mini">⚡ Grok-2 Mini (Fast Stream)</option>
-                    <option value="grok-beta">⚡ Grok Beta (Experimental)</option>
-                  </select>
-                </div>
-
-                <div>
-                  <label className="text-xs font-bold text-gray-300 uppercase tracking-wider block mb-1.5 flex items-center justify-between">
-                    <span>xAI Grok API Key</span>
-                    <span className="text-[10px] text-gray-500 font-normal">Optional (BYO Key)</span>
-                  </label>
-                  <div className="relative">
-                    <Key className="w-3.5 h-3.5 text-gray-500 absolute left-3 top-1/2 -translate-y-1/2" />
-                    <input
-                      type={showGrokKey ? 'text' : 'password'}
-                      value={settings.grokApiKey || ''}
-                      onChange={(e) => onUpdateSettings({ grokApiKey: e.target.value })}
-                      placeholder="xai-..."
-                      className="w-full bg-gray-950 border border-gray-800 rounded-xl pl-9 pr-9 py-2 text-xs text-white focus:outline-none focus:border-blue-500 font-mono"
-                    />
-                    <button
-                      type="button"
-                      onClick={() => setShowGrokKey(!showGrokKey)}
-                      className="p-1 text-gray-500 hover:text-white absolute right-2.5 top-1/2 -translate-y-1/2"
-                    >
-                      {showGrokKey ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
-                    </button>
-                  </div>
-                </div>
+              <div>
+                <label className="text-xs font-bold text-gray-300 uppercase tracking-wider block mb-2">
+                  xAI Grok Model
+                </label>
+                <select
+                  value={settings.model || 'grok-2'}
+                  onChange={(e) => onUpdateSettings({ model: e.target.value })}
+                  className="w-full bg-gray-950 border border-gray-800 rounded-xl px-3 py-2.5 text-xs text-white focus:outline-none focus:border-blue-500 font-medium"
+                >
+                  <option value="grok-2">⚡ Grok-2 (State of the Art)</option>
+                  <option value="grok-2-mini">⚡ Grok-2 Mini (Fast Stream)</option>
+                  <option value="grok-beta">⚡ Grok Beta (Experimental)</option>
+                </select>
               </div>
             )}
 
@@ -311,7 +223,7 @@ export const StudioSettingsDrawer: React.FC<StudioSettingsDrawerProps> = ({
                     key={lvl}
                     type="button"
                     onClick={() => onUpdateSettings({ qualityLevel: lvl })}
-                    className={`py-2 px-1 text-xs rounded-xl font-bold uppercase transition border ${
+                    className={`py-2 px-1 text-xs rounded-xl font-bold uppercase transition border cursor-pointer ${
                       (settings.qualityLevel || 'hd') === lvl
                         ? 'bg-purple-600/90 text-white border-purple-400 shadow-sm'
                         : 'bg-gray-950 text-gray-400 border-gray-800 hover:text-white'
@@ -369,6 +281,25 @@ export const StudioSettingsDrawer: React.FC<StudioSettingsDrawerProps> = ({
                 <option value="Vibrant 3D Render">Vibrant 3D Render</option>
               </select>
             </div>
+
+            {/* Custom API Keys / App Secrets */}
+            <div className="pt-2">
+              <button
+                type="button"
+                onClick={() => {
+                  window.dispatchEvent(new CustomEvent('metfa_open_api_keys_modal'));
+                }}
+                className="w-full py-2.5 px-3.5 bg-gradient-to-r from-teal-950/60 to-purple-950/60 hover:from-teal-900/60 hover:to-purple-900/60 border border-teal-500/40 hover:border-teal-400 text-teal-300 hover:text-white rounded-xl text-xs font-bold flex items-center justify-between transition group"
+              >
+                <div className="flex items-center gap-2">
+                  <Key className="w-4 h-4 text-teal-400 group-hover:rotate-12 transition-transform" />
+                  <span>Custom AI Keys & Secrets (BYOK)</span>
+                </div>
+                <span className="text-[10px] bg-teal-500/20 text-teal-300 px-1.5 py-0.5 rounded font-mono">
+                  Setup
+                </span>
+              </button>
+            </div>
           </div>
         </div>
 
@@ -377,7 +308,7 @@ export const StudioSettingsDrawer: React.FC<StudioSettingsDrawerProps> = ({
           <button
             type="button"
             onClick={onClose}
-            className="w-full py-3 bg-purple-600 hover:bg-purple-500 text-white font-bold text-xs rounded-xl shadow-lg shadow-purple-600/30 transition flex items-center justify-center gap-2"
+            className="w-full py-3 bg-purple-600 hover:bg-purple-500 text-white font-bold text-xs rounded-xl shadow-lg shadow-purple-600/30 transition flex items-center justify-center gap-2 cursor-pointer"
           >
             <CheckCircle2 className="w-4 h-4" />
             <span>Apply Settings & Save</span>

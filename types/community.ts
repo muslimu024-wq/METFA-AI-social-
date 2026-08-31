@@ -1,3 +1,7 @@
+import { AudioTrack } from './audio';
+
+export * from './audio';
+
 export interface UserProfile {
   id: string;
   name: string;
@@ -102,6 +106,7 @@ export interface CommunityPost {
   createdAt: string;
   tags: string[];
   feedType?: 'for_you' | 'following' | 'trending' | 'page' | 'group';
+  audioTrack?: AudioTrack;
 }
 
 export interface ReelHighlight {
@@ -127,6 +132,7 @@ export interface ReelHighlight {
   createdAt: string;
   promptUsed?: string;
   musicTrack?: string;
+  audioTrack?: AudioTrack;
 }
 
 export interface SocialPage {
