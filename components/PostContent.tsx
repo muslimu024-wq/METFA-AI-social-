@@ -29,7 +29,7 @@ export const PostContent: React.FC<PostContentProps> = ({
 
   return (
     <div className={`post-content ${className}`.trim()}>
-      <p className={`text-gray-200 whitespace-pre-wrap ${!isExpanded && isLongText ? 'post-text' : ''} ${textClassName}`.trim()}>
+      <p className={`text-slate-800 whitespace-pre-wrap ${!isExpanded && isLongText ? 'post-text' : ''} ${textClassName}`.trim()}>
         {displayedText}
       </p>
 
@@ -38,7 +38,7 @@ export const PostContent: React.FC<PostContentProps> = ({
         <button
           type="button"
           onClick={() => setIsExpanded(!isExpanded)}
-          className={`text-blue-400 hover:text-blue-300 font-semibold text-sm mt-1 focus:outline-none hover:underline inline-block cursor-pointer transition ${buttonClassName}`.trim()}
+          className={`text-blue-600 hover:text-blue-800 font-semibold text-sm mt-1 focus:outline-none hover:underline inline-block cursor-pointer transition ${buttonClassName}`.trim()}
         >
           {isExpanded ? 'See Less' : 'See More'}
         </button>

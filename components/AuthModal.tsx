@@ -150,41 +150,41 @@ export const AuthModal: React.FC<AuthModalProps> = ({
     >
       <div
         onClick={(e) => e.stopPropagation()}
-        className="bg-gray-900 border border-purple-500/30 rounded-3xl max-w-md w-full p-6 shadow-2xl relative overflow-hidden max-h-[90vh] overflow-y-auto"
+        className="bg-white border border-purple-200 rounded-3xl max-w-md w-full p-6 shadow-2xl relative overflow-hidden max-h-[90vh] overflow-y-auto text-slate-900"
       >
         {/* Glow Top Accent */}
         <div className="absolute top-0 left-0 right-0 h-1 bg-gradient-to-r from-purple-500 via-teal-400 to-pink-500" />
 
         {/* Modal Header */}
-        <div className="flex items-center justify-between pb-4 border-b border-gray-800 mb-4">
+        <div className="flex items-center justify-between pb-4 border-b border-slate-100 mb-4">
           <div className="flex items-center gap-3">
             <img
               src="/logo.png"
               alt="Metfa Social"
-              className="w-10 h-10 min-w-[40px] max-w-[40px] min-h-[40px] max-h-[40px] rounded-2xl shadow-lg shadow-blue-950/60 object-cover block shrink-0 pointer-events-none"
+              className="w-10 h-10 min-w-[40px] max-w-[40px] min-h-[40px] max-h-[40px] rounded-2xl shadow-md object-cover block shrink-0 pointer-events-none"
               onError={(e) => {
                 (e.currentTarget as HTMLImageElement).src = '/metfa-emblem.png';
               }}
             />
             <div>
-              <h3 className="text-base font-black text-white flex items-center gap-1.5">
+              <h3 className="text-base font-black text-slate-900 flex items-center gap-1.5">
                 <span>Join Metfa Social</span>
               </h3>
-              <p className="text-xs text-gray-400">Single Account for AI Studio & Social Media</p>
+              <p className="text-xs text-slate-500 font-medium">Single Account for AI Studio & Social Media</p>
             </div>
           </div>
 
           <button
             type="button"
             onClick={onClose}
-            className="p-2 rounded-full bg-gray-800 text-gray-400 hover:text-white transition"
+            className="p-2 rounded-full bg-slate-100 text-slate-500 hover:text-slate-900 hover:bg-slate-200 transition"
           >
             <X className="w-4 h-4" />
           </button>
         </div>
 
         {/* Avatar Picker / Upload */}
-        <div className="flex items-center gap-3 p-3 bg-gray-950/80 rounded-2xl border border-gray-800/80 mb-4">
+        <div className="flex items-center gap-3 p-3 bg-slate-50 rounded-2xl border border-slate-200 mb-4">
           <div className="relative shrink-0 group cursor-pointer" onClick={() => fileInputRef.current?.click()}>
             <img
               src={selectedAvatar}
@@ -205,11 +205,11 @@ export const AuthModal: React.FC<AuthModalProps> = ({
 
           <div className="flex-1 min-w-0">
             <div className="flex items-center justify-between mb-1">
-              <span className="text-xs font-bold text-gray-200">Profile Photo</span>
+              <span className="text-xs font-bold text-slate-800">Profile Photo</span>
               <button
                 type="button"
                 onClick={() => fileInputRef.current?.click()}
-                className="text-[11px] font-bold text-purple-400 hover:text-purple-300 transition"
+                className="text-[11px] font-bold text-purple-600 hover:text-purple-700 transition"
               >
                 Upload Photo
               </button>
@@ -221,7 +221,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                   type="button"
                   onClick={() => setSelectedAvatar(preset)}
                   className={`w-7 h-7 rounded-xl overflow-hidden border transition shrink-0 ${
-                    selectedAvatar === preset ? 'border-teal-400 ring-2 ring-teal-400/40' : 'border-gray-800 opacity-60 hover:opacity-100'
+                    selectedAvatar === preset ? 'border-teal-500 ring-2 ring-teal-400/40' : 'border-slate-200 opacity-60 hover:opacity-100'
                   }`}
                 >
                   <img src={preset} alt={`Preset ${idx + 1}`} className="w-full h-full object-cover" />
@@ -232,7 +232,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
         </div>
 
         {/* Tabs: Gmail vs Mobile Phone */}
-        <div className="grid grid-cols-2 gap-2 bg-gray-950 p-1.5 rounded-2xl border border-gray-800 mb-4">
+        <div className="grid grid-cols-2 gap-2 bg-slate-100 p-1.5 rounded-2xl border border-slate-200 mb-4">
           <button
             type="button"
             onClick={() => {
@@ -242,7 +242,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
             className={`py-2 px-3 rounded-xl text-xs font-bold transition flex items-center justify-center gap-2 ${
               authMethod === 'gmail'
                 ? 'bg-purple-600 text-white shadow-md'
-                : 'text-gray-400 hover:text-white'
+                : 'text-slate-600 hover:text-slate-900'
             }`}
           >
             <Mail className="w-3.5 h-3.5" />
@@ -258,7 +258,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
             className={`py-2 px-3 rounded-xl text-xs font-bold transition flex items-center justify-center gap-2 ${
               authMethod === 'phone'
                 ? 'bg-purple-600 text-white shadow-md'
-                : 'text-gray-400 hover:text-white'
+                : 'text-slate-600 hover:text-slate-900'
             }`}
           >
             <Smartphone className="w-3.5 h-3.5" />
@@ -269,55 +269,55 @@ export const AuthModal: React.FC<AuthModalProps> = ({
         {/* Form Body */}
         <form onSubmit={handleSubmit} className="space-y-3.5">
           {errorMsg && (
-            <div className="p-3 rounded-xl bg-rose-950/80 border border-rose-800/80 text-rose-300 text-xs font-medium flex items-start gap-2">
-              <AlertCircle className="w-4 h-4 shrink-0 text-rose-400 mt-0.5" />
+            <div className="p-3 rounded-xl bg-rose-50 border border-rose-200 text-rose-700 text-xs font-medium flex items-start gap-2">
+              <AlertCircle className="w-4 h-4 shrink-0 text-rose-500 mt-0.5" />
               <span>{errorMsg}</span>
             </div>
           )}
 
           <div>
-            <label className="text-xs font-bold text-gray-300 block mb-1">
+            <label className="text-xs font-bold text-slate-700 block mb-1">
               Full Name / Display Name
             </label>
             <div className="relative">
-              <User className="w-4 h-4 text-gray-500 absolute left-3.5 top-1/2 -translate-y-1/2" />
+              <User className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
               <input
                 type="text"
                 required
                 value={fullName}
                 onChange={(e) => setFullName(e.target.value)}
                 placeholder="e.g. Elena Rostova or Alex Rivera"
-                className="w-full bg-gray-950 border border-gray-800 rounded-xl pl-10 pr-3 py-2 text-xs text-white placeholder:text-gray-600 focus:outline-none focus:border-purple-500 font-medium"
+                className="w-full bg-slate-50 border border-slate-200 rounded-xl pl-10 pr-3 py-2 text-xs text-slate-900 placeholder:text-slate-400 focus:outline-none focus:border-purple-500 focus:bg-white font-medium"
               />
             </div>
           </div>
 
           <div>
-            <label className="text-xs font-bold text-gray-300 block mb-1">
+            <label className="text-xs font-bold text-slate-700 block mb-1">
               Custom Username (Optional)
             </label>
             <div className="relative">
-              <AtSign className="w-4 h-4 text-gray-500 absolute left-3.5 top-1/2 -translate-y-1/2" />
+              <AtSign className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
               <input
                 type="text"
                 value={customUsername}
                 onChange={(e) => setCustomUsername(e.target.value.replace(/[^a-zA-Z0-9._]/g, ''))}
                 placeholder="e.g. elena_ai or alex.creative"
-                className="w-full bg-gray-950 border border-gray-800 rounded-xl pl-10 pr-3 py-2 text-xs text-white placeholder:text-gray-600 focus:outline-none focus:border-purple-500 font-medium"
+                className="w-full bg-slate-50 border border-slate-200 rounded-xl pl-10 pr-3 py-2 text-xs text-slate-900 placeholder:text-slate-400 focus:outline-none focus:border-purple-500 focus:bg-white font-medium"
               />
             </div>
           </div>
 
           {authMethod === 'phone' ? (
             <div>
-              <label className="text-xs font-bold text-gray-300 block mb-1">
+              <label className="text-xs font-bold text-slate-700 block mb-1">
                 Mobile Phone Number
               </label>
               <div className="flex gap-2">
                 <select
                   value={phoneCountryCode}
                   onChange={(e) => setPhoneCountryCode(e.target.value)}
-                  className="bg-gray-950 border border-gray-800 rounded-xl px-2 py-2 text-xs text-white focus:outline-none focus:border-purple-500 font-medium"
+                  className="bg-slate-50 border border-slate-200 rounded-xl px-2 py-2 text-xs text-slate-900 focus:outline-none focus:border-purple-500 font-medium"
                 >
                   <option value="+1">🇺🇸 +1</option>
                   <option value="+880">🇧🇩 +880</option>
@@ -331,50 +331,50 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                 </select>
 
                 <div className="relative flex-1">
-                  <Phone className="w-4 h-4 text-gray-500 absolute left-3.5 top-1/2 -translate-y-1/2" />
+                  <Phone className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
                   <input
                     type="tel"
                     required
                     value={phoneNumber}
                     onChange={(e) => setPhoneNumber(e.target.value)}
                     placeholder="1712 345678"
-                    className="w-full bg-gray-950 border border-gray-800 rounded-xl pl-10 pr-3 py-2 text-xs text-white placeholder:text-gray-600 focus:outline-none focus:border-purple-500 font-medium"
+                    className="w-full bg-slate-50 border border-slate-200 rounded-xl pl-10 pr-3 py-2 text-xs text-slate-900 placeholder:text-slate-400 focus:outline-none focus:border-purple-500 focus:bg-white font-medium"
                   />
                 </div>
               </div>
             </div>
           ) : (
             <div>
-              <label className="text-xs font-bold text-gray-300 block mb-1">
+              <label className="text-xs font-bold text-slate-700 block mb-1">
                 Email Address
               </label>
               <div className="relative">
-                <Mail className="w-4 h-4 text-gray-500 absolute left-3.5 top-1/2 -translate-y-1/2" />
+                <Mail className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
                 <input
                   type="email"
                   required
                   value={gmailEmail}
                   onChange={(e) => setGmailEmail(e.target.value)}
                   placeholder="yourname@gmail.com"
-                  className="w-full bg-gray-950 border border-gray-800 rounded-xl pl-10 pr-3 py-2 text-xs text-white placeholder:text-gray-600 focus:outline-none focus:border-purple-500 font-medium"
+                  className="w-full bg-slate-50 border border-slate-200 rounded-xl pl-10 pr-3 py-2 text-xs text-slate-900 placeholder:text-slate-400 focus:outline-none focus:border-purple-500 focus:bg-white font-medium"
                 />
               </div>
             </div>
           )}
 
           <div>
-            <label className="text-xs font-bold text-gray-300 block mb-1 flex items-center justify-between">
+            <label className="text-xs font-bold text-slate-700 block mb-1 flex items-center justify-between">
               <span>Account Password</span>
-              <span className="text-[10px] text-gray-500 font-normal">Optional (auto-secured)</span>
+              <span className="text-[10px] text-slate-400 font-normal">Optional (auto-secured)</span>
             </label>
             <div className="relative">
-              <Lock className="w-4 h-4 text-gray-500 absolute left-3.5 top-1/2 -translate-y-1/2" />
+              <Lock className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
               <input
                 type="password"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 placeholder="Choose a password for multi-device access"
-                className="w-full bg-gray-950 border border-gray-800 rounded-xl pl-10 pr-3 py-2 text-xs text-white placeholder:text-gray-600 focus:outline-none focus:border-purple-500 font-medium"
+                className="w-full bg-slate-50 border border-slate-200 rounded-xl pl-10 pr-3 py-2 text-xs text-slate-900 placeholder:text-slate-400 focus:outline-none focus:border-purple-500 focus:bg-white font-medium"
               />
             </div>
           </div>
@@ -401,10 +401,10 @@ export const AuthModal: React.FC<AuthModalProps> = ({
           {/* Google OAuth Section */}
           <div className="relative my-3">
             <div className="absolute inset-0 flex items-center">
-              <div className="w-full border-t border-gray-800" />
+              <div className="w-full border-t border-slate-200" />
             </div>
             <div className="relative flex justify-center text-[10px]">
-              <span className="bg-gray-900 px-2 text-gray-500 font-semibold">Or Continue With</span>
+              <span className="bg-white px-2 text-slate-500 font-semibold">Or Continue With</span>
             </div>
           </div>
 
@@ -412,11 +412,11 @@ export const AuthModal: React.FC<AuthModalProps> = ({
             type="button"
             onClick={handleGoogleSignIn}
             disabled={isGoogleLoading || isSubmitting}
-            className="w-full py-2 bg-gray-950 hover:bg-gray-850 border border-gray-800 text-gray-200 text-xs font-bold rounded-xl flex items-center justify-center gap-2 transition cursor-pointer disabled:opacity-50"
+            className="w-full py-2 bg-slate-50 hover:bg-slate-100 border border-slate-200 text-slate-700 text-xs font-bold rounded-xl flex items-center justify-center gap-2 transition cursor-pointer disabled:opacity-50"
           >
             {isGoogleLoading ? (
               <>
-                <Loader2 className="w-4 h-4 animate-spin text-purple-400" />
+                <Loader2 className="w-4 h-4 animate-spin text-purple-600" />
                 <span>Connecting with Google OAuth...</span>
               </>
             ) : (
@@ -432,8 +432,8 @@ export const AuthModal: React.FC<AuthModalProps> = ({
           </button>
         </form>
 
-        <div className="mt-4 pt-3 border-t border-gray-800/80 flex items-center justify-center gap-2 text-[11px] text-gray-500">
-          <ShieldCheck className="w-3.5 h-3.5 text-teal-400" />
+        <div className="mt-4 pt-3 border-t border-slate-100 flex items-center justify-center gap-2 text-[11px] text-slate-500">
+          <ShieldCheck className="w-3.5 h-3.5 text-teal-600" />
           <span>{isSupabaseConnected ? 'Persistent Supabase Cloud Auth & Database' : 'Secure local creator profile'}</span>
         </div>
       </div>

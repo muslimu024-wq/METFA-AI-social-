@@ -28,6 +28,56 @@ const USER_PROFILE_KEY = 'metfa_user_profile_v2';
 const ACTIVE_IDENTITY_KEY = 'metfa_active_identity_v1';
 
 /**
+ * Curated list of clean, professional creator avatars (high-res portrait photography)
+ */
+export const DEFAULT_AVATARS: string[] = [
+  'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=300&auto=format&fit=crop&q=80', // Female creator portrait
+  'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=300&auto=format&fit=crop&q=80', // Male creator portrait
+  'https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=300&auto=format&fit=crop&q=80', // Female portrait
+  'https://images.unsplash.com/photo-1500648767791-00dcc994a43e?w=300&auto=format&fit=crop&q=80', // Male portrait
+  'https://images.unsplash.com/photo-1539571696357-5a69c17a67c6?w=300&auto=format&fit=crop&q=80', // Creative portrait
+  'https://images.unsplash.com/photo-1517841905240-472988babdf9?w=300&auto=format&fit=crop&q=80', // Studio portrait
+  'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=300&auto=format&fit=crop&q=80', // Clean profile
+  'https://images.unsplash.com/photo-1580489944761-15a19d654956?w=300&auto=format&fit=crop&q=80', // Creator portrait
+];
+
+/**
+ * Returns a clean, professional default avatar image deterministically based on seed
+ * without invoking external bot/cartoon avatar APIs.
+ */
+export const getDefaultAvatar = (seed?: string): string => {
+  if (!seed || typeof seed !== 'string') return DEFAULT_AVATARS[0];
+  const cleanSeed = seed.trim().toLowerCase();
+  let hash = 0;
+  for (let i = 0; i < cleanSeed.length; i++) {
+    hash = (hash << 5) - hash + cleanSeed.charCodeAt(i);
+    hash |= 0;
+  }
+  const index = Math.abs(hash) % DEFAULT_AVATARS.length;
+  return DEFAULT_AVATARS[index];
+};
+
+/**
+ * Sanitizes avatar URL to ensure user-uploaded images/photos are preserved,
+ * while eliminating legacy cartoon bot/dicebear endpoints.
+ */
+export const sanitizeAvatarUrl = (avatar?: string | null, seed?: string): string => {
+  if (!avatar || typeof avatar !== 'string') return getDefaultAvatar(seed);
+  const trimmed = avatar.trim();
+  if (
+    !trimmed ||
+    trimmed.includes('dicebear.com') ||
+    trimmed.includes('api.dicebear') ||
+    trimmed.toLowerCase().includes('bottts') ||
+    trimmed === 'undefined' ||
+    trimmed === 'null'
+  ) {
+    return getDefaultAvatar(seed);
+  }
+  return trimmed;
+};
+
+/**
  * Generates an automatic unique username (e.g. alex_1234)
  */
 export const generateUniqueUsername = (input: string): string => {
@@ -76,6 +126,7 @@ export const getActiveSSOUser = (): AuthUser => {
       const data = JSON.parse(raw);
       if (data && data.id && data.username) {
         if (!data.metfaId) data.metfaId = generateUnifiedMetfaId();
+        data.avatar = sanitizeAvatarUrl(data.avatar, data.username || data.name);
         return data;
       }
     }
@@ -87,27 +138,55 @@ export const getActiveSSOUser = (): AuthUser => {
 
 /**
  * Persists user session across storage keys and dispatches update events
+ * maintaining strict bidirectional consistency for identity, avatar, and profile fields.
  */
 export const persistSSOSession = (user: AuthUser, profileOverride?: UserProfile): void => {
-  safeSetItem(AUTH_USER_KEY, JSON.stringify(user));
-  if (user.sessionToken) {
-    safeSetItem(SSO_SESSION_KEY, user.sessionToken);
+  // Determine normalized avatar, giving precedence to explicit user upload or profile override
+  const resolvedAvatar = sanitizeAvatarUrl(
+    profileOverride?.avatar || user.avatar,
+    user.username || user.name
+  );
+
+  const resolvedName = (profileOverride?.name || user.name || 'Metfa Creator').trim();
+  const resolvedUsername = (profileOverride?.username || user.username || 'creator').trim().replace(/^@/, '');
+  const resolvedIsVerified = profileOverride?.isVerified ?? user.isVerified ?? true;
+
+  const normalizedUser: AuthUser = {
+    ...user,
+    name: resolvedName,
+    username: resolvedUsername,
+    avatar: resolvedAvatar,
+    isVerified: resolvedIsVerified,
+  };
+
+  safeSetItem(AUTH_USER_KEY, JSON.stringify(normalizedUser));
+  if (normalizedUser.sessionToken) {
+    safeSetItem(SSO_SESSION_KEY, normalizedUser.sessionToken);
   }
 
   // Synchronize UserProfile
+  let updatedProfile: UserProfile;
   try {
     const rawProfile = safeGetItem(USER_PROFILE_KEY);
-    let currentProfile: UserProfile = rawProfile ? JSON.parse(rawProfile) : ({} as any);
-    const updatedProfile: UserProfile = profileOverride || {
+    const currentProfile: Partial<UserProfile> = rawProfile ? JSON.parse(rawProfile) : {};
+
+    updatedProfile = profileOverride ? {
       ...currentProfile,
-      id: user.id,
-      name: user.name,
-      username: user.username,
-      avatar: user.avatar,
-      isVerified: user.isVerified ?? currentProfile.isVerified ?? true,
+      ...profileOverride,
+      id: normalizedUser.id,
+      name: resolvedName,
+      username: resolvedUsername,
+      avatar: resolvedAvatar,
+      isVerified: resolvedIsVerified,
+    } : {
+      id: normalizedUser.id,
+      name: resolvedName,
+      username: resolvedUsername,
+      avatar: resolvedAvatar,
+      isVerified: resolvedIsVerified,
       bio: currentProfile.bio || 'AI Creator & Visual Explorer on Metfa Social.',
       location: currentProfile.location || 'Global Creator',
-      website: currentProfile.website || `https://metfa.ai/@${user.username}`,
+      website: currentProfile.website || `https://metfa.ai/@${resolvedUsername}`,
       joinDate: currentProfile.joinDate || `Joined ${new Date().toLocaleDateString('en-US', { month: 'long', year: 'numeric' })}`,
       stats: currentProfile.stats || {
         postsCount: 0,
@@ -117,27 +196,47 @@ export const persistSSOSession = (user: AuthUser, profileOverride?: UserProfile)
         reelsCount: 0,
       },
     };
+
     safeSetItem(USER_PROFILE_KEY, JSON.stringify(updatedProfile));
     if (typeof window !== 'undefined') {
       window.dispatchEvent(new CustomEvent('metfa_profile_updated', { detail: updatedProfile }));
     }
   } catch (e) {
     console.error('Error syncing UserProfile in persistSSOSession:', e);
+    updatedProfile = {
+      id: normalizedUser.id,
+      name: resolvedName,
+      username: resolvedUsername,
+      avatar: resolvedAvatar,
+      isVerified: resolvedIsVerified,
+      bio: 'AI Creator & Visual Explorer on Metfa Social.',
+      location: 'Global Creator',
+      website: `https://metfa.ai/@${resolvedUsername}`,
+      joinDate: `Joined ${new Date().toLocaleDateString('en-US', { month: 'long', year: 'numeric' })}`,
+      stats: {
+        postsCount: 0,
+        followersCount: 142,
+        followingCount: 68,
+        totalLikes: 1240,
+        reelsCount: 0,
+      },
+    };
   }
 
   // Synchronize ActiveIdentity
   const activeIdentity: PostingIdentity = {
     type: 'personal',
-    id: user.id,
-    name: user.name,
-    username: user.username,
-    avatar: user.avatar,
-    badge: user.isVerified ? 'Verified Creator' : 'Creator',
+    id: normalizedUser.id,
+    name: resolvedName,
+    username: resolvedUsername,
+    avatar: resolvedAvatar,
+    badge: resolvedIsVerified ? 'Verified Creator' : 'Creator',
   };
   safeSetItem(ACTIVE_IDENTITY_KEY, JSON.stringify(activeIdentity));
+
   if (typeof window !== 'undefined') {
     window.dispatchEvent(new CustomEvent('metfa_identity_changed', { detail: activeIdentity }));
-    window.dispatchEvent(new CustomEvent('metfa_auth_changed', { detail: user }));
+    window.dispatchEvent(new CustomEvent('metfa_auth_changed', { detail: normalizedUser }));
   }
 };
 
@@ -178,7 +277,7 @@ export async function upsertSupabaseProfile(
       id: userId,
       display_name: profile.name || 'Metfa Creator',
       username: profile.username || 'creator',
-      avatar_url: profile.avatar,
+      avatar_url: sanitizeAvatarUrl(profile.avatar, profile.username || profile.name),
       bio: profile.bio,
       location: profile.location,
       website: profile.website,
@@ -232,11 +331,10 @@ export async function mapSupabaseUserToAuthUser(
     rawMetadata.username ||
     generateUniqueUsername(name || email || 'creator');
 
-  const avatar =
-    dbProfile?.avatar ||
-    rawMetadata.avatar_url ||
-    rawMetadata.picture ||
-    `https://api.dicebear.com/7.x/avataaars/svg?seed=${username}`;
+  const avatar = sanitizeAvatarUrl(
+    dbProfile?.avatar || rawMetadata.avatar_url || rawMetadata.picture,
+    username || name
+  );
 
   const metfaId = generateUnifiedMetfaId(sbUser.id);
 
@@ -330,7 +428,7 @@ export async function signInWithGoogleOAuth(params?: {
   const email = params?.email?.trim() || 'google.creator@gmail.com';
   const name = params?.fullName?.trim() || (email.includes('@') && !email.startsWith('google.creator') ? email.split('@')[0] : 'Google Creator');
   const cleanUsername = generateUniqueUsername(name);
-  const avatar = params?.avatar || `https://api.dicebear.com/7.x/avataaars/svg?seed=${cleanUsername}`;
+  const avatar = sanitizeAvatarUrl(params?.avatar, cleanUsername);
   const userId = `usr_google_${Math.random().toString(36).substring(2, 9)}`;
   const metfaId = generateUnifiedMetfaId();
 
@@ -387,6 +485,7 @@ export async function saveProfileAndEnterMetfa(params: {
   const cleanUsername = username?.trim()
     ? username.trim().replace(/^@/, '')
     : generateUniqueUsername(cleanName || identifier);
+  const cleanAvatar = sanitizeAvatarUrl(avatar, cleanUsername || cleanName);
 
   // If Supabase is configured, execute real Auth and DB operations
   if (isSupabaseConfigured()) {
@@ -406,7 +505,7 @@ export async function saveProfileAndEnterMetfa(params: {
           data: {
             full_name: cleanName,
             username: cleanUsername,
-            avatar_url: avatar,
+            avatar_url: cleanAvatar,
             phone_number: authMethod === 'phone' ? identifier : undefined,
           },
         },
@@ -444,7 +543,7 @@ export async function saveProfileAndEnterMetfa(params: {
         const profile = await upsertSupabaseProfile(currentSbUser.id, {
           name: cleanName,
           username: cleanUsername,
-          avatar,
+          avatar: cleanAvatar,
           email: authMethod === 'gmail' ? identifier : undefined,
           phone: authMethod === 'phone' ? identifier : undefined,
           isVerified: true,
@@ -474,7 +573,7 @@ export async function saveProfileAndEnterMetfa(params: {
     username: cleanUsername,
     authType: authMethod,
     phoneOrEmail: identifier,
-    avatar,
+    avatar: cleanAvatar,
     sessionToken: `local_token_${Date.now()}`,
     tokenExpiry: Date.now() + 30 * 24 * 60 * 60 * 1000,
     createdAt: new Date().toISOString().split('T')[0],
@@ -485,7 +584,7 @@ export async function saveProfileAndEnterMetfa(params: {
     id: userId,
     name: cleanName,
     username: cleanUsername,
-    avatar,
+    avatar: cleanAvatar,
     bio: 'AI Creator & Visual Explorer on Metfa Social.',
     location: 'Global Creator',
     website: `https://metfa.ai/@${cleanUsername}`,
@@ -542,7 +641,7 @@ export const ssoLoginWithPhone = (phone: string, name: string, user?: string, av
     identifier: phone,
     fullName: name,
     username: user,
-    avatar: av || `https://api.dicebear.com/7.x/bottts/svg?seed=${name}`,
+    avatar: sanitizeAvatarUrl(av, user || name),
   });
 };
 
@@ -552,8 +651,9 @@ export const ssoLoginWithGmail = (email: string, name: string, av?: string, user
     identifier: email,
     fullName: name,
     username: user,
-    avatar: av || `https://api.dicebear.com/7.x/avataaars/svg?seed=${name}`,
+    avatar: sanitizeAvatarUrl(av, user || name),
   });
 };
 
 export const ssoLogout = supabaseSignOut;
+

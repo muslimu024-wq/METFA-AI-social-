@@ -6,12 +6,14 @@ import PagesDirectory from '../../components/PagesDirectory';
 import GroupsDirectory from '../../components/GroupsDirectory';
 import ProfileView from '../../components/ProfileView';
 import NotificationsView from '../../components/NotificationsView';
+import MarketplaceView from '../../components/MarketplaceView';
 import CreatePostModal from '../../components/CreatePostModal';
 import CreateReelModal from '../../components/CreateReelModal';
 import CreatePageModal from '../../components/CreatePageModal';
 import CreateGroupModal from '../../components/CreateGroupModal';
 import ShareToFeedModal from '../../components/ShareToFeedModal';
 import { CommunityPost, ReelHighlight } from '../../types/community';
+import { MarketplaceProduct } from '../../types/marketplace';
 import {
   getCommunityPosts,
   saveCommunityPosts,
@@ -24,7 +26,7 @@ import { DailyCreditsData } from '../../utils/creditManager';
 import { addNotification } from '../../utils/notificationStore';
 import { useAuth } from '../../context/AuthContext';
 
-export type SocialSubTab = 'feed' | 'reels' | 'notifications' | 'live' | 'pages' | 'groups' | 'profile';
+export type SocialSubTab = 'feed' | 'reels' | 'notifications' | 'live' | 'pages' | 'groups' | 'profile' | 'marketplace';
 
 export interface SocialEcosystemProps {
   currentTab: SocialSubTab;
@@ -173,6 +175,41 @@ export const SocialEcosystemModule: React.FC<SocialEcosystemProps> = ({
         <GroupsDirectory
           userProfile={userProfile}
           onCreateGroupClick={() => setIsCreateGroupOpen(true)}
+        />
+      )}
+
+      {currentTab === 'marketplace' && (
+        <MarketplaceView
+          userProfile={userProfile}
+          onNavigateTab={onNavigateTab}
+          onShareProductToFeed={(product: MarketplaceProduct) => {
+            const productPostData = {
+              prompt: `Check out this trending product on Sellme Marketplace & AliExpress: ${product.title} ($${product.price})`,
+              imageSrc: product.imageUrl,
+              stylePreset: 'Marketplace Recommendation',
+            };
+            handlePostCreated({
+              id: `post_prod_${Date.now()}`,
+              author: {
+                id: userProfile.id,
+                name: userProfile.name,
+                username: userProfile.username,
+                avatar: userProfile.avatar,
+                isVerified: userProfile.isVerified,
+              },
+              content: `🔥 **Recommended Product from Sellme Marketplace & AliExpress**\n\n**${product.title}**\n\n💵 Price: **$${product.price.toFixed(2)}** ${product.originalPrice ? `~~$${product.originalPrice.toFixed(2)}~~` : ''}\n⭐ Rating: ${product.rating.toFixed(1)} / 5 (${product.ordersCount.toLocaleString()}+ orders)\n\n🛒 [Shop on Sellme & AliExpress](${product.affiliateUrl || product.productUrl})`,
+              image: product.imageUrl,
+              category: 'general',
+              likesCount: 1,
+              commentsCount: 0,
+              sharesCount: 0,
+              timestamp: 'Just now',
+              isLiked: false,
+              isBookmarked: false,
+              tags: product.tags,
+            });
+            onNavigateTab('feed');
+          }}
         />
       )}
 

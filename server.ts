@@ -22,16 +22,15 @@ async function startServer() {
     res.setHeader("X-XSS-Protection", "1; mode=block");
     res.setHeader("Referrer-Policy", "strict-origin-when-cross-origin");
 
-    // 2. CORS Support: Allow same-origin and configured custom domains
-    const allowedOrigins = process.env.ALLOWED_ORIGINS?.split(",").map((o) => o.trim()) || [];
+    // 2. Universal CORS Support: Allow cross-app communication for Sellme (shop.metfaai.com) and Metfa Social
     const origin = req.headers.origin;
     if (origin) {
-      if (allowedOrigins.length === 0 || allowedOrigins.includes("*") || allowedOrigins.includes(origin)) {
-        res.setHeader("Access-Control-Allow-Origin", origin);
-        res.setHeader("Access-Control-Allow-Credentials", "true");
-        res.setHeader("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
-        res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Requested-With");
-      }
+      res.setHeader("Access-Control-Allow-Origin", origin);
+      res.setHeader("Access-Control-Allow-Credentials", "true");
+      res.setHeader("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
+      res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Requested-With, Accept");
+    } else {
+      res.setHeader("Access-Control-Allow-Origin", "*");
     }
 
     if (req.method === "OPTIONS") {
@@ -69,83 +68,141 @@ async function startServer() {
   app.use(express.urlencoded({ limit: "50mb", extended: true }));
 
   // =========================================================================
+  // ENVIRONMENT VARIABLE & BYOK KEY RESOLVERS (Vite / Node server standard)
   // =========================================================================
-  // ENVIRONMENT VARIABLE KEY RESOLVERS (Vite / Node server standard)
-  // =========================================================================
-  const isValidGeminiApiKey = (key?: string | null): boolean => {
-    if (!key || typeof key !== "string") return false;
+  const sanitizeApiKey = (key?: any): string | null => {
+    if (!key || typeof key !== "string") return null;
     const trimmed = key.trim();
-    if (trimmed.length < 20) return false;
-    if (!trimmed.startsWith("AIza")) return false; // Genuine Google AI API keys start with AIza
     if (
-      trimmed.toLowerCase().includes("invalid") ||
-      trimmed.toLowerCase().includes("dummy") ||
+      !trimmed ||
+      trimmed === "undefined" ||
+      trimmed === "null" ||
+      trimmed === "[object Object]" ||
       trimmed.toLowerCase().includes("placeholder") ||
-      trimmed.includes("...")
+      trimmed === "..." ||
+      trimmed === "sk-..." ||
+      trimmed === "AIzaSy..." ||
+      trimmed === "xai-..." ||
+      trimmed.length < 4
     ) {
-      return false;
+      return null;
     }
-    return true;
+    return trimmed;
   };
 
-  const getGeminiApiKey = (customKey?: string): string | null => {
-    // 1. Explicit user key from request payload
-    if (isValidGeminiApiKey(customKey)) {
-      return customKey!.trim();
+  const isValidGeminiApiKey = (key?: string | null): boolean => {
+    return Boolean(sanitizeApiKey(key));
+  };
+
+  const getGeminiApiKey = (customKey?: string, req?: express.Request): string | null => {
+    // 1. Explicit key parameter
+    const direct = sanitizeApiKey(customKey);
+    if (direct) return direct;
+
+    // 2. Request body
+    if (req?.body) {
+      const fromBody = sanitizeApiKey(req.body.geminiApiKey || req.body.settings?.geminiApiKey);
+      if (fromBody) return fromBody;
     }
-    // 2. Server-side GEMINI_API_KEY or VITE_GEMINI_API_KEY (if valid)
-    const envKey = process.env.GEMINI_API_KEY?.trim();
-    if (isValidGeminiApiKey(envKey)) {
-      return envKey!;
+
+    // 3. Request headers
+    if (req?.headers) {
+      const fromHeader = sanitizeApiKey(req.headers["x-gemini-api-key"] as string);
+      if (fromHeader) return fromHeader;
+
+      const authHeader = req.headers["authorization"];
+      if (typeof authHeader === "string" && authHeader.startsWith("Bearer ")) {
+        const token = sanitizeApiKey(authHeader.substring(7));
+        if (token && !token.startsWith("sk-") && !token.startsWith("xai-")) {
+          return token;
+        }
+      }
     }
-    const viteKey = process.env.VITE_GEMINI_API_KEY?.trim();
-    if (isValidGeminiApiKey(viteKey)) {
-      return viteKey!;
-    }
+
+    // 4. Server-side environment variables
+    const envKey = sanitizeApiKey(process.env.GEMINI_API_KEY) || sanitizeApiKey(process.env.VITE_GEMINI_API_KEY);
+    if (envKey) return envKey;
+
     return null;
   };
 
-  const getOpenAiApiKey = (customKey?: string): string | null => {
-    if (typeof customKey === "string" && customKey.trim().length > 10) {
-      const trimmed = customKey.trim();
-      if (!trimmed.startsWith("sk-proj-k4NuRPTm") && !trimmed.includes("...")) {
-        return trimmed;
+  const getOpenAiApiKey = (customKey?: string, req?: express.Request): string | null => {
+    // 1. Explicit key parameter
+    const direct = sanitizeApiKey(customKey);
+    if (direct) return direct;
+
+    // 2. Request body
+    if (req?.body) {
+      const fromBody = sanitizeApiKey(req.body.openaiApiKey || req.body.settings?.openaiApiKey);
+      if (fromBody) return fromBody;
+    }
+
+    // 3. Request headers
+    if (req?.headers) {
+      const fromHeader = sanitizeApiKey(req.headers["x-openai-api-key"] as string);
+      if (fromHeader) return fromHeader;
+
+      const authHeader = req.headers["authorization"];
+      if (typeof authHeader === "string" && authHeader.startsWith("Bearer ")) {
+        const token = sanitizeApiKey(authHeader.substring(7));
+        if (token && (token.startsWith("sk-") || req.headers["x-ai-engine"] === "openai")) {
+          return token;
+        }
       }
     }
-    const envKey = process.env.OPENAI_API_KEY?.trim() || process.env.VITE_OPENAI_API_KEY?.trim();
-    // Exclude revoked/expired placeholder keys
-    if (envKey && envKey.length > 20 && !envKey.startsWith("sk-proj-k4NuRPTm") && !envKey.includes("...")) {
-      return envKey;
-    }
+
+    // 4. Server-side environment variables
+    const envKey = sanitizeApiKey(process.env.OPENAI_API_KEY) || sanitizeApiKey(process.env.VITE_OPENAI_API_KEY);
+    if (envKey) return envKey;
+
     return null;
   };
 
-  const getXaiApiKey = (customKey?: string): string | null => {
-    if (typeof customKey === "string" && customKey.trim().length > 10) {
-      const trimmed = customKey.trim();
-      if (!trimmed.startsWith("xai-dummy") && !trimmed.startsWith("xai-ZBBc1") && !trimmed.includes("...")) {
-        return trimmed;
+  const getXaiApiKey = (customKey?: string, req?: express.Request): string | null => {
+    // 1. Explicit key parameter
+    const direct = sanitizeApiKey(customKey);
+    if (direct) return direct;
+
+    // 2. Request body
+    if (req?.body) {
+      const fromBody = sanitizeApiKey(
+        req.body.grokApiKey ||
+        req.body.xaiApiKey ||
+        req.body.settings?.grokApiKey ||
+        req.body.settings?.xaiApiKey
+      );
+      if (fromBody) return fromBody;
+    }
+
+    // 3. Request headers
+    if (req?.headers) {
+      const fromHeader = sanitizeApiKey(
+        (req.headers["x-grok-api-key"] as string) || (req.headers["x-xai-api-key"] as string)
+      );
+      if (fromHeader) return fromHeader;
+
+      const authHeader = req.headers["authorization"];
+      if (typeof authHeader === "string" && authHeader.startsWith("Bearer ")) {
+        const token = sanitizeApiKey(authHeader.substring(7));
+        if (token && (token.startsWith("xai-") || req.headers["x-ai-engine"] === "grok")) {
+          return token;
+        }
       }
     }
+
+    // 4. Server-side environment variables
     const envKey =
-      process.env.XAI_API_KEY?.trim() ||
-      process.env.GROK_API_KEY?.trim() ||
-      process.env.VITE_XAI_API_KEY?.trim();
-    if (
-      envKey &&
-      envKey.length > 20 &&
-      !envKey.startsWith("xai-dummy") &&
-      !envKey.startsWith("xai-ZBBc1") &&
-      !envKey.includes("...")
-    ) {
-      return envKey;
-    }
+      sanitizeApiKey(process.env.XAI_API_KEY) ||
+      sanitizeApiKey(process.env.GROK_API_KEY) ||
+      sanitizeApiKey(process.env.VITE_XAI_API_KEY);
+    if (envKey) return envKey;
+
     return null;
   };
 
   // Helper to initialize Gemini API client with required User-Agent
-  const getAiClient = (customKey?: string) => {
-    const rawKey = getGeminiApiKey(customKey);
+  const getAiClient = (customKey?: string, req?: express.Request) => {
+    const rawKey = getGeminiApiKey(customKey, req);
     if (rawKey) {
       return new GoogleGenAI({
         apiKey: rawKey,
@@ -342,8 +399,8 @@ async function startServer() {
   // =========================================================================
 
   // 1. xAI Grok Execution Engine
-  async function executeGrok(prompt: string, attachments: any[] = [], settings: any = {}) {
-    const apiKey = getXaiApiKey(settings?.grokApiKey);
+  async function executeGrok(prompt: string, attachments: any[] = [], settings: any = {}, req?: express.Request) {
+    const apiKey = getXaiApiKey(settings?.grokApiKey || settings?.xaiApiKey, req);
     if (!apiKey) {
       throw new Error("xAI Grok API key is not configured. Please enter your xAI Grok API key in Settings > API Keys.");
     }
@@ -439,8 +496,8 @@ async function startServer() {
   }
 
   // 2. OpenAI ChatGPT Execution Engine (GPT-4o, GPT-4o-mini, o3-mini)
-  async function executeOpenAI(prompt: string, attachments: any[] = [], settings: any = {}) {
-    const apiKey = getOpenAiApiKey(settings?.openaiApiKey);
+  async function executeOpenAI(prompt: string, attachments: any[] = [], settings: any = {}, req?: express.Request) {
+    const apiKey = getOpenAiApiKey(settings?.openaiApiKey, req);
     if (!apiKey) {
       throw new Error(
         "OpenAI API key is not configured. Please enter your OpenAI API key in Settings > API Keys."
@@ -518,8 +575,8 @@ async function startServer() {
   }
 
   // 3. Google Gemini Execution Engine (Multimodal & Scene Transformation)
-  async function executeGemini(prompt: string, attachments: any[] = [], settings: any = {}) {
-    const ai = getAiClient(settings?.geminiApiKey);
+  async function executeGemini(prompt: string, attachments: any[] = [], settings: any = {}, req?: express.Request) {
+    const ai = getAiClient(settings?.geminiApiKey, req);
     const hasImageAttachment =
       Array.isArray(attachments) && attachments.some((a: any) => a.type === "image" && a.base64);
     const primaryImage = Array.isArray(attachments)
@@ -715,6 +772,843 @@ ${METFA_AI_SAFETY_SYSTEM_INSTRUCTION}`;
   });
 
   // =========================================================================
+  // MARKETPLACE & ALIEXPRESS DROPSHIPPING API (Cross-App Routing & Proxy)
+  // Ensures Sellme (shop.metfaai.com) and Metfa Social merged catalog
+  // =========================================================================
+  const SERVER_MARKETPLACE_CATALOG = [
+    // Local Sellme Marketplace Products
+    {
+      id: "sellme-tech-01",
+      title: "Sellme Studio Pro Podcasting & Streaming USB-C Microphone with Noise Cancelling",
+      price: 49.99,
+      originalPrice: 89.00,
+      discountPercentage: 44,
+      currency: "USD",
+      rating: 4.96,
+      reviewCount: 1820,
+      ordersCount: 4300,
+      imageUrl: "https://images.unsplash.com/photo-1590658268037-6bf12165a8df?w=800&auto=format&fit=crop&q=80",
+      galleryImages: [
+        "https://images.unsplash.com/photo-1590658268037-6bf12165a8df?w=800&auto=format&fit=crop&q=80",
+        "https://images.unsplash.com/photo-1583597509707-6756f7361882?w=800&auto=format&fit=crop&q=80"
+      ],
+      category: "tech",
+      source: "sellme",
+      seller: {
+        name: "Sellme Official Creator Store",
+        rating: 4.98,
+        positiveFeedbackPercent: 99.4
+      },
+      shipping: {
+        isFree: true,
+        estimatedDelivery: "2-4 business days (Fast Local)"
+      },
+      productUrl: "https://shop.metfaai.com/products/sellme-studio-mic",
+      affiliateUrl: "https://shop.metfaai.com/products/sellme-studio-mic?ref=metfa_social",
+      description: "Studio-grade 192kHz/24bit cardioid condenser microphone with built-in zero-latency headphone monitoring, touch-mute sensor, RGB gain halo, and custom shock mount.",
+      specifications: {
+        "Polar Pattern": "Cardioid Studio Condenser",
+        "Sample Rate": "192kHz / 24-bit HD",
+        "Connectivity": "USB-C to USB-C / USB-A Plug & Play"
+      },
+      inStock: true,
+      tags: ["microphone", "studio", "podcast", "streaming", "sellme", "tech"]
+    },
+    {
+      id: "sellme-tech-02",
+      title: "Smart AI Auto-Tracking Phone Gimbal Stabilizer for Vlog & TikTok Reels",
+      price: 36.80,
+      originalPrice: 72.00,
+      discountPercentage: 49,
+      currency: "USD",
+      rating: 4.89,
+      reviewCount: 2450,
+      ordersCount: 6800,
+      imageUrl: "https://images.unsplash.com/photo-1589739900243-4b52cd9b104e?w=800&auto=format&fit=crop&q=80",
+      category: "tech",
+      source: "sellme",
+      seller: {
+        name: "Sellme VlogPro Direct",
+        rating: 4.92,
+        positiveFeedbackPercent: 98.6
+      },
+      shipping: {
+        isFree: true,
+        estimatedDelivery: "2-5 business days"
+      },
+      productUrl: "https://shop.metfaai.com/products/ai-tracking-gimbal",
+      affiliateUrl: "https://shop.metfaai.com/products/ai-tracking-gimbal?ref=metfa_social",
+      description: "360-degree AI face and body recognition phone stabilizer requiring NO APP installation for live streaming.",
+      specifications: {
+        "Tracking Angle": "360° Horizontal Infinite",
+        "Battery": "2200mAh (8 hours continuous)"
+      },
+      inStock: true,
+      tags: ["gimbal", "tracking", "ai", "reels", "vlog", "sellme"]
+    },
+    {
+      id: "sellme-gadget-01",
+      title: "Sellme AI Smart Desktop Voice Assistant & Stream Control Hub with Touch OLED",
+      price: 59.00,
+      originalPrice: 119.00,
+      discountPercentage: 50,
+      currency: "USD",
+      rating: 4.95,
+      reviewCount: 1420,
+      ordersCount: 3100,
+      imageUrl: "https://images.unsplash.com/photo-1544244015-0df4b3ffc6b0?w=800&auto=format&fit=crop&q=80",
+      category: "gadgets",
+      source: "sellme",
+      seller: {
+        name: "Sellme Tech Labs",
+        rating: 4.97,
+        positiveFeedbackPercent: 99.2
+      },
+      shipping: {
+        isFree: true,
+        estimatedDelivery: "2-4 business days (Fast Local)"
+      },
+      productUrl: "https://shop.metfaai.com/products/sellme-smart-hub",
+      affiliateUrl: "https://shop.metfaai.com/products/sellme-smart-hub?ref=metfa_social",
+      description: "Next-gen desktop assistant with custom macro keys, real-time Gemini AI integration, audio visualizer, weather & social media live telemetry dashboard.",
+      specifications: {
+        "Display": "3.5\" High-Contrast IPS Touchscreen",
+        "Keys": "6 Dynamic Macro LCD Keys + 2 Rotary Dials"
+      },
+      inStock: true,
+      tags: ["streamdeck", "assistant", "smartdesk", "oled", "gadgets", "sellme"]
+    },
+    {
+      id: "sellme-gadget-02",
+      title: "RGB Magnetic Wireless Power Bank 10000mAh with Fast 22.5W PD Charging",
+      price: 18.99,
+      originalPrice: 38.00,
+      discountPercentage: 50,
+      currency: "USD",
+      rating: 4.92,
+      reviewCount: 4290,
+      ordersCount: 11200,
+      imageUrl: "https://images.unsplash.com/photo-1609592426868-b80c571c35b5?w=800&auto=format&fit=crop&q=80",
+      category: "gadgets",
+      source: "sellme",
+      seller: {
+        name: "Sellme Verified Direct",
+        rating: 4.98,
+        positiveFeedbackPercent: 99.4
+      },
+      shipping: {
+        isFree: true,
+        estimatedDelivery: "3-5 business days"
+      },
+      productUrl: "https://shop.metfaai.com/products/magnetic-power-bank",
+      affiliateUrl: "https://shop.metfaai.com/products/magnetic-power-bank?ref=metfa_social",
+      description: "Compact MagSafe-compatible 15W wireless and 22.5W USB-C PD fast power bank with ambient LED battery indicator.",
+      specifications: {
+        "Capacity": "10,000 mAh Li-Polymer",
+        "Type-C Output": "PD 22.5W Max Fast Charge"
+      },
+      inStock: true,
+      tags: ["powerbank", "magsafe", "charger", "fastcharging", "sellme"]
+    },
+    {
+      id: "sellme-gadget-03",
+      title: "Sellme AI Universal Smart Translation Earbuds (Real-Time 144 Languages)",
+      price: 39.90,
+      originalPrice: 79.90,
+      discountPercentage: 50,
+      currency: "USD",
+      rating: 4.88,
+      reviewCount: 940,
+      ordersCount: 2200,
+      imageUrl: "https://images.unsplash.com/photo-1572536147248-ac59a8abfa4b?w=800&auto=format&fit=crop&q=80",
+      category: "gadgets",
+      source: "sellme",
+      seller: {
+        name: "Sellme Global Tech Store",
+        rating: 4.91,
+        positiveFeedbackPercent: 98.8
+      },
+      shipping: {
+        isFree: true,
+        estimatedDelivery: "3-6 business days"
+      },
+      productUrl: "https://shop.metfaai.com/products/ai-translator-earbuds",
+      affiliateUrl: "https://shop.metfaai.com/products/ai-translator-earbuds?ref=metfa_social",
+      description: "Simultaneous two-way real-time voice translation across 144 languages and accents with 98% neural accuracy.",
+      specifications: {
+        "Languages": "144 Languages & Accents",
+        "Latency": "< 0.5s AI Engine Response"
+      },
+      inStock: true,
+      tags: ["translator", "ai", "earbuds", "travel", "sellme"]
+    },
+    {
+      id: "sellme-wear-01",
+      title: "Sellme Pulse Pro Titanium Smart Ring with Sleep, HRV & Bio-Metric Tracking",
+      price: 68.00,
+      originalPrice: 139.00,
+      discountPercentage: 51,
+      currency: "USD",
+      rating: 4.93,
+      reviewCount: 2110,
+      ordersCount: 5100,
+      imageUrl: "https://images.unsplash.com/photo-1605100804763-247f67b3557e?w=800&auto=format&fit=crop&q=80",
+      category: "wearables",
+      source: "sellme",
+      seller: {
+        name: "Sellme Wearables Direct",
+        rating: 4.95,
+        positiveFeedbackPercent: 99.0
+      },
+      shipping: {
+        isFree: true,
+        estimatedDelivery: "2-4 business days (Fast Local)"
+      },
+      productUrl: "https://shop.metfaai.com/products/pulse-pro-smart-ring",
+      affiliateUrl: "https://shop.metfaai.com/products/pulse-pro-smart-ring?ref=metfa_social",
+      description: "Ultralight titanium smart ring weighing only 2.9g with sleep stages and HRV monitoring.",
+      specifications: {
+        "Material": "Aviation-Grade Titanium Alloy",
+        "Battery": "7 Days Standby Battery"
+      },
+      inStock: true,
+      tags: ["smartring", "health", "fitness", "titanium", "wearables", "sellme"]
+    },
+    {
+      id: "sellme-wear-02",
+      title: "Sellme ActivePro Sport GPS Fitness Band with AMOLED Touch Display",
+      price: 28.50,
+      originalPrice: 58.00,
+      discountPercentage: 51,
+      currency: "USD",
+      rating: 4.86,
+      reviewCount: 1650,
+      ordersCount: 4700,
+      imageUrl: "https://images.unsplash.com/photo-1508685096489-7aacd43bd3b1?w=800&auto=format&fit=crop&q=80",
+      category: "wearables",
+      source: "sellme",
+      seller: {
+        name: "Sellme Wearables Direct",
+        rating: 4.9,
+        positiveFeedbackPercent: 98.4
+      },
+      shipping: {
+        isFree: true,
+        estimatedDelivery: "3-5 business days"
+      },
+      productUrl: "https://shop.metfaai.com/products/activepro-fitness-band",
+      affiliateUrl: "https://shop.metfaai.com/products/activepro-fitness-band?ref=metfa_social",
+      description: "Slim lightweight fitness tracker with 1.47\" AMOLED vibrant touch display and 120+ workout modes.",
+      specifications: {
+        "Display": "1.47\" AMOLED Color Screen",
+        "Battery": "14-Day Battery Life"
+      },
+      inStock: true,
+      tags: ["fitnessband", "sport", "health", "wearables", "sellme"]
+    },
+    {
+      id: "sellme-fash-01",
+      title: "Sellme Signature Cyberpunk Techwear Water-Resistant Crossbody Sling Bag",
+      price: 34.00,
+      originalPrice: 68.00,
+      discountPercentage: 50,
+      currency: "USD",
+      rating: 4.92,
+      reviewCount: 1890,
+      ordersCount: 4900,
+      imageUrl: "https://images.unsplash.com/photo-1548036328-c9fa89d128fa?w=800&auto=format&fit=crop&q=80",
+      category: "fashion",
+      source: "sellme",
+      seller: {
+        name: "Sellme Streetwear & Gear",
+        rating: 4.94,
+        positiveFeedbackPercent: 98.9
+      },
+      shipping: {
+        isFree: true,
+        estimatedDelivery: "2-4 business days (Fast Local)"
+      },
+      productUrl: "https://shop.metfaai.com/products/cyberpunk-crossbody-bag",
+      affiliateUrl: "https://shop.metfaai.com/products/cyberpunk-crossbody-bag?ref=metfa_social",
+      description: "Futuristic urban crossbody bag built from waterproof ballistic nylon with Fidlock magnetic quick-release buckles.",
+      specifications: {
+        "Capacity": "Expandable 4L to 6L",
+        "Material": "CORDURA 500D Waterproof Fabric"
+      },
+      inStock: true,
+      tags: ["techwear", "slingbag", "fashion", "streetwear", "sellme"]
+    },
+    {
+      id: "sellme-fash-02",
+      title: "Metfa Creator Edition Heavyweight Cotton Graphic Hoodie",
+      price: 42.00,
+      originalPrice: 75.00,
+      discountPercentage: 44,
+      currency: "USD",
+      rating: 4.97,
+      reviewCount: 3120,
+      ordersCount: 8400,
+      imageUrl: "https://images.unsplash.com/photo-1556905055-8f358a7a47b2?w=800&auto=format&fit=crop&q=80",
+      category: "fashion",
+      source: "sellme",
+      seller: {
+        name: "Metfa Official Apparel",
+        rating: 4.99,
+        positiveFeedbackPercent: 99.7
+      },
+      shipping: {
+        isFree: true,
+        estimatedDelivery: "2-4 business days"
+      },
+      productUrl: "https://shop.metfaai.com/products/metfa-creator-hoodie",
+      affiliateUrl: "https://shop.metfaai.com/products/metfa-creator-hoodie?ref=metfa_social",
+      description: "450 GSM luxury heavyweight french terry cotton hoodie with embroidered minimalist Metfa neural icon.",
+      specifications: {
+        "Fabric": "100% Organic Heavyweight Cotton 450 GSM",
+        "Fit": "Oversized Boxy Relaxed Silhouette"
+      },
+      inStock: true,
+      tags: ["hoodie", "apparel", "metfa", "creator", "fashion", "sellme"]
+    },
+    {
+      id: "sellme-home-01",
+      title: "Sellme Smart Minimalist LED Ambient Desk Bar with Sound Reactive Lighting",
+      price: 39.50,
+      originalPrice: 79.00,
+      discountPercentage: 50,
+      currency: "USD",
+      rating: 4.94,
+      reviewCount: 2310,
+      ordersCount: 5600,
+      imageUrl: "https://images.unsplash.com/photo-1507473885765-e6ed057f782c?w=800&auto=format&fit=crop&q=80",
+      category: "home",
+      source: "sellme",
+      seller: {
+        name: "Sellme Home Studio",
+        rating: 4.96,
+        positiveFeedbackPercent: 99.1
+      },
+      shipping: {
+        isFree: true,
+        estimatedDelivery: "2-5 business days"
+      },
+      productUrl: "https://shop.metfaai.com/products/smart-ambient-desk-bar",
+      affiliateUrl: "https://shop.metfaai.com/products/smart-ambient-desk-bar?ref=metfa_social",
+      description: "Aluminum monitor light bar with auto-dimming ambient light sensor and rear RGB music-sync backlight.",
+      specifications: {
+        "CRI": "Ra 95+ True Color Reproduction",
+        "Lighting Modes": "Warm 2700K to Cool 6500K + Full RGB"
+      },
+      inStock: true,
+      tags: ["desklight", "monitorbar", "lighting", "home", "studio", "sellme"]
+    },
+    {
+      id: "sellme-home-02",
+      title: "Sellme MagSafe 3-in-1 Aluminum Fast Charging Stand for Phone, Watch & Buds",
+      price: 28.99,
+      originalPrice: 59.99,
+      discountPercentage: 52,
+      currency: "USD",
+      rating: 4.91,
+      reviewCount: 1780,
+      ordersCount: 4200,
+      imageUrl: "https://images.unsplash.com/photo-1586816879360-004f5b0c51e3?w=800&auto=format&fit=crop&q=80",
+      category: "home",
+      source: "sellme",
+      seller: {
+        name: "Sellme Verified Direct",
+        rating: 4.93,
+        positiveFeedbackPercent: 98.7
+      },
+      shipping: {
+        isFree: true,
+        estimatedDelivery: "2-4 business days"
+      },
+      productUrl: "https://shop.metfaai.com/products/3-in-1-aluminum-charging-stand",
+      affiliateUrl: "https://shop.metfaai.com/products/3-in-1-aluminum-charging-stand?ref=metfa_social",
+      description: "CNC machined aerospace aluminum charging tree supporting simultaneous high-speed 15W MagSafe charging.",
+      specifications: {
+        "Material": "Solid Anodized Aluminum Alloy",
+        "Phone Output": "15W Fast Magnetic Wireless"
+      },
+      inStock: true,
+      tags: ["charger", "magsafe", "dock", "home", "desktop", "sellme"]
+    },
+
+    // AliExpress Global Dropshipping Catalog
+    {
+      id: "ali-001",
+      title: "AI Smart ANC Wireless Earbuds with Dual Dynamic Drivers & Spatial Audio",
+      price: 24.99,
+      originalPrice: 49.99,
+      discountPercentage: 50,
+      currency: "USD",
+      rating: 4.85,
+      reviewCount: 3420,
+      ordersCount: 8900,
+      imageUrl: "https://images.unsplash.com/photo-1590658268037-6bf12165a8df?w=800&auto=format&fit=crop&q=80",
+      galleryImages: [
+        "https://images.unsplash.com/photo-1590658268037-6bf12165a8df?w=800&auto=format&fit=crop&q=80",
+        "https://images.unsplash.com/photo-1572536147248-ac59a8abfa4b?w=800&auto=format&fit=crop&q=80"
+      ],
+      category: "tech",
+      source: "aliexpress",
+      seller: {
+        name: "Global Tech Official Store",
+        rating: 4.9,
+        positiveFeedbackPercent: 98.4
+      },
+      shipping: {
+        isFree: true,
+        estimatedDelivery: "7-12 business days"
+      },
+      productUrl: "https://shop.metfaai.com/products/ai-anc-earbuds",
+      affiliateUrl: "https://shop.metfaai.com/products/ai-anc-earbuds?ref=metfa_social",
+      description: "High-fidelity Bluetooth 5.4 wireless earbuds featuring active noise cancellation up to 45dB, AI adaptive ambient mode, 36-hour total battery life.",
+      specifications: {
+        "Bluetooth Version": "5.4 Low Latency",
+        "Noise Cancellation": "Active ANC up to 45dB",
+        "Battery Life": "8h earbuds + 28h case"
+      },
+      inStock: true,
+      tags: ["earbuds", "audio", "anc", "bluetooth", "gadgets", "aliexpress"]
+    },
+    {
+      id: "ali-002",
+      title: "Ultra Slim Smartwatch with AMOLED Display, Heart Rate & SpO2 Fitness Tracker",
+      price: 32.50,
+      originalPrice: 65.00,
+      discountPercentage: 50,
+      currency: "USD",
+      rating: 4.9,
+      reviewCount: 5120,
+      ordersCount: 14500,
+      imageUrl: "https://images.unsplash.com/photo-1523275335684-37898b6baf30?w=800&auto=format&fit=crop&q=80",
+      galleryImages: [
+        "https://images.unsplash.com/photo-1523275335684-37898b6baf30?w=800&auto=format&fit=crop&q=80",
+        "https://images.unsplash.com/photo-1508685096489-7aacd43bd3b1?w=800&auto=format&fit=crop&q=80"
+      ],
+      category: "wearables",
+      source: "aliexpress",
+      seller: {
+        name: "SmartWear Global Direct",
+        rating: 4.95,
+        positiveFeedbackPercent: 99.1
+      },
+      shipping: {
+        isFree: true,
+        estimatedDelivery: "5-10 business days"
+      },
+      productUrl: "https://shop.metfaai.com/products/ultra-smartwatch-amoled",
+      affiliateUrl: "https://shop.metfaai.com/products/ultra-smartwatch-amoled?ref=metfa_social",
+      description: "1.43-inch Always-On AMOLED curved touchscreen smartwatch with stainless steel bezel, 100+ sports tracking modes, 14-day battery life.",
+      specifications: {
+        "Display": "1.43\" AMOLED 466x466",
+        "Sensors": "Optical PPG, SpO2, Accelerometer"
+      },
+      inStock: true,
+      tags: ["smartwatch", "fitness", "wearables", "amoled", "aliexpress"]
+    },
+    {
+      id: "ali-003",
+      title: "Foldable 4K HDR Drone with GPS Return, Optical Flow & Dual 3-Axis Gimbal",
+      price: 79.99,
+      originalPrice: 159.99,
+      discountPercentage: 50,
+      currency: "USD",
+      rating: 4.78,
+      reviewCount: 1840,
+      ordersCount: 3900,
+      imageUrl: "https://images.unsplash.com/photo-1527977966376-1c8408f9f108?w=800&auto=format&fit=crop&q=80",
+      category: "tech",
+      source: "aliexpress",
+      seller: {
+        name: "AeroTech Official Dropship",
+        rating: 4.88,
+        positiveFeedbackPercent: 97.6
+      },
+      shipping: {
+        isFree: true,
+        estimatedDelivery: "7-14 business days"
+      },
+      productUrl: "https://shop.metfaai.com/products/4k-gps-drone",
+      affiliateUrl: "https://shop.metfaai.com/products/4k-gps-drone?ref=metfa_social",
+      description: "Professional brushless aerial drone equipped with a 4K 60fps stabilized wide-angle camera, 5GHz FPV transmission up to 3km.",
+      specifications: {
+        "Camera": "4K HDR 60fps CMOS",
+        "Flight Time": "28 minutes per battery"
+      },
+      inStock: true,
+      tags: ["drone", "4k", "aerial", "camera", "gadgets", "aliexpress"]
+    },
+    {
+      id: "ali-005",
+      title: "Professional Studio RGB LED Video Light Wand with App Control for Creators",
+      price: 29.90,
+      originalPrice: 59.90,
+      discountPercentage: 50,
+      currency: "USD",
+      rating: 4.87,
+      reviewCount: 2210,
+      ordersCount: 6300,
+      imageUrl: "https://images.unsplash.com/photo-1517420704952-d9f39e95b43e?w=800&auto=format&fit=crop&q=80",
+      category: "tech",
+      source: "aliexpress",
+      seller: {
+        name: "Creator Studio Pro Gear",
+        rating: 4.9,
+        positiveFeedbackPercent: 98.2
+      },
+      shipping: {
+        isFree: true,
+        estimatedDelivery: "6-12 business days"
+      },
+      productUrl: "https://shop.metfaai.com/products/rgb-light-wand",
+      affiliateUrl: "https://shop.metfaai.com/products/rgb-light-wand?ref=metfa_social",
+      description: "Handheld 360-color RGB LED lighting tube with CRI 95+, 2500K-9000K bi-color temperature, 20 special scene effects.",
+      specifications: {
+        "Color Temperature": "2500K - 9000K",
+        "Battery": "2600mAh Rechargeable"
+      },
+      inStock: true,
+      tags: ["lighting", "creator", "rgb", "photography", "reels", "aliexpress"]
+    },
+    {
+      id: "ali-006",
+      title: "Retro Mechanical Gaming Keyboard with Gateron Switches & Hot-Swappable Keys",
+      price: 45.00,
+      originalPrice: 89.00,
+      discountPercentage: 49,
+      currency: "USD",
+      rating: 4.94,
+      reviewCount: 3880,
+      ordersCount: 7800,
+      imageUrl: "https://images.unsplash.com/photo-1587829741301-dc798b83add3?w=800&auto=format&fit=crop&q=80",
+      category: "tech",
+      source: "aliexpress",
+      seller: {
+        name: "Custom Keyboards Flagship",
+        rating: 4.96,
+        positiveFeedbackPercent: 99.0
+      },
+      shipping: {
+        isFree: true,
+        estimatedDelivery: "7-12 business days"
+      },
+      productUrl: "https://shop.metfaai.com/products/retro-mechanical-keyboard",
+      affiliateUrl: "https://shop.metfaai.com/products/retro-mechanical-keyboard?ref=metfa_social",
+      description: "75% compact layout wireless mechanical keyboard with triple-mode connectivity (2.4G / BT 5.0 / USB-C), south-facing per-key RGB backlighting.",
+      specifications: {
+        "Layout": "75% (84 Keys)",
+        "Switches": "Gateron Pro Yellow (Hot-Swappable)"
+      },
+      inStock: true,
+      tags: ["keyboard", "mechanical", "gaming", "rgb", "desktop", "aliexpress"]
+    },
+    {
+      id: "ali-008",
+      title: "Minimalist Anti-Theft Water-Resistant Laptop Backpack with USB Charging Port",
+      price: 27.50,
+      originalPrice: 55.00,
+      discountPercentage: 50,
+      currency: "USD",
+      rating: 4.88,
+      reviewCount: 3100,
+      ordersCount: 9200,
+      imageUrl: "https://images.unsplash.com/photo-1553062407-98eeb64c6a62?w=800&auto=format&fit=crop&q=80",
+      category: "fashion",
+      source: "aliexpress",
+      seller: {
+        name: "Urban Lifestyle Gear",
+        rating: 4.91,
+        positiveFeedbackPercent: 98.7
+      },
+      shipping: {
+        isFree: true,
+        estimatedDelivery: "6-11 business days"
+      },
+      productUrl: "https://shop.metfaai.com/products/anti-theft-backpack",
+      affiliateUrl: "https://shop.metfaai.com/products/anti-theft-backpack?ref=metfa_social",
+      description: "Ergonomic business and travel backpack crafted from high-density Oxford water-repellent fabric. Fits up to 15.6\" laptops.",
+      specifications: {
+        "Capacity": "25 Liters",
+        "Laptop Compartment": "Up to 15.6 inch"
+      },
+      inStock: true,
+      tags: ["backpack", "fashion", "laptop", "travel", "aliexpress"]
+    },
+    {
+      id: "ali-009",
+      title: "Mini Portable Thermal Pocket Sticker & Photo Printer with Bluetooth App",
+      price: 19.50,
+      originalPrice: 39.00,
+      discountPercentage: 50,
+      currency: "USD",
+      rating: 4.84,
+      reviewCount: 1650,
+      ordersCount: 5400,
+      imageUrl: "https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?w=800&auto=format&fit=crop&q=80",
+      category: "gadgets",
+      source: "aliexpress",
+      seller: {
+        name: "PrintGo Global Store",
+        rating: 4.89,
+        positiveFeedbackPercent: 98.3
+      },
+      shipping: {
+        isFree: true,
+        estimatedDelivery: "6-10 business days"
+      },
+      productUrl: "https://shop.metfaai.com/products/pocket-thermal-printer",
+      affiliateUrl: "https://shop.metfaai.com/products/pocket-thermal-printer?ref=metfa_social",
+      description: "Inkless wireless pocket photo and memo printer connecting via Bluetooth.",
+      specifications: {
+        "Print Technology": "Thermal Zero-Ink (ZINK)",
+        "Resolution": "200 DPI"
+      },
+      inStock: true,
+      tags: ["printer", "pocketprinter", "gadgets", "stickers", "aliexpress"]
+    },
+    {
+      id: "ali-010",
+      title: "Ultra-Quiet Smart Aroma Ultrasonic Diffuser with Flame LED Effect",
+      price: 22.80,
+      originalPrice: 45.00,
+      discountPercentage: 49,
+      currency: "USD",
+      rating: 4.9,
+      reviewCount: 2840,
+      ordersCount: 7100,
+      imageUrl: "https://images.unsplash.com/photo-1602928321679-560bb453f190?w=800&auto=format&fit=crop&q=80",
+      category: "home",
+      source: "aliexpress",
+      seller: {
+        name: "CozyHome AliExpress Store",
+        rating: 4.93,
+        positiveFeedbackPercent: 99.0
+      },
+      shipping: {
+        isFree: true,
+        estimatedDelivery: "7-12 business days"
+      },
+      productUrl: "https://shop.metfaai.com/products/flame-aroma-diffuser",
+      affiliateUrl: "https://shop.metfaai.com/products/flame-aroma-diffuser?ref=metfa_social",
+      description: "Realistic flame lighting effect aromatherapy humidifier with 250ml water capacity.",
+      specifications: {
+        "Capacity": "250ml Water Tank",
+        "Noise Level": "< 28dB Whisper Quiet"
+      },
+      inStock: true,
+      tags: ["diffuser", "aromatherapy", "home", "flame", "aliexpress"]
+    },
+    {
+      id: "ali-011",
+      title: "Bone Conduction Wireless Sports Headphones IPX8 Waterproof with 32GB Storage",
+      price: 26.90,
+      originalPrice: 54.00,
+      discountPercentage: 50,
+      currency: "USD",
+      rating: 4.86,
+      reviewCount: 1520,
+      ordersCount: 3800,
+      imageUrl: "https://images.unsplash.com/photo-1546435770-a3e426bf472b?w=800&auto=format&fit=crop&q=80",
+      category: "wearables",
+      source: "aliexpress",
+      seller: {
+        name: "SportAcoustics Dropship",
+        rating: 4.88,
+        positiveFeedbackPercent: 98.1
+      },
+      shipping: {
+        isFree: true,
+        estimatedDelivery: "7-14 business days"
+      },
+      productUrl: "https://shop.metfaai.com/products/bone-conduction-sports-headphones",
+      affiliateUrl: "https://shop.metfaai.com/products/bone-conduction-sports-headphones?ref=metfa_social",
+      description: "Open-ear bone conduction headset engineered for swimming, running, and cycling.",
+      specifications: {
+        "Sound Tech": "Bone Conduction Open-Ear Transducer",
+        "Internal Storage": "32GB Built-in MP3"
+      },
+      inStock: true,
+      tags: ["headphones", "boneconduction", "swimming", "fitness", "wearables", "aliexpress"]
+    },
+    {
+      id: "ali-012",
+      title: "Universal Multi-Angle Magnetic Car Mount with 15W Qi Fast Wireless Charging",
+      price: 14.99,
+      originalPrice: 29.99,
+      discountPercentage: 50,
+      currency: "USD",
+      rating: 4.87,
+      reviewCount: 3890,
+      ordersCount: 9600,
+      imageUrl: "https://images.unsplash.com/photo-1584438784894-089d6a62b8fa?w=800&auto=format&fit=crop&q=80",
+      category: "gadgets",
+      source: "aliexpress",
+      seller: {
+        name: "AutoTech Global Direct",
+        rating: 4.92,
+        positiveFeedbackPercent: 98.6
+      },
+      shipping: {
+        isFree: true,
+        estimatedDelivery: "6-11 business days"
+      },
+      productUrl: "https://shop.metfaai.com/products/magnetic-car-mount-charger",
+      affiliateUrl: "https://shop.metfaai.com/products/magnetic-car-mount-charger?ref=metfa_social",
+      description: "Ultra-strong N52 neodymium magnetic air vent car holder with 15W fast wireless charging.",
+      specifications: {
+        "Magnets": "16x N52 Industrial Neodymium Ring",
+        "Charging Output": "15W / 10W / 7.5W Qi"
+      },
+      inStock: true,
+      tags: ["carmount", "magsafe", "charger", "gadgets", "aliexpress"]
+    }
+  ];
+
+  // Helper route handler for product catalog (AliExpress + Sellme Marketplace merged)
+  const handleMarketplaceProducts = (req: express.Request, res: express.Response) => {
+    try {
+      const category = (req.query.category as string || "").trim().toLowerCase();
+      const search = (req.query.search as string || req.query.q as string || "").trim().toLowerCase();
+      const sourceFilter = (req.query.source as string || "all").trim().toLowerCase();
+      const sort = (req.query.sort as string || "trending").trim().toLowerCase();
+      const page = Math.max(1, parseInt(req.query.page as string || "1", 10) || 1);
+      const limit = Math.min(50, Math.max(1, parseInt(req.query.limit as string || "30", 10) || 30));
+
+      let items = [...SERVER_MARKETPLACE_CATALOG];
+
+      // Filter by category
+      if (category && category !== "all") {
+        items = items.filter((p) => p.category.toLowerCase() === category);
+      }
+
+      // Filter by source
+      if (sourceFilter && sourceFilter !== "all") {
+        items = items.filter((p) => p.source.toLowerCase() === sourceFilter);
+      }
+
+      // Filter by search
+      if (search) {
+        items = items.filter((p) =>
+          p.title.toLowerCase().includes(search) ||
+          p.description.toLowerCase().includes(search) ||
+          p.tags.some((t) => t.toLowerCase().includes(search)) ||
+          p.seller.name.toLowerCase().includes(search) ||
+          p.category.toLowerCase().includes(search)
+        );
+      }
+
+      // Sort
+      if (sort === "price_low") {
+        items.sort((a, b) => a.price - b.price);
+      } else if (sort === "price_high") {
+        items.sort((a, b) => b.price - a.price);
+      } else if (sort === "rating") {
+        items.sort((a, b) => b.rating - a.rating);
+      } else if (sort === "orders") {
+        items.sort((a, b) => b.ordersCount - a.ordersCount);
+      }
+
+      const total = items.length;
+      const startIndex = (page - 1) * limit;
+      const paginated = items.slice(startIndex, startIndex + limit);
+
+      res.setHeader("Cache-Control", "public, max-age=60, stale-while-revalidate=300");
+      res.json({
+        success: true,
+        source: "merged-aliexpress-sellme",
+        category: category || "all",
+        sourceFilter: sourceFilter || "all",
+        page,
+        limit,
+        total,
+        products: paginated,
+        isFallback: false,
+      });
+    } catch (err: any) {
+      console.error("[Marketplace API Error]:", err);
+      res.status(500).json({
+        success: false,
+        error: err?.message || "Failed to retrieve marketplace products",
+        products: SERVER_MARKETPLACE_CATALOG,
+        total: SERVER_MARKETPLACE_CATALOG.length,
+      });
+    }
+  };
+
+  // Multiple route aliases to ensure 100% compatibility across Metfa Social and Sellme
+  app.get("/api/aliexpress/products", handleMarketplaceProducts);
+  app.get("/api/aliexpress/search", handleMarketplaceProducts);
+  app.get("/api/marketplace/products", handleMarketplaceProducts);
+  app.get("/api/sellme/products", handleMarketplaceProducts);
+
+  // Single Product Detail by ID
+  app.get(["/api/aliexpress/product/:id", "/api/marketplace/product/:id"], (req, res) => {
+    const productId = req.params.id;
+    const product = SERVER_MARKETPLACE_CATALOG.find((p) => p.id === productId);
+    if (!product) {
+      return res.status(404).json({ success: false, error: "Product not found" });
+    }
+    res.json({ success: true, product });
+  });
+
+  // Dynamic Categories metadata
+  app.get("/api/marketplace/categories", (_req, res) => {
+    const categories = [
+      { id: "all", name: "All Products", itemCount: SERVER_MARKETPLACE_CATALOG.length },
+      { id: "tech", name: "Smart Electronics", itemCount: SERVER_MARKETPLACE_CATALOG.filter(p => p.category === "tech").length },
+      { id: "gadgets", name: "AI & Mobile Gadgets", itemCount: SERVER_MARKETPLACE_CATALOG.filter(p => p.category === "gadgets").length },
+      { id: "wearables", name: "Wearables & Fitness", itemCount: SERVER_MARKETPLACE_CATALOG.filter(p => p.category === "wearables").length },
+      { id: "fashion", name: "Fashion & Bags", itemCount: SERVER_MARKETPLACE_CATALOG.filter(p => p.category === "fashion").length },
+      { id: "home", name: "Home & Studio", itemCount: SERVER_MARKETPLACE_CATALOG.filter(p => p.category === "home").length },
+    ];
+    res.json({
+      success: true,
+      categories,
+    });
+  });
+
+  // Generic Safe Cross-Origin Proxy to prevent browser CORS "Failed to fetch" on AliExpress resources
+  app.post("/api/aliexpress/proxy", async (req, res) => {
+    const { targetUrl } = req.body;
+    if (!targetUrl || typeof targetUrl !== "string") {
+      return res.status(400).json({ error: "targetUrl is required" });
+    }
+
+    try {
+      const parsed = new URL(targetUrl);
+      if (!parsed.protocol.startsWith("http")) {
+        return res.status(400).json({ error: "Invalid URL protocol" });
+      }
+
+      const fetchRes = await fetch(targetUrl, {
+        headers: {
+          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+          "Accept": "application/json, text/plain, */*",
+        },
+      });
+
+      const contentType = fetchRes.headers.get("content-type") || "";
+      if (contentType.includes("application/json")) {
+        const json = await fetchRes.json();
+        return res.json(json);
+      } else {
+        const text = await fetchRes.text();
+        return res.send(text);
+      }
+    } catch (err: any) {
+      console.warn("[AliExpress Proxy Error]:", err?.message);
+      return res.status(502).json({
+        error: "Upstream gateway connection issue",
+        fallback: true,
+        products: SERVER_MARKETPLACE_CATALOG,
+      });
+    }
+  });
+
+  // =========================================================================
   // 1. Multimodal Multi-Engine Chat Pipeline (Gemini -> ChatGPT -> xAI Grok)
   // =========================================================================
   app.post("/api/gemini/chat", async (req, res) => {
@@ -750,7 +1644,7 @@ ${METFA_AI_SAFETY_SYSTEM_INSTRUCTION}`;
 
       try {
         // Skip unconfigured optional BYO engines if another configured engine is available
-        if (currentEngine === "gemini" && !getGeminiApiKey(settings?.geminiApiKey)) {
+        if (currentEngine === "gemini" && !getGeminiApiKey(settings?.geminiApiKey, req)) {
           if (requestedEngine === "gemini") {
             console.log("[AI Pipeline] Gemini key not configured. Falling back to alternative engines seamlessly.");
           }
@@ -761,7 +1655,7 @@ ${METFA_AI_SAFETY_SYSTEM_INSTRUCTION}`;
           continue;
         }
 
-        if (currentEngine === "openai" && !getOpenAiApiKey(settings?.openaiApiKey)) {
+        if (currentEngine === "openai" && !getOpenAiApiKey(settings?.openaiApiKey, req)) {
           if (requestedEngine === "openai") {
             console.log("[AI Pipeline] OpenAI key not provided. Falling back to Gemini seamlessly.");
           }
@@ -772,7 +1666,7 @@ ${METFA_AI_SAFETY_SYSTEM_INSTRUCTION}`;
           continue;
         }
 
-        if (currentEngine === "grok" && !getXaiApiKey(settings?.xaiApiKey)) {
+        if (currentEngine === "grok" && !getXaiApiKey(settings?.grokApiKey || settings?.xaiApiKey, req)) {
           if (requestedEngine === "grok") {
             console.log("[AI Pipeline] Grok key not provided. Falling back to Gemini seamlessly.");
           }
@@ -799,11 +1693,11 @@ ${METFA_AI_SAFETY_SYSTEM_INSTRUCTION}`;
         };
 
         if (currentEngine === "gemini") {
-          result = await executeGemini(prompt, attachments, settings);
+          result = await executeGemini(prompt, attachments, settings, req);
         } else if (currentEngine === "openai") {
-          result = await executeOpenAI(prompt, attachments, settings);
+          result = await executeOpenAI(prompt, attachments, settings, req);
         } else {
-          result = await executeGrok(prompt, attachments, settings);
+          result = await executeGrok(prompt, attachments, settings, req);
         }
 
         // If fallback was used, provide a clean systemNotice
@@ -894,7 +1788,7 @@ ${METFA_AI_SAFETY_SYSTEM_INSTRUCTION}`;
         return res.status(400).json({ error: { message: "base64Image is required." } });
       }
 
-      const ai = getAiClient(geminiApiKey || req.body.settings?.geminiApiKey);
+      const ai = getAiClient(geminiApiKey || req.body.settings?.geminiApiKey, req);
       const cleanMime =
         mimeType.includes("jpeg") || mimeType.includes("jpg") ? "image/jpeg" : "image/png";
 
@@ -956,7 +1850,7 @@ ${METFA_AI_SAFETY_SYSTEM_INSTRUCTION}`;
         return res.status(400).json({ error: { message: "base64Image is required." } });
       }
 
-      const ai = getAiClient(geminiApiKey || req.body.settings?.geminiApiKey);
+      const ai = getAiClient(geminiApiKey || req.body.settings?.geminiApiKey, req);
       const cleanMime =
         mimeType.includes("jpeg") || mimeType.includes("jpg") ? "image/jpeg" : "image/png";
 
@@ -1017,7 +1911,7 @@ ${METFA_AI_SAFETY_SYSTEM_INSTRUCTION}`;
         return res.status(400).json({ error: { message: "prompt is required." } });
       }
 
-      const ai = getAiClient(geminiApiKey || req.body.settings?.geminiApiKey);
+      const ai = getAiClient(geminiApiKey || req.body.settings?.geminiApiKey, req);
       const result = await generateContentWithFallback(ai, {
         models: ["gemini-3.7-flash", "gemini-3.1-flash-lite"],
         timeoutMs: 20000,
@@ -1064,7 +1958,7 @@ ${prompt}
   app.post("/api/gemini/social-caption", async (req, res) => {
     try {
       const { imagePrompt, geminiApiKey } = req.body;
-      const ai = getAiClient(geminiApiKey || req.body.settings?.geminiApiKey);
+      const ai = getAiClient(geminiApiKey || req.body.settings?.geminiApiKey, req);
 
       const result = await generateContentWithFallback(ai, {
         models: ["gemini-3.7-flash", "gemini-3.1-flash-lite"],
@@ -1131,7 +2025,7 @@ ${prompt}
         });
       }
 
-      const ai = getAiClient(geminiApiKey || req.body.settings?.geminiApiKey);
+      const ai = getAiClient(geminiApiKey || req.body.settings?.geminiApiKey, req);
 
       const parts: any[] = [];
       if (imageBase64) {
@@ -1213,7 +2107,7 @@ Output Format: Respond strictly with JSON format:
       const { text, mode = "fix_grammar", tone = "Creative", geminiApiKey } = req.body;
       if (!text) return res.status(400).json({ error: "Text is required" });
 
-      const ai = getAiClient(geminiApiKey || req.body.settings?.geminiApiKey);
+      const ai = getAiClient(geminiApiKey || req.body.settings?.geminiApiKey, req);
 
       const prompt = `Refine and improve the following social media post text.
 Task Mode: ${mode} (${mode === "fix_grammar" ? "Fix all spelling, punctuation, and grammatical issues cleanly" : mode === "expand" ? "Thoughtfully expand the ideas with richer context and engaging storytelling" : `Adjust tone to be strictly ${tone}`})
@@ -1252,7 +2146,7 @@ Instructions: Preserve the user's language (Bengali, English, etc.). Output ONLY
   app.post("/api/ai/quick-reply", async (req, res) => {
     try {
       const { commentText, postCaption, geminiApiKey } = req.body;
-      const ai = getAiClient(geminiApiKey || req.body.settings?.geminiApiKey);
+      const ai = getAiClient(geminiApiKey || req.body.settings?.geminiApiKey, req);
 
       const prompt = `Post context: "${postCaption || "Creative artwork"}"
 Comment to reply to: "${commentText}"
@@ -1295,7 +2189,7 @@ Output strictly in JSON: {"replies": ["reply 1", "reply 2", "reply 3"]}`;
   app.post("/api/ai/generate-avatar", async (req, res) => {
     try {
       const { style, prompt, seed, geminiApiKey } = req.body;
-      const ai = getAiClient(geminiApiKey || req.body.settings?.geminiApiKey);
+      const ai = getAiClient(geminiApiKey || req.body.settings?.geminiApiKey, req);
 
       const avatarPrompt = prompt || `${style} style 3D avatar profile picture, sharp lighting, 8k render`;
 
@@ -1327,16 +2221,27 @@ Output strictly in JSON: {"replies": ["reply 1", "reply 2", "reply 3"]}`;
         console.warn("[Avatar Gen] Direct image model fallback to curated vector avatar:", imgErr);
       }
 
-      // Stylized vector avatar fallback with deterministic seed
-      const fallbackUrl = `https://api.dicebear.com/7.x/avataaars/svg?seed=${seed || Date.now()}&backgroundColor=b6e3f4,c0aede,d1d4f9`;
+      // Clean high-res professional portrait creator avatar fallback with deterministic seed
+      const fallbackAvatars = [
+        "https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=300&auto=format&fit=crop&q=80",
+        "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=300&auto=format&fit=crop&q=80",
+        "https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=300&auto=format&fit=crop&q=80",
+        "https://images.unsplash.com/photo-1500648767791-00dcc994a43e?w=300&auto=format&fit=crop&q=80",
+        "https://images.unsplash.com/photo-1539571696357-5a69c17a67c6?w=300&auto=format&fit=crop&q=80",
+        "https://images.unsplash.com/photo-1517841905240-472988babdf9?w=300&auto=format&fit=crop&q=80",
+        "https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=300&auto=format&fit=crop&q=80",
+        "https://images.unsplash.com/photo-1580489944761-15a19d654956?w=300&auto=format&fit=crop&q=80"
+      ];
+      const hash = String(seed || "").split("").reduce((acc, c) => (acc << 5) - acc + c.charCodeAt(0), 0);
+      const fallbackUrl = fallbackAvatars[Math.abs(hash) % fallbackAvatars.length];
       return res.json({
         avatarUrl: fallbackUrl,
         promptUsed: avatarPrompt,
-        modelUsed: "Metfa Avatar Engine (Vector)",
+        modelUsed: "Metfa Avatar Engine (Curated Portrait)",
       });
     } catch (err: any) {
       console.warn("[Avatar Gen] fallback:", err?.message || err);
-      const fallbackUrl = `https://api.dicebear.com/7.x/bottts/svg?seed=${Date.now()}`;
+      const fallbackUrl = "https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=300&auto=format&fit=crop&q=80";
       return res.json({
         avatarUrl: fallbackUrl,
         promptUsed: "Avatar Profile",

@@ -78,7 +78,7 @@ export const Header: React.FC<HeaderProps> = ({
 
   return (
     <>
-      <header className="sticky top-0 z-40 w-full bg-gray-950/90 backdrop-blur-xl border-b border-gray-800/80 transition-all">
+      <header className="sticky top-0 z-40 w-full bg-white/95 backdrop-blur-xl border-b border-slate-200 shadow-xs transition-all">
         <div className="w-full px-4 h-16 flex items-center justify-between">
           {/* Left: Drawer Menu + App Logo + Metfa Social Brand Title */}
           <div className="flex items-center gap-2.5 sm:gap-3 shrink-0">
@@ -87,7 +87,7 @@ export const Header: React.FC<HeaderProps> = ({
               type="button"
               id="header-menu-drawer-btn"
               onClick={() => setIsSideDrawerOpen(true)}
-              className="p-2 rounded-xl text-gray-300 hover:text-white bg-gray-900 border border-gray-800 hover:border-purple-500/50 transition cursor-pointer shrink-0"
+              className="p-2 rounded-xl text-slate-700 hover:text-slate-900 bg-slate-100 hover:bg-slate-200 border border-slate-200 transition cursor-pointer shrink-0"
               title="Open Shortcuts Menu"
             >
               <Menu className="w-5 h-5" />
@@ -102,14 +102,14 @@ export const Header: React.FC<HeaderProps> = ({
               <img
                 src="/logo.png"
                 alt="Metfa Social Official Logo"
-                className="w-9 h-9 min-w-[36px] max-w-[36px] min-h-[36px] max-h-[36px] rounded-2xl shadow-md shadow-blue-950/60 group-hover:scale-105 transition-transform shrink-0 object-cover block pointer-events-none"
+                className="w-9 h-9 min-w-[36px] max-w-[36px] min-h-[36px] max-h-[36px] rounded-2xl shadow-xs group-hover:scale-105 transition-transform shrink-0 object-cover block pointer-events-none"
                 onError={(e) => {
                   (e.currentTarget as HTMLImageElement).src = '/metfa-emblem.png';
                 }}
               />
-              <h1 className="text-base sm:text-lg font-black tracking-tight text-white group-hover:text-blue-300 transition whitespace-nowrap flex items-baseline gap-1">
-                <span className="font-black text-white text-base sm:text-lg tracking-tight">metfa</span>
-                <span className="bg-gradient-to-r from-blue-400 via-indigo-300 to-teal-300 bg-clip-text text-transparent font-bold text-xs sm:text-sm">Social</span>
+              <h1 className="text-base sm:text-lg font-black tracking-tight text-slate-900 group-hover:text-blue-600 transition whitespace-nowrap flex items-baseline gap-1">
+                <span className="font-black text-slate-900 text-base sm:text-lg tracking-tight">metfa</span>
+                <span className="bg-gradient-to-r from-blue-600 via-indigo-600 to-teal-600 bg-clip-text text-transparent font-bold text-xs sm:text-sm">Social</span>
               </h1>
             </div>
           </div>
@@ -119,17 +119,22 @@ export const Header: React.FC<HeaderProps> = ({
             {/* [Search Icon] (Opens Global Search Dialog with speech dictation, tags & group filters) */}
             <GlobalSearchBar onNavigateTab={onNavigateTab} />
 
-            {/* [Sellme Marketplace Navigation Link] */}
-            <a
+            {/* [Sellme Marketplace Navigation Button] */}
+            <button
+              type="button"
               id="header-sellme-marketplace-btn"
-              href="https://shop.metfaai.com"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="w-9 h-9 sm:w-10 sm:h-10 rounded-2xl bg-gray-900/90 hover:bg-purple-950/70 border border-gray-800 hover:border-purple-500/60 flex items-center justify-center text-gray-300 hover:text-teal-300 transition shrink-0 active:scale-95 shadow-sm group"
-              title="Sellme Marketplace (shop.metfaai.com)"
+              onClick={() => onNavigateTab('marketplace')}
+              className={`w-9 h-9 sm:w-10 sm:h-10 rounded-2xl flex items-center justify-center transition shrink-0 active:scale-95 shadow-xs group cursor-pointer ${
+                activeTab === 'marketplace'
+                  ? 'bg-gradient-to-tr from-purple-600 to-teal-500 text-white shadow-sm shadow-purple-600/30 ring-2 ring-teal-400/40'
+                  : 'bg-slate-100 hover:bg-slate-200 border border-slate-200 text-slate-700 hover:text-purple-600'
+              }`}
+              title="Sellme Marketplace & AliExpress (shop.metfaai.com)"
             >
-              <ShoppingBag className="w-4 h-4 sm:w-4.5 sm:h-4.5 group-hover:scale-110 transition-transform text-purple-300 group-hover:text-teal-300" />
-            </a>
+              <ShoppingBag className={`w-4 h-4 sm:w-4.5 sm:h-4.5 group-hover:scale-110 transition-transform ${
+                activeTab === 'marketplace' ? 'text-white' : 'text-purple-600 group-hover:text-teal-600'
+              }`} />
+            </button>
 
             {/* [AI Settings Dropdown Menu] - Rendered ONLY on "AI Tools" (chat) tab */}
             {activeTab === 'chat' && (
@@ -144,10 +149,10 @@ export const Header: React.FC<HeaderProps> = ({
               type="button"
               id="header-user-profile-btn"
               onClick={() => onNavigateTab('profile')}
-              className={`w-9 h-9 sm:w-10 sm:h-10 rounded-2xl overflow-hidden border-2 transition shrink-0 shadow-sm active:scale-95 cursor-pointer ${
+              className={`w-9 h-9 sm:w-10 sm:h-10 rounded-2xl overflow-hidden border-2 transition shrink-0 shadow-xs active:scale-95 cursor-pointer ${
                 activeTab === 'profile'
-                  ? 'border-purple-500 ring-2 ring-purple-500/30'
-                  : 'border-gray-700 hover:border-purple-400'
+                  ? 'border-purple-600 ring-2 ring-purple-500/30'
+                  : 'border-slate-200 hover:border-purple-500'
               }`}
               title="View User Profile"
             >
@@ -165,33 +170,33 @@ export const Header: React.FC<HeaderProps> = ({
       {isSideDrawerOpen && (
         <div
           onClick={() => setIsSideDrawerOpen(false)}
-          className="fixed inset-0 z-50 flex bg-black/70 backdrop-blur-sm animate-fadeIn"
+          className="fixed inset-0 z-50 flex bg-slate-900/40 backdrop-blur-xs animate-fadeIn"
         >
           <div
             onClick={(e) => e.stopPropagation()}
-            className="w-84 max-w-[88vw] bg-gray-950 border-r border-gray-800 h-full p-5 overflow-y-auto flex flex-col justify-between shadow-2xl"
+            className="w-84 max-w-[88vw] bg-white border-r border-slate-200 h-full p-5 overflow-y-auto flex flex-col justify-between shadow-2xl text-slate-900"
           >
             <div className="space-y-5">
               {/* Drawer Header */}
-              <div className="flex items-center justify-between pb-4 border-b border-gray-800">
+              <div className="flex items-center justify-between pb-4 border-b border-slate-200">
                 <div className="flex items-center gap-2.5">
                   <img
                     src="/logo.png"
                     alt="Metfa Social"
-                    className="w-8 h-8 min-w-[32px] max-w-[32px] min-h-[32px] max-h-[32px] rounded-xl shadow-md shrink-0 object-cover block pointer-events-none"
+                    className="w-8 h-8 min-w-[32px] max-w-[32px] min-h-[32px] max-h-[32px] rounded-xl shadow-xs shrink-0 object-cover block pointer-events-none"
                     onError={(e) => {
                       (e.currentTarget as HTMLImageElement).src = '/metfa-emblem.png';
                     }}
                   />
                   <div>
-                    <h3 className="text-sm font-black text-white">Menu & Shortcuts</h3>
-                    <p className="text-[10px] text-gray-400">Metfa Social & AI Ecosystem</p>
+                    <h3 className="text-sm font-black text-slate-900">Menu & Shortcuts</h3>
+                    <p className="text-[10px] text-slate-500">Metfa Social & AI Ecosystem</p>
                   </div>
                 </div>
                 <button
                   type="button"
                   onClick={() => setIsSideDrawerOpen(false)}
-                  className="p-1.5 rounded-full bg-gray-800 text-gray-400 hover:text-white"
+                  className="p-1.5 rounded-full bg-slate-100 text-slate-500 hover:text-slate-900 hover:bg-slate-200"
                 >
                   <X className="w-4 h-4" />
                 </button>
@@ -200,38 +205,38 @@ export const Header: React.FC<HeaderProps> = ({
               {/* 1. REAL LOGGED-IN USER PROFILE HEADER */}
               <div
                 onClick={() => handleNavigate('profile')}
-                className="p-3.5 bg-gradient-to-r from-purple-950/60 to-gray-900 rounded-2xl border border-purple-500/30 flex items-center gap-3 cursor-pointer hover:border-purple-500/60 transition shadow-md group"
+                className="p-3.5 bg-purple-50 hover:bg-purple-100/80 rounded-2xl border border-purple-200 flex items-center gap-3 cursor-pointer transition shadow-xs group"
               >
                 <div className="relative shrink-0">
                   <img
                     src={authUser.avatar || activeIdentity.avatar}
                     alt={authUser.name}
-                    className="w-12 h-12 rounded-2xl object-cover border-2 border-purple-400 shadow-sm"
+                    className="w-12 h-12 rounded-2xl object-cover border-2 border-purple-500 shadow-xs"
                   />
                   {authUser.isVerified && (
-                    <div className="absolute -bottom-1 -right-1 bg-teal-500 rounded-full p-0.5 border border-black">
-                      <ShieldCheck className="w-3 h-3 text-black" />
+                    <div className="absolute -bottom-1 -right-1 bg-teal-500 rounded-full p-0.5 border border-white">
+                      <ShieldCheck className="w-3 h-3 text-white" />
                     </div>
                   )}
                 </div>
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center gap-1.5">
-                    <h4 className="text-xs font-black text-white truncate">{authUser.name}</h4>
+                    <h4 className="text-xs font-black text-slate-900 truncate">{authUser.name}</h4>
                     {authUser.authType !== 'guest' && (
-                      <span className="text-[9px] px-1.5 py-0.2 bg-teal-950 border border-teal-800 text-teal-300 rounded font-semibold shrink-0">
+                      <span className="text-[9px] px-1.5 py-0.2 bg-teal-100 border border-teal-300 text-teal-800 rounded font-semibold shrink-0">
                         SSO
                       </span>
                     )}
                   </div>
-                  <p className="text-[11px] text-teal-400 font-mono font-bold truncate">@{authUser.username}</p>
-                  <p className="text-[9px] text-purple-300/80 font-mono truncate">ID: {authUser.metfaId || authUser.id}</p>
+                  <p className="text-[11px] text-teal-700 font-mono font-bold truncate">@{authUser.username}</p>
+                  <p className="text-[9px] text-purple-600 font-mono truncate">ID: {authUser.metfaId || authUser.id}</p>
                 </div>
-                <ChevronRight className="w-4 h-4 text-gray-400 group-hover:text-white group-hover:translate-x-0.5 transition" />
+                <ChevronRight className="w-4 h-4 text-slate-400 group-hover:text-slate-900 group-hover:translate-x-0.5 transition" />
               </div>
 
               {/* 2. Main Navigation Shortcuts */}
               <div className="space-y-1">
-                <span className="text-[10px] font-bold text-gray-500 uppercase tracking-wider px-2 block mb-1">
+                <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider px-2 block mb-1">
                   Main Shortcuts
                 </span>
 
@@ -241,10 +246,10 @@ export const Header: React.FC<HeaderProps> = ({
                   className={`w-full p-2.5 rounded-xl flex items-center gap-3 text-xs font-bold transition ${
                     activeTab === 'feed'
                       ? 'bg-purple-600 text-white'
-                      : 'text-gray-300 hover:bg-gray-900'
+                      : 'text-slate-700 hover:bg-slate-100'
                   }`}
                 >
-                  <Compass className="w-4 h-4 text-purple-300" />
+                  <Compass className="w-4 h-4 text-purple-600" />
                   <span>Community Feed</span>
                 </button>
 
@@ -254,10 +259,10 @@ export const Header: React.FC<HeaderProps> = ({
                   className={`w-full p-2.5 rounded-xl flex items-center gap-3 text-xs font-bold transition ${
                     activeTab === 'chat'
                       ? 'bg-purple-600 text-white'
-                      : 'text-gray-300 hover:bg-gray-900'
+                      : 'text-slate-700 hover:bg-slate-100'
                   }`}
                 >
-                  <Sparkles className="w-4 h-4 text-teal-300" />
+                  <Sparkles className="w-4 h-4 text-teal-600" />
                   <span>AI Tools & Studio</span>
                 </button>
 
@@ -267,10 +272,10 @@ export const Header: React.FC<HeaderProps> = ({
                   className={`w-full p-2.5 rounded-xl flex items-center gap-3 text-xs font-bold transition ${
                     activeTab === 'reels'
                       ? 'bg-purple-600 text-white'
-                      : 'text-gray-300 hover:bg-gray-900'
+                      : 'text-slate-700 hover:bg-slate-100'
                   }`}
                 >
-                  <Film className="w-4 h-4 text-pink-300" />
+                  <Film className="w-4 h-4 text-pink-600" />
                   <span>90s Reels</span>
                 </button>
 
@@ -280,14 +285,14 @@ export const Header: React.FC<HeaderProps> = ({
                   className={`w-full p-2.5 rounded-xl flex items-center justify-between text-xs font-bold transition ${
                     activeTab === 'groups'
                       ? 'bg-purple-600 text-white'
-                      : 'text-gray-300 hover:bg-gray-900'
+                      : 'text-slate-700 hover:bg-slate-100'
                   }`}
                 >
                   <div className="flex items-center gap-3">
-                    <Users className="w-4 h-4 text-amber-300" />
+                    <Users className="w-4 h-4 text-amber-600" />
                     <span>Groups & Hubs</span>
                   </div>
-                  <span className="text-[10px] px-1.5 py-0.2 bg-gray-800 rounded-full text-gray-400 font-normal">
+                  <span className="text-[10px] px-1.5 py-0.2 bg-slate-100 rounded-full text-slate-600 font-normal">
                     {groups.length}
                   </span>
                 </button>
@@ -298,14 +303,14 @@ export const Header: React.FC<HeaderProps> = ({
                   className={`w-full p-2.5 rounded-xl flex items-center justify-between text-xs font-bold transition ${
                     activeTab === 'pages'
                       ? 'bg-purple-600 text-white'
-                      : 'text-gray-300 hover:bg-gray-900'
+                      : 'text-slate-700 hover:bg-slate-100'
                   }`}
                 >
                   <div className="flex items-center gap-3">
-                    <FileText className="w-4 h-4 text-blue-300" />
+                    <FileText className="w-4 h-4 text-blue-600" />
                     <span>Pages & Channels</span>
                   </div>
-                  <span className="text-[10px] px-1.5 py-0.2 bg-gray-800 rounded-full text-gray-400 font-normal">
+                  <span className="text-[10px] px-1.5 py-0.2 bg-slate-100 rounded-full text-slate-600 font-normal">
                     {pages.length}
                   </span>
                 </button>
@@ -316,38 +321,41 @@ export const Header: React.FC<HeaderProps> = ({
                   className={`w-full p-2.5 rounded-xl flex items-center gap-3 text-xs font-bold transition ${
                     activeTab === 'live'
                       ? 'bg-purple-600 text-white'
-                      : 'text-gray-300 hover:bg-gray-900'
+                      : 'text-slate-700 hover:bg-slate-100'
                   }`}
                 >
-                  <Radio className="w-4 h-4 text-rose-400" />
+                  <Radio className="w-4 h-4 text-rose-600" />
                   <span>Go Live / Broadcasts</span>
                 </button>
 
-                <a
-                  href="https://shop.metfaai.com"
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="w-full p-2.5 rounded-xl flex items-center justify-between text-xs font-bold text-gray-300 hover:bg-gray-900 hover:text-teal-300 transition"
-                  title="Sellme Marketplace (shop.metfaai.com)"
+                <button
+                  type="button"
+                  onClick={() => handleNavigate('marketplace')}
+                  className={`w-full p-2.5 rounded-xl flex items-center justify-between text-xs font-bold transition cursor-pointer ${
+                    activeTab === 'marketplace'
+                      ? 'bg-gradient-to-r from-purple-600 to-teal-500 text-white'
+                      : 'text-slate-700 hover:bg-slate-100 hover:text-teal-600'
+                  }`}
+                  title="Sellme Marketplace & AliExpress"
                 >
                   <div className="flex items-center gap-3">
-                    <ShoppingBag className="w-4 h-4 text-teal-400" />
-                    <span>Sellme Marketplace</span>
+                    <ShoppingBag className={`w-4 h-4 ${activeTab === 'marketplace' ? 'text-white' : 'text-teal-600'}`} />
+                    <span>Sellme Marketplace & AliExpress</span>
                   </div>
-                  <ExternalLink className="w-3 h-3 text-gray-500" />
-                </a>
+                  <span className="text-[10px] bg-teal-100 text-teal-800 px-2 py-0.5 rounded-full border border-teal-200 font-bold">Shop</span>
+                </button>
               </div>
 
               {/* 3. FEATURED SAMPLE CREATORS & PAGES */}
-              <div className="pt-3 border-t border-gray-800 space-y-2">
+              <div className="pt-3 border-t border-slate-200 space-y-2">
                 <div className="flex items-center justify-between px-2">
-                  <span className="text-[10px] font-bold text-gray-500 uppercase tracking-wider block">
+                  <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">
                     Featured Creators & Pages
                   </span>
                   <button
                     type="button"
                     onClick={() => handleNavigate('pages')}
-                    className="text-[10px] text-purple-400 hover:text-purple-300 font-semibold"
+                    className="text-[10px] text-purple-600 hover:text-purple-700 font-semibold"
                   >
                     View All
                   </button>
@@ -358,33 +366,33 @@ export const Header: React.FC<HeaderProps> = ({
                     <div
                       key={page.id}
                       onClick={() => handleNavigate('pages')}
-                      className="p-2 bg-gray-900/60 hover:bg-gray-900 rounded-xl border border-gray-850 hover:border-gray-750 flex items-center justify-between cursor-pointer transition"
+                      className="p-2 bg-slate-50 hover:bg-slate-100 rounded-xl border border-slate-200 flex items-center justify-between cursor-pointer transition"
                     >
                       <div className="flex items-center gap-2.5 min-w-0">
                         <img
                           src={page.avatar}
                           alt={page.name}
-                          className="w-7 h-7 rounded-lg object-cover shrink-0 border border-gray-750"
+                          className="w-7 h-7 rounded-lg object-cover shrink-0 border border-slate-200"
                         />
                         <div className="min-w-0">
-                          <div className="text-xs font-bold text-gray-200 truncate flex items-center gap-1">
+                          <div className="text-xs font-bold text-slate-800 truncate flex items-center gap-1">
                             <span>{page.name}</span>
-                            {page.isVerified && <ShieldCheck className="w-3 h-3 text-teal-400 shrink-0" />}
+                            {page.isVerified && <ShieldCheck className="w-3 h-3 text-teal-600 shrink-0" />}
                           </div>
-                          <div className="text-[10px] text-gray-400 font-mono truncate">
+                          <div className="text-[10px] text-slate-500 font-mono truncate">
                             {page.category} • {page.followersCount.toLocaleString()} fans
                           </div>
                         </div>
                       </div>
-                      <ExternalLink className="w-3 h-3 text-gray-500 shrink-0" />
+                      <ExternalLink className="w-3 h-3 text-slate-400 shrink-0" />
                     </div>
                   ))}
                 </div>
               </div>
 
               {/* 4. Quick Actions */}
-              <div className="pt-3 border-t border-gray-800 space-y-2">
-                <span className="text-[10px] font-bold text-gray-500 uppercase tracking-wider px-2 block mb-1">
+              <div className="pt-3 border-t border-slate-200 space-y-2">
+                <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider px-2 block mb-1">
                   Create & Manage
                 </span>
 
@@ -395,7 +403,7 @@ export const Header: React.FC<HeaderProps> = ({
                       setIsSideDrawerOpen(false);
                       onCreatePageClick();
                     }}
-                    className="w-full py-2 px-3 bg-gray-900 hover:bg-gray-850 border border-gray-800 text-purple-300 rounded-xl text-xs font-bold flex items-center gap-2 transition"
+                    className="w-full py-2 px-3 bg-slate-50 hover:bg-slate-100 border border-slate-200 text-purple-700 rounded-xl text-xs font-bold flex items-center gap-2 transition"
                   >
                     <Plus className="w-3.5 h-3.5" />
                     <span>Create Creator Page</span>
@@ -409,7 +417,7 @@ export const Header: React.FC<HeaderProps> = ({
                       setIsSideDrawerOpen(false);
                       onCreateGroupClick();
                     }}
-                    className="w-full py-2 px-3 bg-gray-900 hover:bg-gray-850 border border-gray-800 text-teal-300 rounded-xl text-xs font-bold flex items-center gap-2 transition"
+                    className="w-full py-2 px-3 bg-slate-50 hover:bg-slate-100 border border-slate-200 text-teal-700 rounded-xl text-xs font-bold flex items-center gap-2 transition"
                   >
                     <Users className="w-3.5 h-3.5" />
                     <span>Create New Group</span>
@@ -424,7 +432,7 @@ export const Header: React.FC<HeaderProps> = ({
                         setIsSideDrawerOpen(false);
                         onOpenAuthModal();
                       }}
-                      className="w-full py-2 px-3 bg-gradient-to-r from-purple-600 to-teal-500 text-white rounded-xl text-xs font-bold flex items-center gap-2 shadow-sm transition"
+                      className="w-full py-2 px-3 bg-gradient-to-r from-purple-600 to-teal-500 text-white rounded-xl text-xs font-bold flex items-center gap-2 shadow-xs transition"
                     >
                       <LogIn className="w-3.5 h-3.5" />
                       <span>Phone / Gmail Login</span>
@@ -437,9 +445,9 @@ export const Header: React.FC<HeaderProps> = ({
                       setIsSideDrawerOpen(false);
                       logout();
                     }}
-                    className="w-full py-2 px-3 bg-rose-950/40 hover:bg-rose-900/40 border border-rose-800/40 text-rose-300 rounded-xl text-xs font-bold flex items-center gap-2 transition"
+                    className="w-full py-2 px-3 bg-rose-50 hover:bg-rose-100 border border-rose-200 text-rose-700 rounded-xl text-xs font-bold flex items-center gap-2 transition"
                   >
-                    <LogOut className="w-3.5 h-3.5 text-rose-400" />
+                    <LogOut className="w-3.5 h-3.5 text-rose-600" />
                     <span>Log Out (@{authUser.username})</span>
                   </button>
                 )}
@@ -447,7 +455,7 @@ export const Header: React.FC<HeaderProps> = ({
             </div>
 
             {/* Drawer Footer */}
-            <div className="pt-4 border-t border-gray-800 space-y-2 text-xs text-gray-400">
+            <div className="pt-4 border-t border-slate-200 space-y-2 text-xs text-slate-500">
               {onOpenSettings && (
                 <button
                   type="button"
@@ -455,9 +463,9 @@ export const Header: React.FC<HeaderProps> = ({
                     setIsSideDrawerOpen(false);
                     onOpenSettings();
                   }}
-                  className="w-full py-2 px-3 rounded-xl hover:bg-gray-900 flex items-center gap-2 text-gray-300 hover:text-white transition"
+                  className="w-full py-2 px-3 rounded-xl hover:bg-slate-100 flex items-center gap-2 text-slate-700 transition"
                 >
-                  <Settings className="w-4 h-4 text-gray-400" />
+                  <Settings className="w-4 h-4 text-slate-400" />
                   <span>Studio & Multi-AI Settings</span>
                 </button>
               )}
@@ -468,13 +476,13 @@ export const Header: React.FC<HeaderProps> = ({
                   setIsSideDrawerOpen(false);
                   window.dispatchEvent(new CustomEvent('metfa_open_api_keys_modal'));
                 }}
-                className="w-full py-2 px-3 rounded-xl hover:bg-teal-950/40 border border-teal-500/20 hover:border-teal-500/50 flex items-center justify-between text-teal-300 hover:text-teal-200 transition"
+                className="w-full py-2 px-3 rounded-xl bg-teal-50 hover:bg-teal-100 border border-teal-200 flex items-center justify-between text-teal-800 transition"
               >
                 <div className="flex items-center gap-2">
-                  <Key className="w-4 h-4 text-teal-400" />
+                  <Key className="w-4 h-4 text-teal-600" />
                   <span>App Secrets & API Keys</span>
                 </div>
-                <span className="text-[10px] bg-teal-500/20 text-teal-300 px-1.5 py-0.5 rounded font-mono">
+                <span className="text-[10px] bg-teal-200 text-teal-900 px-1.5 py-0.5 rounded font-mono">
                   BYOK
                 </span>
               </button>
@@ -488,25 +496,25 @@ export const Header: React.FC<HeaderProps> = ({
                     setIsSideDrawerOpen(false);
                     onInstallPwa();
                   }}
-                  className="w-full py-2 px-3 rounded-xl bg-gradient-to-r from-teal-950/60 to-purple-950/60 border border-teal-500/40 hover:border-teal-400 flex items-center justify-between text-teal-300 hover:text-white transition group"
+                  className="w-full py-2 px-3 rounded-xl bg-gradient-to-r from-teal-50 to-purple-50 border border-teal-300 hover:border-teal-400 flex items-center justify-between text-teal-900 transition group"
                 >
                   <div className="flex items-center gap-2">
-                    <Download className="w-4 h-4 text-teal-400 group-hover:translate-y-0.5 transition-transform" />
+                    <Download className="w-4 h-4 text-teal-600 group-hover:translate-y-0.5 transition-transform" />
                     <span className="font-bold">Install Metfa App</span>
                   </div>
-                  <span className="text-[10px] bg-teal-500/20 text-teal-300 px-1.5 py-0.5 rounded-full font-semibold">PWA</span>
+                  <span className="text-[10px] bg-teal-200 text-teal-900 px-1.5 py-0.5 rounded-full font-semibold">PWA</span>
                 </button>
               )}
 
               {/* PWA Active Status (When running in standalone display mode) */}
               {isStandalone && (
-                <div className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-gray-900/60 border border-gray-800/80 text-[11px] text-teal-400">
-                  <CheckCircle2 className="w-3.5 h-3.5 text-teal-400 shrink-0" />
+                <div className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-slate-100 border border-slate-200 text-[11px] text-teal-800">
+                  <CheckCircle2 className="w-3.5 h-3.5 text-teal-600 shrink-0" />
                   <span>Metfa Social Desktop/Mobile App (Installed)</span>
                 </div>
               )}
 
-              <div className="text-[10px] text-gray-500 px-3">
+              <div className="text-[10px] text-slate-400 px-3">
                 Metfa Social v2.6 • Unified Creator & AI Ecosystem
               </div>
             </div>

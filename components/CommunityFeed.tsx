@@ -622,7 +622,7 @@ export const CommunityFeed: React.FC<CommunityFeedProps> = ({
   return (
     <div className="flex-1 overflow-y-auto w-full max-w-2xl lg:max-w-3xl mx-auto px-3 sm:px-4 py-4 sm:py-6 space-y-4 sm:space-y-5">
       {/* 1. Prominent "Create Post" Card at Top of Main Social Feed */}
-      <div className="bg-gray-900 border border-gray-800 rounded-3xl p-3.5 sm:p-4 shadow-xl space-y-3">
+      <div className="bg-white border border-slate-200 rounded-3xl p-3.5 sm:p-4 shadow-sm space-y-3">
         <div className="flex items-center gap-3">
           <img
             src={userProfile.avatar}
@@ -632,52 +632,52 @@ export const CommunityFeed: React.FC<CommunityFeedProps> = ({
           <button
             type="button"
             onClick={onCreatePostClick}
-            className="flex-1 bg-gray-950/80 hover:bg-gray-950 border border-gray-800 hover:border-purple-500/50 rounded-2xl px-4 py-2.5 text-left text-xs sm:text-sm text-gray-400 transition"
+            className="flex-1 bg-slate-100 hover:bg-slate-200/80 border border-slate-200 hover:border-purple-500/50 rounded-2xl px-4 py-2.5 text-left text-xs sm:text-sm text-slate-600 transition cursor-pointer"
           >
             What's on your mind, {userProfile.name.split(' ')[0]}?
           </button>
         </div>
 
-        <div className="flex items-center justify-between pt-2 border-t border-gray-800/80 gap-1">
+        <div className="flex items-center justify-between pt-2 border-t border-slate-100 gap-1">
           <button
             type="button"
             onClick={onCreatePostClick}
-            className="flex-1 py-1.5 px-2 rounded-xl text-xs font-bold text-gray-300 hover:text-white hover:bg-gray-850 transition flex items-center justify-center gap-1.5"
+            className="flex-1 py-1.5 px-2 rounded-xl text-xs font-bold text-slate-700 hover:text-slate-900 hover:bg-slate-100 transition flex items-center justify-center gap-1.5 cursor-pointer"
           >
-            <ImageIcon className="w-4 h-4 text-emerald-400" />
+            <ImageIcon className="w-4 h-4 text-emerald-600" />
             <span>Photo / Video</span>
           </button>
 
           <button
             type="button"
             onClick={onCreatePostClick}
-            className="flex-1 py-1.5 px-2 rounded-xl text-xs font-bold text-gray-300 hover:text-white hover:bg-gray-850 transition flex items-center justify-center gap-1.5"
+            className="flex-1 py-1.5 px-2 rounded-xl text-xs font-bold text-slate-700 hover:text-slate-900 hover:bg-slate-100 transition flex items-center justify-center gap-1.5 cursor-pointer"
           >
-            <Type className="w-4 h-4 text-purple-400" />
+            <Type className="w-4 h-4 text-purple-600" />
             <span>Text Post</span>
           </button>
 
           <button
             type="button"
             onClick={onCreatePostClick}
-            className="flex-1 py-1.5 px-2 rounded-xl text-xs font-bold text-teal-300 hover:text-teal-200 hover:bg-gray-850 transition flex items-center justify-center gap-1.5"
+            className="flex-1 py-1.5 px-2 rounded-xl text-xs font-bold text-teal-700 hover:text-teal-900 hover:bg-slate-100 transition flex items-center justify-center gap-1.5 cursor-pointer"
           >
-            <Sparkles className="w-4 h-4 text-teal-400" />
+            <Sparkles className="w-4 h-4 text-teal-600" />
             <span>AI Magic</span>
           </button>
         </div>
       </div>
 
       {/* 2. Feed Filters Bar */}
-      <div className="flex items-center justify-between gap-3 bg-gray-900/80 p-2 rounded-2xl border border-gray-800 backdrop-blur-md">
+      <div className="flex items-center justify-between gap-3 bg-white p-2 rounded-2xl border border-slate-200 shadow-xs">
         <div className="flex items-center gap-1">
           <button
             type="button"
             onClick={() => setActiveFilter('all')}
-            className={`px-3 py-1.5 rounded-xl text-xs font-bold transition flex items-center gap-1 ${
+            className={`px-3 py-1.5 rounded-xl text-xs font-bold transition flex items-center gap-1 cursor-pointer ${
               activeFilter === 'all'
-                ? 'bg-purple-600 text-white shadow-sm'
-                : 'text-gray-400 hover:text-white hover:bg-gray-850'
+                ? 'bg-purple-600 text-white shadow-xs'
+                : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
             }`}
           >
             <Compass className="w-3.5 h-3.5" />
@@ -687,26 +687,26 @@ export const CommunityFeed: React.FC<CommunityFeedProps> = ({
           <button
             type="button"
             onClick={() => setActiveFilter('for_you')}
-            className={`px-3 py-1.5 rounded-xl text-xs font-bold transition flex items-center gap-1 ${
+            className={`px-3 py-1.5 rounded-xl text-xs font-bold transition flex items-center gap-1 cursor-pointer ${
               activeFilter === 'for_you'
-                ? 'bg-purple-600 text-white shadow-sm'
-                : 'text-gray-400 hover:text-white hover:bg-gray-850'
+                ? 'bg-purple-600 text-white shadow-xs'
+                : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
             }`}
           >
-            <Flame className="w-3.5 h-3.5 text-amber-400" />
+            <Flame className="w-3.5 h-3.5 text-amber-500" />
             <span>For You</span>
           </button>
 
           <button
             type="button"
             onClick={() => setActiveFilter('trending')}
-            className={`px-3 py-1.5 rounded-xl text-xs font-bold transition flex items-center gap-1 ${
+            className={`px-3 py-1.5 rounded-xl text-xs font-bold transition flex items-center gap-1 cursor-pointer ${
               activeFilter === 'trending'
-                ? 'bg-purple-600 text-white shadow-sm'
-                : 'text-gray-400 hover:text-white hover:bg-gray-850'
+                ? 'bg-purple-600 text-white shadow-xs'
+                : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
             }`}
           >
-            <TrendingUp className="w-3.5 h-3.5 text-teal-400" />
+            <TrendingUp className="w-3.5 h-3.5 text-teal-600" />
             <span>Trending</span>
           </button>
         </div>
@@ -739,32 +739,32 @@ export const CommunityFeed: React.FC<CommunityFeedProps> = ({
             <div
               key={post.id}
               id={`post-${post.id}`}
-              className={`bg-gray-900 border rounded-3xl overflow-hidden shadow-xl transition-all duration-500 animate-fadeIn ${
+              className={`bg-white border rounded-3xl overflow-hidden shadow-sm transition-all duration-500 animate-fadeIn ${
                 highlightedPostId === post.id
-                  ? 'border-purple-500 ring-4 ring-purple-500/30 scale-[1.01] shadow-purple-900/40'
-                  : 'border-gray-800 hover:border-purple-500/30'
+                  ? 'border-purple-500 ring-4 ring-purple-500/20 scale-[1.01] shadow-purple-500/20'
+                  : 'border-slate-200 hover:border-purple-300'
               }`}
             >
               {/* Post Author Header */}
-              <div className="p-4 flex items-center justify-between">
+              <div className="p-4 flex items-center justify-between border-b border-slate-100">
                 <div className="flex items-center gap-3">
                   <img
                     src={post.postingIdentity?.avatar || post.author.avatar}
                     alt={post.author.name}
-                    className="w-10 h-10 rounded-2xl object-cover border border-gray-700 shadow-sm"
+                    className="w-10 h-10 rounded-2xl object-cover border border-slate-200 shadow-xs"
                   />
                   <div>
                     <div className="flex items-center gap-1.5">
-                      <h4 className="text-sm font-bold text-white leading-tight">
+                      <h4 className="text-sm font-bold text-slate-900 leading-tight">
                         {post.postingIdentity?.name || post.author.name}
                       </h4>
                       {post.postingIdentity?.badge && (
-                        <span className="text-[10px] px-1.5 py-0.2 rounded bg-purple-950 text-purple-300 border border-purple-800">
+                        <span className="text-[10px] px-1.5 py-0.2 rounded bg-purple-50 text-purple-700 border border-purple-200">
                           {post.postingIdentity.badge}
                         </span>
                       )}
                     </div>
-                    <div className="flex items-center gap-2 text-xs text-gray-400">
+                    <div className="flex items-center gap-2 text-xs text-slate-500 font-medium">
                       <span>@{post.postingIdentity?.username || post.author.username}</span>
                       <span>•</span>
                       <span>{post.createdAt}</span>
@@ -774,7 +774,7 @@ export const CommunityFeed: React.FC<CommunityFeedProps> = ({
 
                 <div className="flex items-center gap-2">
                   {post.stylePreset && (
-                    <span className="text-[11px] font-semibold px-2.5 py-1 bg-purple-950/80 border border-purple-800/60 text-purple-300 rounded-full">
+                    <span className="text-[11px] font-semibold px-2.5 py-1 bg-purple-50 border border-purple-200 text-purple-700 rounded-full">
                       {post.stylePreset}
                     </span>
                   )}
@@ -789,7 +789,7 @@ export const CommunityFeed: React.FC<CommunityFeedProps> = ({
                         setActivePostMenuId((prev) => (prev === post.id ? null : post.id));
                         setActiveCommentMenuId(null);
                       }}
-                      className="p-1.5 rounded-xl text-gray-400 hover:text-white hover:bg-gray-800 transition"
+                      className="p-1.5 rounded-xl text-slate-400 hover:text-slate-900 hover:bg-slate-100 transition"
                       title="Post options"
                       aria-label="Post options"
                     >
@@ -799,7 +799,7 @@ export const CommunityFeed: React.FC<CommunityFeedProps> = ({
                     {activePostMenuId === post.id && (
                       <div
                         id={`post-menu-dropdown-${post.id}`}
-                        className="absolute right-0 top-full mt-1.5 w-48 bg-gray-950 border border-gray-800 rounded-2xl shadow-2xl py-1.5 z-30 animate-scaleUp text-xs backdrop-blur-md"
+                        className="absolute right-0 top-full mt-1.5 w-48 bg-white border border-slate-200 rounded-2xl shadow-xl py-1.5 z-30 animate-scaleUp text-xs"
                         onClick={(e) => e.stopPropagation()}
                       >
                         {/* 1. Save Post / Unsave Post at the top */}
@@ -810,9 +810,9 @@ export const CommunityFeed: React.FC<CommunityFeedProps> = ({
                             handleToggleBookmark(post.id);
                             setActivePostMenuId(null);
                           }}
-                          className="w-full px-3.5 py-2 text-left text-gray-200 hover:text-white hover:bg-purple-950/60 flex items-center gap-2.5 transition font-medium cursor-pointer"
+                          className="w-full px-3.5 py-2 text-left text-slate-700 hover:text-purple-700 hover:bg-purple-50 flex items-center gap-2.5 transition font-medium cursor-pointer"
                         >
-                          <Bookmark className={`w-4 h-4 ${post.isBookmarked ? 'text-amber-400 fill-amber-400' : 'text-amber-400'}`} />
+                          <Bookmark className={`w-4 h-4 ${post.isBookmarked ? 'text-amber-500 fill-amber-500' : 'text-amber-500'}`} />
                           <span className="font-semibold">{post.isBookmarked ? 'Unsave Post' : 'Save Post'}</span>
                         </button>
 
@@ -824,16 +824,16 @@ export const CommunityFeed: React.FC<CommunityFeedProps> = ({
                             setActivePostMenuId(null);
                             showToast('Post link copied to clipboard');
                           }}
-                          className="w-full px-3.5 py-2 text-left text-gray-200 hover:text-white hover:bg-gray-900 flex items-center gap-2.5 transition cursor-pointer"
+                          className="w-full px-3.5 py-2 text-left text-slate-700 hover:text-slate-900 hover:bg-slate-50 flex items-center gap-2.5 transition cursor-pointer"
                         >
-                          <Copy className="w-4 h-4 text-teal-400" />
+                          <Copy className="w-4 h-4 text-teal-600" />
                           <span>Copy Link</span>
                         </button>
 
                         {/* 3. Author actions (Edit / Delete) vs Non-author (Report) */}
                         {isContentOwner(post.author.id, userProfile.id) || (post.postingIdentity && isContentOwner(post.postingIdentity.id, userProfile.id)) ? (
                           <>
-                            <div className="h-px bg-gray-800/80 my-1" />
+                            <div className="h-px bg-slate-100 my-1" />
                             <button
                               type="button"
                               id={`edit-post-btn-${post.id}`}
@@ -841,9 +841,9 @@ export const CommunityFeed: React.FC<CommunityFeedProps> = ({
                                 setActivePostMenuId(null);
                                 setEditingPost(post);
                               }}
-                              className="w-full px-3.5 py-2 text-left text-purple-300 hover:text-white hover:bg-purple-950/60 flex items-center gap-2.5 transition font-medium cursor-pointer"
+                              className="w-full px-3.5 py-2 text-left text-purple-700 hover:text-purple-900 hover:bg-purple-50 flex items-center gap-2.5 transition font-medium cursor-pointer"
                             >
-                              <Edit3 className="w-4 h-4 text-purple-400" />
+                              <Edit3 className="w-4 h-4 text-purple-600" />
                               <span>Edit Post</span>
                             </button>
 
@@ -854,7 +854,7 @@ export const CommunityFeed: React.FC<CommunityFeedProps> = ({
                                 setActivePostMenuId(null);
                                 handleDeletePost(post.id);
                               }}
-                              className="w-full px-3.5 py-2 text-left text-rose-400 hover:text-rose-300 hover:bg-rose-950/40 flex items-center gap-2.5 transition font-medium cursor-pointer"
+                              className="w-full px-3.5 py-2 text-left text-rose-600 hover:text-rose-700 hover:bg-rose-50 flex items-center gap-2.5 transition font-medium cursor-pointer"
                             >
                               <Trash2 className="w-4 h-4" />
                               <span>Delete Post</span>
@@ -862,16 +862,16 @@ export const CommunityFeed: React.FC<CommunityFeedProps> = ({
                           </>
                         ) : (
                           <>
-                            <div className="h-px bg-gray-800/80 my-1" />
+                            <div className="h-px bg-slate-100 my-1" />
                             <button
                               type="button"
                               onClick={() => {
                                 setActivePostMenuId(null);
                                 showToast('Post reported to community moderators');
                               }}
-                              className="w-full px-3.5 py-2 text-left text-gray-400 hover:text-gray-200 hover:bg-gray-900 flex items-center gap-2.5 transition cursor-pointer"
+                              className="w-full px-3.5 py-2 text-left text-slate-600 hover:text-slate-900 hover:bg-slate-50 flex items-center gap-2.5 transition cursor-pointer"
                             >
-                              <Flag className="w-4 h-4 text-gray-500" />
+                              <Flag className="w-4 h-4 text-slate-400" />
                               <span>Report Post</span>
                             </button>
                           </>
@@ -887,7 +887,7 @@ export const CommunityFeed: React.FC<CommunityFeedProps> = ({
                 /* Pure Text / Gradient Canvas */
                 <div
                   className={`p-6 sm:p-8 flex items-center justify-center text-center ${
-                    hasGradient ? GRADIENT_PRESETS[post.textBackgroundPreset!] : 'bg-gray-950/60 text-gray-100 text-left'
+                    hasGradient ? GRADIENT_PRESETS[post.textBackgroundPreset!] : 'bg-slate-50 text-slate-900 text-left'
                   }`}
                 >
                   <PostContent
@@ -897,18 +897,18 @@ export const CommunityFeed: React.FC<CommunityFeedProps> = ({
                     textClassName={
                       hasGradient
                         ? 'text-lg sm:text-xl font-black text-white leading-relaxed text-center'
-                        : 'text-sm sm:text-base text-gray-200 leading-relaxed font-normal text-left'
+                        : 'text-sm sm:text-base text-slate-900 leading-relaxed font-normal text-left'
                     }
                     buttonClassName={
                       hasGradient
                         ? 'text-white/90 hover:text-white underline font-bold text-xs mt-2'
-                        : 'text-blue-400 hover:text-blue-300 font-semibold text-sm mt-1'
+                        : 'text-purple-600 hover:text-purple-700 font-semibold text-sm mt-1'
                     }
                   />
                 </div>
               ) : (
                 /* Photo / Video / Gallery */
-                <div className="relative group bg-gray-950 max-h-[520px] overflow-hidden flex items-center justify-center">
+                <div className="relative group bg-slate-950 max-h-[520px] overflow-hidden flex items-center justify-center">
                   {post.videoSrc ? (
                     <video
                       src={post.videoSrc}
@@ -925,7 +925,7 @@ export const CommunityFeed: React.FC<CommunityFeedProps> = ({
                       }`}
                     >
                       {post.imageGallery.map((img, i) => (
-                        <div key={i} className="aspect-square bg-gray-950 overflow-hidden">
+                        <div key={i} className="aspect-square bg-slate-950 overflow-hidden">
                           <img src={img} alt={`Gallery ${i}`} className="w-full h-full object-cover hover:scale-105 transition" />
                         </div>
                       ))}
@@ -946,8 +946,8 @@ export const CommunityFeed: React.FC<CommunityFeedProps> = ({
                   <PostContent
                     text={post.caption}
                     charLimit={160}
-                    textClassName="text-sm text-gray-200 leading-relaxed font-normal"
-                    buttonClassName="text-blue-400 hover:text-blue-300 font-semibold text-sm mt-1"
+                    textClassName="text-sm text-slate-800 leading-relaxed font-normal"
+                    buttonClassName="text-purple-600 hover:text-purple-700 font-semibold text-sm mt-1"
                   />
                 )}
 
@@ -961,10 +961,10 @@ export const CommunityFeed: React.FC<CommunityFeedProps> = ({
                 )}
 
                 {/* Post Action Buttons & Reaction Popover */}
-                <div className="relative pt-2 border-t border-gray-800 text-gray-400 text-xs">
+                <div className="relative pt-2 border-t border-slate-100 text-slate-600 text-xs">
                   {/* Floating Reactions Bar Popover */}
                   {isReactionPickerOpen && (
-                    <div className="absolute -top-12 left-2 z-30 bg-gray-950/95 border border-purple-500/40 rounded-full px-2 py-1.5 shadow-2xl flex items-center gap-1.5 animate-fadeIn backdrop-blur-md">
+                    <div className="absolute -top-12 left-2 z-30 bg-white border border-slate-200 rounded-full px-2 py-1.5 shadow-xl flex items-center gap-1.5 animate-fadeIn">
                       {Object.entries(REACTION_EMOJIS).map(([key, item]) => (
                         <button
                           key={key}
@@ -991,7 +991,7 @@ export const CommunityFeed: React.FC<CommunityFeedProps> = ({
                             ? `${REACTION_EMOJIS[userReaction]?.color} font-bold`
                             : post.isLiked
                             ? 'text-rose-500 font-bold'
-                            : 'hover:text-white'
+                            : 'hover:text-slate-900'
                         }`}
                       >
                         {userReaction ? (
@@ -1007,7 +1007,7 @@ export const CommunityFeed: React.FC<CommunityFeedProps> = ({
                         type="button"
                         onClick={() => setActiveCommentsPostId(isCommentsOpen ? null : post.id)}
                         className={`flex items-center gap-1.5 transition ${
-                          isCommentsOpen ? 'text-purple-400 font-bold' : 'hover:text-white'
+                          isCommentsOpen ? 'text-purple-600 font-bold' : 'hover:text-slate-900'
                         }`}
                       >
                         <MessageCircle className="w-4 h-4" />
@@ -1018,7 +1018,7 @@ export const CommunityFeed: React.FC<CommunityFeedProps> = ({
                       <button
                         type="button"
                         onClick={() => onRemixPrompt(post.prompt, post.stylePreset)}
-                        className="flex items-center gap-1.5 hover:text-white transition"
+                        className="flex items-center gap-1.5 hover:text-slate-900 transition"
                       >
                         <Repeat className="w-4 h-4" />
                         <span>{post.remixCount || 0}</span>
@@ -1029,7 +1029,7 @@ export const CommunityFeed: React.FC<CommunityFeedProps> = ({
                       type="button"
                       id={`share-post-${post.id}`}
                       onClick={() => handleSharePost(post)}
-                      className="flex items-center gap-1.5 hover:text-white transition group"
+                      className="flex items-center gap-1.5 hover:text-slate-900 transition group"
                       title="Share Post"
                     >
                       <Share2 className="w-4 h-4 group-hover:scale-110 transition" />
@@ -1040,13 +1040,13 @@ export const CommunityFeed: React.FC<CommunityFeedProps> = ({
 
                 {/* Comments & 10s Voice Audio Section */}
                 {isCommentsOpen && (
-                  <div className="pt-3 border-t border-gray-800 space-y-3 animate-fadeIn">
+                  <div className="pt-3 border-t border-slate-100 space-y-3 animate-fadeIn">
                     {/* Recording Banner if active */}
                     {isThisRecordingVoice && (
-                      <div className="p-3 bg-rose-950/80 border border-rose-800/80 rounded-2xl flex items-center justify-between animate-pulse">
+                      <div className="p-3 bg-rose-50 border border-rose-200 rounded-2xl flex items-center justify-between animate-pulse">
                         <div className="flex items-center gap-2">
-                          <Radio className="w-4 h-4 text-rose-400 animate-spin" />
-                          <span className="text-xs font-bold text-white">
+                          <Radio className="w-4 h-4 text-rose-600 animate-spin" />
+                          <span className="text-xs font-bold text-rose-900">
                             Recording 10s Voice Comment ({recordTimer}s / 10s max)
                           </span>
                         </div>
@@ -1054,7 +1054,7 @@ export const CommunityFeed: React.FC<CommunityFeedProps> = ({
                           <button
                             type="button"
                             onClick={stopVoiceRecording}
-                            className="px-3 py-1 bg-rose-600 hover:bg-rose-500 text-white rounded-xl text-xs font-bold flex items-center gap-1"
+                            className="px-3 py-1 bg-rose-600 hover:bg-rose-500 text-white rounded-xl text-xs font-bold flex items-center gap-1 shadow-xs"
                           >
                             <Square className="w-3 h-3 fill-current" />
                             <span>Done</span>
@@ -1062,7 +1062,7 @@ export const CommunityFeed: React.FC<CommunityFeedProps> = ({
                           <button
                             type="button"
                             onClick={cancelVoiceRecording}
-                            className="p-1 bg-gray-800 text-gray-300 hover:text-white rounded-lg"
+                            className="p-1 bg-slate-200 text-slate-700 hover:text-slate-900 rounded-lg"
                           >
                             <X className="w-3.5 h-3.5" />
                           </button>
@@ -1072,9 +1072,9 @@ export const CommunityFeed: React.FC<CommunityFeedProps> = ({
 
                     {/* Dictation Banner if active */}
                     {isThisDictating && (
-                      <div className="p-2.5 bg-teal-950/80 border border-teal-800/80 rounded-2xl flex items-center justify-between animate-fadeIn text-xs">
-                        <div className="flex items-center gap-2 text-teal-200">
-                          <Radio className="w-3.5 h-3.5 text-teal-400 animate-spin" />
+                      <div className="p-2.5 bg-teal-50 border border-teal-200 rounded-2xl flex items-center justify-between animate-fadeIn text-xs">
+                        <div className="flex items-center gap-2 text-teal-800">
+                          <Radio className="w-3.5 h-3.5 text-teal-600 animate-spin" />
                           <span className="font-bold">
                             🎙️ Listening to your comment (Auto-detecting language)...
                           </span>
@@ -1082,7 +1082,7 @@ export const CommunityFeed: React.FC<CommunityFeedProps> = ({
                         <button
                           type="button"
                           onClick={() => toggleSpeechToText(post.id)}
-                          className="px-2.5 py-1 bg-teal-500 hover:bg-teal-400 text-black font-bold rounded-lg text-xs"
+                          className="px-2.5 py-1 bg-teal-600 hover:bg-teal-500 text-white font-bold rounded-lg text-xs"
                         >
                           Done
                         </button>
@@ -1094,7 +1094,7 @@ export const CommunityFeed: React.FC<CommunityFeedProps> = ({
                       <img
                         src={userProfile.avatar}
                         alt={userProfile.name}
-                        className="w-7 h-7 rounded-xl object-cover"
+                        className="w-7 h-7 rounded-xl object-cover border border-slate-200"
                       />
                       <div className="flex-1 relative flex items-center">
                         <input
@@ -1111,7 +1111,7 @@ export const CommunityFeed: React.FC<CommunityFeedProps> = ({
                               ? '🎙️ Listening... (Speak now)'
                               : 'Write a comment or speak in any language...'
                           }
-                          className="w-full bg-gray-950 border border-gray-800 rounded-xl pl-3 pr-24 py-2 text-xs text-white focus:outline-none focus:border-purple-500"
+                          className="w-full bg-slate-50 border border-slate-200 rounded-xl pl-3 pr-24 py-2 text-xs text-slate-900 placeholder:text-slate-400 focus:outline-none focus:border-purple-500 focus:bg-white"
                         />
 
                         {/* Mic & Voice triggers */}
@@ -1122,8 +1122,8 @@ export const CommunityFeed: React.FC<CommunityFeedProps> = ({
                             title="Voice Typing (Auto-Detect Language)"
                             className={`p-1 rounded-lg transition ${
                               isThisDictating
-                                ? 'bg-teal-500 text-black animate-pulse font-bold'
-                                : 'text-gray-400 hover:text-teal-300 hover:bg-gray-850'
+                                ? 'bg-teal-600 text-white animate-pulse font-bold'
+                                : 'text-slate-400 hover:text-teal-700 hover:bg-slate-100'
                             }`}
                           >
                             <Mic className="w-3.5 h-3.5" />
@@ -1139,7 +1139,7 @@ export const CommunityFeed: React.FC<CommunityFeedProps> = ({
                             className={`p-1 rounded-lg transition ${
                               isThisRecordingVoice
                                 ? 'bg-rose-600 text-white animate-pulse'
-                                : 'text-gray-400 hover:text-purple-300 hover:bg-gray-850'
+                                : 'text-slate-400 hover:text-purple-700 hover:bg-slate-100'
                             }`}
                           >
                             <Volume2 className="w-3.5 h-3.5" />
@@ -1150,7 +1150,7 @@ export const CommunityFeed: React.FC<CommunityFeedProps> = ({
                       <button
                         type="button"
                         onClick={() => handleAddTextComment(post.id)}
-                        className="p-2 bg-purple-600 hover:bg-purple-500 text-white rounded-xl text-xs font-bold transition shrink-0"
+                        className="p-2 bg-purple-600 hover:bg-purple-500 text-white rounded-xl text-xs font-bold transition shrink-0 shadow-xs"
                       >
                         <Send className="w-3.5 h-3.5" />
                       </button>
@@ -1164,28 +1164,28 @@ export const CommunityFeed: React.FC<CommunityFeedProps> = ({
                         return (
                           <div
                             key={vc.id}
-                            className="flex items-start gap-2.5 text-xs bg-purple-950/30 p-2.5 rounded-2xl border border-purple-900/40"
+                            className="flex items-start gap-2.5 text-xs bg-purple-50 p-2.5 rounded-2xl border border-purple-200"
                           >
                             <img
                               src={vc.author.avatar}
                               alt={vc.author.name}
-                              className="w-7 h-7 rounded-xl object-cover mt-0.5"
+                              className="w-7 h-7 rounded-xl object-cover mt-0.5 border border-purple-200"
                             />
                             <div className="flex-1 min-w-0">
                               <div className="flex items-center justify-between mb-1.5">
-                                <span className="font-bold text-white text-[11px] flex items-center gap-1">
+                                <span className="font-bold text-slate-900 text-[11px] flex items-center gap-1">
                                   <span>{vc.author.name}</span>
-                                  <span className="text-[10px] px-1.5 py-0.2 bg-teal-950 border border-teal-800 text-teal-300 rounded-full font-mono">
+                                  <span className="text-[10px] px-1.5 py-0.2 bg-teal-100 border border-teal-200 text-teal-800 rounded-full font-mono font-medium">
                                     🎤 Voice ({vc.duration}s)
                                   </span>
                                 </span>
                                 <div className="flex items-center gap-1.5">
-                                  <span className="text-[10px] text-gray-500">{vc.timestamp}</span>
+                                  <span className="text-[10px] text-slate-500">{vc.timestamp}</span>
                                   {isContentOwner(vc.author.id, userProfile.id) && (
                                     <button
                                       type="button"
                                       onClick={() => handleDeleteVoiceComment(post.id, vc.id)}
-                                      className="p-1 text-gray-400 hover:text-rose-400 rounded-lg hover:bg-gray-800 transition"
+                                      className="p-1 text-slate-400 hover:text-rose-600 rounded-lg hover:bg-slate-100 transition"
                                       title="Delete voice comment"
                                     >
                                       <Trash2 className="w-3 h-3" />
@@ -1194,11 +1194,11 @@ export const CommunityFeed: React.FC<CommunityFeedProps> = ({
                                 </div>
                               </div>
 
-                              <div className="flex items-center gap-2 bg-gray-950/80 px-3 py-1.5 rounded-xl border border-gray-800">
+                              <div className="flex items-center gap-2 bg-white px-3 py-1.5 rounded-xl border border-slate-200">
                                 <button
                                   type="button"
                                   onClick={() => togglePlayVoice(vc)}
-                                  className="p-1.5 rounded-full bg-purple-600 text-white hover:bg-purple-500 transition shadow-sm"
+                                  className="p-1.5 rounded-full bg-purple-600 text-white hover:bg-purple-500 transition shadow-xs"
                                 >
                                   {isPlaying ? (
                                     <Pause className="w-3 h-3 fill-current" />
@@ -1216,14 +1216,14 @@ export const CommunityFeed: React.FC<CommunityFeedProps> = ({
                                         className={`w-1 rounded-full transition-all ${
                                           isPlaying
                                             ? 'bg-gradient-to-t from-purple-500 to-teal-400 animate-pulse'
-                                            : 'bg-gray-700'
+                                            : 'bg-slate-300'
                                         }`}
                                       />
                                     )
                                   )}
                                 </div>
 
-                                <span className="text-[10px] font-mono text-teal-400 font-bold">
+                                <span className="text-[10px] font-mono text-teal-700 font-bold">
                                   0:0{vc.duration}
                                 </span>
                               </div>
@@ -1244,13 +1244,13 @@ export const CommunityFeed: React.FC<CommunityFeedProps> = ({
                               <img
                                 src={c.author.avatar}
                                 alt={c.author.name}
-                                className="w-7 h-7 rounded-xl object-cover mt-0.5"
+                                className="w-7 h-7 rounded-xl object-cover mt-0.5 border border-slate-200"
                               />
-                              <div className="bg-gray-950/80 p-2.5 rounded-2xl flex-1 border border-gray-800/80">
+                              <div className="bg-slate-50 p-2.5 rounded-2xl flex-1 border border-slate-200">
                                 <div className="flex items-center justify-between mb-1">
-                                  <span className="font-bold text-white text-[11px]">{c.author.name}</span>
+                                  <span className="font-bold text-slate-900 text-[11px]">{c.author.name}</span>
                                   <div className="flex items-center gap-1.5">
-                                    <span className="text-[10px] text-gray-500">{c.timestamp}</span>
+                                    <span className="text-[10px] text-slate-500">{c.timestamp}</span>
 
                                     {/* Comment Context Menu */}
                                     <div className="relative" data-menu-root="true">
@@ -1262,7 +1262,7 @@ export const CommunityFeed: React.FC<CommunityFeedProps> = ({
                                           setActiveCommentMenuId((prev) => (prev === c.id ? null : c.id));
                                           setActivePostMenuId(null);
                                         }}
-                                        className="p-1 rounded-lg text-gray-400 hover:text-white hover:bg-gray-800 transition"
+                                        className="p-1 rounded-lg text-slate-400 hover:text-slate-900 hover:bg-slate-200 transition"
                                         title="Comment options"
                                         aria-label="Comment options"
                                       >
@@ -1272,7 +1272,7 @@ export const CommunityFeed: React.FC<CommunityFeedProps> = ({
                                       {activeCommentMenuId === c.id && (
                                         <div
                                           id={`comment-menu-dropdown-${c.id}`}
-                                          className="absolute right-0 top-full mt-1 w-36 bg-gray-950 border border-gray-800 rounded-xl shadow-2xl py-1 z-30 animate-scaleUp text-xs backdrop-blur-md"
+                                          className="absolute right-0 top-full mt-1 w-36 bg-white border border-slate-200 rounded-xl shadow-xl py-1 z-30 animate-scaleUp text-xs"
                                           onClick={(e) => e.stopPropagation()}
                                         >
                                           {isOwner ? (
@@ -1281,9 +1281,9 @@ export const CommunityFeed: React.FC<CommunityFeedProps> = ({
                                                 type="button"
                                                 id={`edit-comment-btn-${c.id}`}
                                                 onClick={() => handleStartEditComment(c)}
-                                                className="w-full px-2.5 py-1.5 text-left text-gray-200 hover:text-white hover:bg-purple-950/60 flex items-center gap-1.5 transition text-[11px] font-medium"
+                                                className="w-full px-2.5 py-1.5 text-left text-slate-700 hover:text-purple-700 hover:bg-purple-50 flex items-center gap-1.5 transition text-[11px] font-medium"
                                               >
-                                                <Edit3 className="w-3 h-3 text-purple-400" />
+                                                <Edit3 className="w-3 h-3 text-purple-600" />
                                                 <span>Edit Comment</span>
                                               </button>
 
@@ -1291,7 +1291,7 @@ export const CommunityFeed: React.FC<CommunityFeedProps> = ({
                                                 type="button"
                                                 id={`delete-comment-btn-${c.id}`}
                                                 onClick={() => handleDeleteComment(post.id, c.id)}
-                                                className="w-full px-2.5 py-1.5 text-left text-rose-400 hover:text-rose-300 hover:bg-rose-950/40 flex items-center gap-1.5 transition text-[11px] font-medium border-t border-gray-800/80 mt-0.5 pt-1"
+                                                className="w-full px-2.5 py-1.5 text-left text-rose-600 hover:text-rose-700 hover:bg-rose-50 flex items-center gap-1.5 transition text-[11px] font-medium border-t border-slate-100 mt-0.5 pt-1"
                                               >
                                                 <Trash2 className="w-3 h-3" />
                                                 <span>Delete Comment</span>
@@ -1306,9 +1306,9 @@ export const CommunityFeed: React.FC<CommunityFeedProps> = ({
                                                   setActiveCommentMenuId(null);
                                                   showToast('Comment text copied');
                                                 }}
-                                                className="w-full px-2.5 py-1.5 text-left text-gray-300 hover:text-white hover:bg-gray-900 flex items-center gap-1.5 transition text-[11px]"
+                                                className="w-full px-2.5 py-1.5 text-left text-slate-700 hover:text-slate-900 hover:bg-slate-50 flex items-center gap-1.5 transition text-[11px]"
                                               >
-                                                <Copy className="w-3 h-3 text-gray-400" />
+                                                <Copy className="w-3 h-3 text-slate-500" />
                                                 <span>Copy Text</span>
                                               </button>
                                               <button
@@ -1317,7 +1317,7 @@ export const CommunityFeed: React.FC<CommunityFeedProps> = ({
                                                   setActiveCommentMenuId(null);
                                                   showToast('Comment reported');
                                                 }}
-                                                className="w-full px-2.5 py-1.5 text-left text-gray-400 hover:text-gray-200 hover:bg-gray-900 flex items-center gap-1.5 transition text-[11px] border-t border-gray-800/80 mt-0.5 pt-1"
+                                                className="w-full px-2.5 py-1.5 text-left text-slate-600 hover:text-slate-900 hover:bg-slate-50 flex items-center gap-1.5 transition text-[11px] border-t border-slate-100 mt-0.5 pt-1"
                                               >
                                                 <Flag className="w-3 h-3" />
                                                 <span>Report</span>
@@ -1347,14 +1347,14 @@ export const CommunityFeed: React.FC<CommunityFeedProps> = ({
                                         }
                                       }}
                                       rows={2}
-                                      className="w-full bg-gray-900 border border-purple-500 rounded-xl p-2 text-xs text-white focus:outline-none resize-none shadow-inner"
+                                      className="w-full bg-white border border-purple-500 rounded-xl p-2 text-xs text-slate-900 focus:outline-none resize-none shadow-inner"
                                       autoFocus
                                     />
                                     <div className="flex items-center justify-end gap-1.5">
                                       <button
                                         type="button"
                                         onClick={() => setEditingCommentId(null)}
-                                        className="px-2.5 py-1 text-[10px] font-semibold text-gray-400 hover:text-white rounded-lg transition"
+                                        className="px-2.5 py-1 text-[10px] font-semibold text-slate-500 hover:text-slate-800 rounded-lg transition"
                                       >
                                         Cancel
                                       </button>
@@ -1369,18 +1369,18 @@ export const CommunityFeed: React.FC<CommunityFeedProps> = ({
                                     </div>
                                   </div>
                                 ) : (
-                                  <p className="text-gray-300 text-xs leading-relaxed">{c.text}</p>
+                                  <p className="text-slate-800 text-xs leading-relaxed">{c.text}</p>
                                 )}
 
                                 {/* Creator Action: ✨ Quick AI Reply Trigger */}
-                                <div className="mt-2 pt-1 border-t border-gray-800/60 flex items-center justify-between">
+                                <div className="mt-2 pt-1 border-t border-slate-200/80 flex items-center justify-between">
                                   <button
                                     type="button"
                                     onClick={() => handleFetchQuickAIReply(c, post)}
                                     disabled={isLoadingReplies}
-                                    className="text-[10px] font-bold text-teal-400 hover:text-teal-300 flex items-center gap-1 transition"
+                                    className="text-[10px] font-bold text-teal-700 hover:text-teal-800 flex items-center gap-1 transition"
                                   >
-                                    <Sparkles className="w-3 h-3 text-teal-400" />
+                                    <Sparkles className="w-3 h-3 text-teal-600" />
                                     <span>
                                       {isLoadingReplies ? 'Generating smart replies...' : '✨ Quick AI Reply'}
                                     </span>
@@ -1392,7 +1392,7 @@ export const CommunityFeed: React.FC<CommunityFeedProps> = ({
                             {/* Quick AI Replies suggestions row */}
                             {quickReplies && quickReplies.length > 0 && (
                               <div className="pl-9 space-y-1 animate-fadeIn">
-                                <span className="text-[9px] font-bold text-gray-500 uppercase tracking-wider block">
+                                <span className="text-[9px] font-bold text-slate-500 uppercase tracking-wider block">
                                   Tap to reply:
                                 </span>
                                 <div className="flex flex-wrap gap-1.5">
@@ -1401,7 +1401,7 @@ export const CommunityFeed: React.FC<CommunityFeedProps> = ({
                                       key={rIdx}
                                       type="button"
                                       onClick={() => handleAddTextComment(post.id, reply)}
-                                      className="px-2.5 py-1 bg-purple-950/70 hover:bg-purple-800 border border-purple-700/60 text-purple-200 rounded-xl text-[11px] font-medium transition text-left"
+                                      className="px-2.5 py-1 bg-purple-50 hover:bg-purple-100 border border-purple-200 text-purple-800 rounded-xl text-[11px] font-medium transition text-left"
                                     >
                                       {reply}
                                     </button>

@@ -10,6 +10,8 @@ import {
   upsertSupabaseProfile,
   mapSupabaseUserToAuthUser,
   INITIAL_GUEST_USER,
+  getDefaultAvatar,
+  sanitizeAvatarUrl,
 } from '../services/authService';
 import { supabase, isSupabaseConfigured } from '../services/supabaseClient';
 import { UserProfile, PostingIdentity } from '../types/community';
@@ -182,7 +184,7 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         identifier: phoneNumber,
         fullName: name,
         username: customUsername,
-        avatar: customAvatar || `https://api.dicebear.com/7.x/bottts/svg?seed=${name}`,
+        avatar: sanitizeAvatarUrl(customAvatar, customUsername || name),
       });
     },
     [saveProfileAndEnter]
@@ -195,7 +197,7 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         identifier: email,
         fullName: name,
         username: customUsername,
-        avatar: customAvatar || `https://api.dicebear.com/7.x/avataaars/svg?seed=${name}`,
+        avatar: sanitizeAvatarUrl(customAvatar, customUsername || name),
       });
     },
     [saveProfileAndEnter]

@@ -47,7 +47,7 @@ export const BottomNav: React.FC<BottomNavProps> = ({
   ];
 
   return (
-    <nav className="shrink-0 w-full bg-gray-950/95 backdrop-blur-xl border-t border-gray-800/90 py-1.5 px-2 sm:px-4 z-40">
+    <nav className="shrink-0 w-full bg-white/95 backdrop-blur-xl border-t border-slate-200 py-1.5 px-2 sm:px-4 z-40 shadow-xs">
       <div className="max-w-md sm:max-w-lg md:max-w-xl mx-auto flex items-center justify-between">
         {tabs.map((tab) => {
           const Icon = tab.icon;
@@ -63,16 +63,16 @@ export const BottomNav: React.FC<BottomNavProps> = ({
               onClick={() => onNavigateTab(tab.id)}
               className={`flex-1 flex flex-col items-center justify-center py-1 px-1 sm:px-2 rounded-2xl transition relative group cursor-pointer ${
                 isActive
-                  ? 'text-white'
-                  : 'text-gray-400 hover:text-gray-200'
+                  ? 'text-purple-700'
+                  : 'text-slate-500 hover:text-slate-900'
               }`}
             >
               <div className="relative">
                 <div
                   className={`p-1.5 rounded-xl transition ${
                     isActive
-                      ? 'bg-gradient-to-tr from-purple-600 to-teal-500 shadow-md shadow-purple-600/30 text-white'
-                      : 'group-hover:bg-gray-850 text-gray-400 group-hover:text-gray-200'
+                      ? 'bg-gradient-to-tr from-purple-600 to-teal-500 shadow-sm shadow-purple-600/30 text-white'
+                      : 'group-hover:bg-slate-100 text-slate-500 group-hover:text-slate-800'
                   }`}
                 >
                   <Icon className="w-4 h-4" />
@@ -80,7 +80,7 @@ export const BottomNav: React.FC<BottomNavProps> = ({
 
                 {/* Unread badge count for Notifications tab */}
                 {tab.badge && tab.badge > 0 ? (
-                  <span className="absolute -top-1 -right-1.5 min-w-[16px] h-4 px-1 bg-gradient-to-r from-pink-500 to-rose-500 text-[10px] font-black text-white rounded-full flex items-center justify-center shadow-md animate-pulse">
+                  <span className="absolute -top-1 -right-1.5 min-w-[16px] h-4 px-1 bg-gradient-to-r from-pink-500 to-rose-500 text-[10px] font-black text-white rounded-full flex items-center justify-center shadow-xs animate-pulse">
                     {tab.badge > 99 ? '99+' : tab.badge}
                   </span>
                 ) : null}
@@ -88,14 +88,14 @@ export const BottomNav: React.FC<BottomNavProps> = ({
 
               <span
                 className={`text-[10px] font-bold mt-1 tracking-tight whitespace-nowrap ${
-                  isActive ? 'text-purple-300 font-extrabold' : 'text-gray-400'
+                  isActive ? 'text-purple-700 font-extrabold' : 'text-slate-500'
                 }`}
               >
                 {tab.label}
               </span>
 
               {isActive && (
-                <div className="absolute -bottom-1 w-5 h-0.5 bg-gradient-to-r from-purple-400 to-teal-400 rounded-full" />
+                <div className="absolute -bottom-1 w-5 h-0.5 bg-gradient-to-r from-purple-600 to-teal-500 rounded-full" />
               )}
             </button>
           );

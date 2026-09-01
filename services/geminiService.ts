@@ -35,18 +35,50 @@ export async function sendMultimodalMessage(
     }
 
     const storedKeys = getStoredApiKeys();
+    const effectiveGeminiKey = (settings?.geminiApiKey || storedKeys.geminiApiKey || "").trim();
+    const effectiveOpenAiKey = (settings?.openaiApiKey || storedKeys.openaiApiKey || "").trim();
+    const effectiveGrokKey = (settings?.grokApiKey || storedKeys.grokApiKey || "").trim();
+    const effectiveClaudeKey = (settings?.claudeApiKey || storedKeys.claudeApiKey || "").trim();
+    const activeEngine = settings?.engine || 'gemini';
+
     const effectiveSettings: Partial<StudioSettings> = {
       ...settings,
-      geminiApiKey: settings?.geminiApiKey || storedKeys.geminiApiKey,
-      openaiApiKey: settings?.openaiApiKey || storedKeys.openaiApiKey,
-      grokApiKey: settings?.grokApiKey || storedKeys.grokApiKey,
+      engine: activeEngine,
+      geminiApiKey: effectiveGeminiKey,
+      openaiApiKey: effectiveOpenAiKey,
+      grokApiKey: effectiveGrokKey,
+      claudeApiKey: effectiveClaudeKey,
     };
+
+    // Construct headers including custom BYOK keys and engine metadata
+    const requestHeaders: Record<string, string> = {
+      "Content-Type": "application/json",
+      "x-ai-engine": activeEngine,
+    };
+
+    if (effectiveGeminiKey) {
+      requestHeaders["x-gemini-api-key"] = effectiveGeminiKey;
+    }
+    if (effectiveOpenAiKey) {
+      requestHeaders["x-openai-api-key"] = effectiveOpenAiKey;
+    }
+    if (effectiveGrokKey) {
+      requestHeaders["x-grok-api-key"] = effectiveGrokKey;
+      requestHeaders["x-xai-api-key"] = effectiveGrokKey;
+    }
+
+    // Set authorization header matching active engine if key is present
+    if (activeEngine === 'openai' && effectiveOpenAiKey) {
+      requestHeaders["Authorization"] = `Bearer ${effectiveOpenAiKey}`;
+    } else if (activeEngine === 'grok' && effectiveGrokKey) {
+      requestHeaders["Authorization"] = `Bearer ${effectiveGrokKey}`;
+    } else if (effectiveGeminiKey) {
+      requestHeaders["Authorization"] = `Bearer ${effectiveGeminiKey}`;
+    }
 
     const response = await fetch("/api/gemini/chat", {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
+      headers: requestHeaders,
       signal: controller.signal,
       body: JSON.stringify({
         prompt,
@@ -92,7 +124,7 @@ export async function sendMultimodalMessage(
     if (error instanceof Error) {
       throw new Error(error.message);
     }
-    throw new Error("An unexpected error occurred while communicating with Gemini.");
+    throw new Error("An unexpected error occurred while communicating with the AI service.");
   }
 }
 
@@ -102,11 +134,17 @@ export async function editImageWithPrompt(base64Image: string, mimeType: string,
 
   try {
     const storedKeys = getStoredApiKeys();
+    const headers: Record<string, string> = {
+      "Content-Type": "application/json",
+    };
+    if (storedKeys.geminiApiKey) {
+      headers["x-gemini-api-key"] = storedKeys.geminiApiKey;
+      headers["Authorization"] = `Bearer ${storedKeys.geminiApiKey}`;
+    }
+
     const response = await fetch("/api/gemini/edit-image", {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
+      headers,
       signal: controller.signal,
       body: JSON.stringify({
         base64Image,
@@ -145,11 +183,17 @@ export async function upscaleImageWithGemini(base64Image: string, mimeType: stri
 
   try {
     const storedKeys = getStoredApiKeys();
+    const headers: Record<string, string> = {
+      "Content-Type": "application/json",
+    };
+    if (storedKeys.geminiApiKey) {
+      headers["x-gemini-api-key"] = storedKeys.geminiApiKey;
+      headers["Authorization"] = `Bearer ${storedKeys.geminiApiKey}`;
+    }
+
     const response = await fetch("/api/gemini/upscale", {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
+      headers,
       signal: controller.signal,
       body: JSON.stringify({
         base64Image,
@@ -189,11 +233,17 @@ export async function enhancePromptWithAI(userPrompt: string): Promise<string> {
 
   try {
     const storedKeys = getStoredApiKeys();
+    const headers: Record<string, string> = {
+      "Content-Type": "application/json",
+    };
+    if (storedKeys.geminiApiKey) {
+      headers["x-gemini-api-key"] = storedKeys.geminiApiKey;
+      headers["Authorization"] = `Bearer ${storedKeys.geminiApiKey}`;
+    }
+
     const response = await fetch("/api/gemini/enhance-prompt", {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
+      headers,
       signal: controller.signal,
       body: JSON.stringify({
         prompt: userPrompt,
@@ -222,11 +272,17 @@ export async function generateSocialCaptionAndHashtags(imagePrompt: string): Pro
 
   try {
     const storedKeys = getStoredApiKeys();
+    const headers: Record<string, string> = {
+      "Content-Type": "application/json",
+    };
+    if (storedKeys.geminiApiKey) {
+      headers["x-gemini-api-key"] = storedKeys.geminiApiKey;
+      headers["Authorization"] = `Bearer ${storedKeys.geminiApiKey}`;
+    }
+
     const response = await fetch("/api/gemini/social-caption", {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
+      headers,
       signal: controller.signal,
       body: JSON.stringify({
         imagePrompt,
@@ -243,4 +299,3 @@ export async function generateSocialCaptionAndHashtags(imagePrompt: string): Pro
     return `Transformed scene with Metfa Social Studio. ✨ #MetfaSocial #AIArtwork #DigitalArt #GenerativeArt`;
   }
 }
-

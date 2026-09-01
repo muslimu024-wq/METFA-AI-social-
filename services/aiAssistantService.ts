@@ -31,6 +31,25 @@ export interface AvatarResult {
   modelUsed?: string;
 }
 
+function getAiHeaders(): Record<string, string> {
+  const keys = getStoredApiKeys();
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+  };
+  if (keys.geminiApiKey) {
+    headers['x-gemini-api-key'] = keys.geminiApiKey;
+    headers['Authorization'] = `Bearer ${keys.geminiApiKey}`;
+  }
+  if (keys.openaiApiKey) {
+    headers['x-openai-api-key'] = keys.openaiApiKey;
+  }
+  if (keys.grokApiKey) {
+    headers['x-grok-api-key'] = keys.grokApiKey;
+    headers['x-xai-api-key'] = keys.grokApiKey;
+  }
+  return headers;
+}
+
 /**
  * Generate AI Caption & Trending Hashtags (Bengali / English / Auto)
  */
@@ -49,7 +68,7 @@ export async function generateAICaptionAndHashtags(options: {
 
     const response = await fetch('/api/ai/caption-hashtags', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: getAiHeaders(),
       signal: controller.signal,
       body: JSON.stringify({
         text: userInput,
@@ -133,7 +152,7 @@ export async function refineTextWithAI(options: {
 
     const response = await fetch('/api/ai/refine-text', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: getAiHeaders(),
       signal: controller.signal,
       body: JSON.stringify({
         text,
@@ -212,7 +231,7 @@ export async function generateQuickAIReply(commentText: string, postCaption?: st
 
     const response = await fetch('/api/ai/quick-reply', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: getAiHeaders(),
       signal: controller.signal,
       body: JSON.stringify({
         commentText,
@@ -278,7 +297,7 @@ export async function generateCustomAIAvatar(options: {
 
     const response = await fetch('/api/ai/generate-avatar', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: getAiHeaders(),
       signal: controller.signal,
       body: JSON.stringify({
         style,
@@ -321,8 +340,9 @@ export async function generateCustomAIAvatar(options: {
       'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=400&auto=format&fit=crop&q=80',
     ],
     'Minimalist Vector': [
-      `https://api.dicebear.com/7.x/bottts/svg?seed=${seed}&backgroundColor=b6e3f4,c0aede,d1d4f9`,
-      `https://api.dicebear.com/7.x/avataaars/svg?seed=${seed}&backgroundColor=b6e3f4,ffd5dc,d1d4f9`,
+      'https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?w=400&auto=format&fit=crop&q=80',
+      'https://images.unsplash.com/photo-1563089145-599997674d42?w=400&auto=format&fit=crop&q=80',
+      'https://images.unsplash.com/photo-1579783902614-a3fb3927b675?w=400&auto=format&fit=crop&q=80',
     ],
     'Neon Synthwave': [
       'https://images.unsplash.com/photo-1508739773434-c26b3d09e071?w=400&auto=format&fit=crop&q=80',

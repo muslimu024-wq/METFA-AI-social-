@@ -118,11 +118,33 @@ export interface SupabaseProfileRow {
  * Converts a Supabase database profile row to the app's UserProfile type
  */
 export function mapSupabaseRowToUserProfile(row: Partial<SupabaseProfileRow>): UserProfile {
+  const defaultAvatars = [
+    'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=300&auto=format&fit=crop&q=80',
+    'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=300&auto=format&fit=crop&q=80',
+    'https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=300&auto=format&fit=crop&q=80',
+    'https://images.unsplash.com/photo-1500648767791-00dcc994a43e?w=300&auto=format&fit=crop&q=80',
+  ];
+  const seed = (row.username || row.display_name || 'creator').toLowerCase();
+  let hash = 0;
+  for (let i = 0; i < seed.length; i++) {
+    hash = (hash << 5) - hash + seed.charCodeAt(i);
+    hash |= 0;
+  }
+  const cleanFallback = defaultAvatars[Math.abs(hash) % defaultAvatars.length];
+  const rawAvatar = row.avatar_url?.trim();
+  const safeAvatar =
+    rawAvatar &&
+    !rawAvatar.includes('dicebear.com') &&
+    !rawAvatar.includes('api.dicebear') &&
+    !rawAvatar.toLowerCase().includes('bottts')
+      ? rawAvatar
+      : cleanFallback;
+
   return {
     id: row.id || 'user_default',
     name: row.display_name || row.username || 'Metfa Creator',
     username: row.username || 'creator',
-    avatar: row.avatar_url || `https://api.dicebear.com/7.x/avataaars/svg?seed=${row.username || 'metfa'}`,
+    avatar: safeAvatar,
     bio: row.bio || 'AI Creator & Visual Explorer on Metfa Social.',
     location: row.location || 'Global Creator',
     website: row.website || `https://metfa.ai/@${row.username || 'creator'}`,

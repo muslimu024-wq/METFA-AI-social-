@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { getStudioSettings, saveStudioSettings } from '../utils/chatStore';
+import { getStoredApiKeys, saveStoredApiKeys } from '../utils/apiKeysStore';
 import { StudioSettings } from '../types/chat';
 
 export interface AISettingsModalProps {
@@ -9,7 +10,7 @@ export interface AISettingsModalProps {
 }
 
 export function AISettingsModal({ isOpen, onClose, onSaved }: AISettingsModalProps) {
-  // এআই প্ল্যাটফর্মগুলোর অফিশিয়াল এপিআই কি নেওয়ার ডিরেক্ট লিংক
+  // Direct official API key links
   const aiProviders = [
     {
       name: 'Google Gemini',
@@ -58,12 +59,13 @@ export function AISettingsModal({ isOpen, onClose, onSaved }: AISettingsModalPro
   useEffect(() => {
     if (isOpen) {
       try {
-        const current = getStudioSettings();
+        const stored = getStoredApiKeys();
+        const studio = getStudioSettings();
         setKeys({
-          geminiApiKey: current.geminiApiKey || '',
-          openaiApiKey: current.openaiApiKey || '',
-          grokApiKey: current.grokApiKey || '',
-          claudeApiKey: current.claudeApiKey || '',
+          geminiApiKey: stored.geminiApiKey || studio.geminiApiKey || '',
+          openaiApiKey: stored.openaiApiKey || studio.openaiApiKey || '',
+          grokApiKey: stored.grokApiKey || studio.grokApiKey || '',
+          claudeApiKey: stored.claudeApiKey || studio.claudeApiKey || '',
         });
       } catch {
         // ignore fallback
@@ -82,13 +84,27 @@ export function AISettingsModal({ isOpen, onClose, onSaved }: AISettingsModalPro
 
   const handleSave = () => {
     try {
+      const geminiKey = keys.geminiApiKey.trim();
+      const openaiKey = keys.openaiApiKey.trim();
+      const grokKey = keys.grokApiKey.trim();
+      const claudeKey = keys.claudeApiKey.trim();
+
+      // 1. Save to universal API keys store (handles multiple storage layers & events)
+      saveStoredApiKeys({
+        geminiApiKey: geminiKey,
+        openaiApiKey: openaiKey,
+        grokApiKey: grokKey,
+        claudeApiKey: claudeKey,
+      });
+
+      // 2. Sync to Studio settings
       const current = getStudioSettings();
       const updated: StudioSettings = {
         ...current,
-        geminiApiKey: keys.geminiApiKey.trim() || undefined,
-        openaiApiKey: keys.openaiApiKey.trim() || undefined,
-        grokApiKey: keys.grokApiKey.trim() || undefined,
-        claudeApiKey: keys.claudeApiKey.trim() || undefined,
+        geminiApiKey: geminiKey || undefined,
+        openaiApiKey: openaiKey || undefined,
+        grokApiKey: grokKey || undefined,
+        claudeApiKey: claudeKey || undefined,
       };
       saveStudioSettings(updated);
       
@@ -121,10 +137,10 @@ export function AISettingsModal({ isOpen, onClose, onSaved }: AISettingsModalPro
         className="bg-white rounded-2xl max-w-lg w-full p-6 shadow-xl overflow-y-auto max-h-[90vh] text-gray-900 animate-fadeIn relative"
       >
         
-        {/* হেডার */}
+        {/* Header */}
         <div className="flex items-center justify-between pb-4 border-b border-gray-100 mb-4">
           <h3 className="text-lg font-bold flex items-center gap-2">
-            🔑 App Secrets & API Keys
+            🔑 App Secrets & API Keys (BYOK)
           </h3>
           <button 
             onClick={onClose} 
@@ -137,16 +153,15 @@ export function AISettingsModal({ isOpen, onClose, onSaved }: AISettingsModalPro
         </div>
 
         <p className="text-xs text-gray-500 mb-4">
-          Configure your custom AI credentials & private model endpoints securely.
+          Configure your custom AI credentials & private model endpoints securely. Your keys activate direct cloud acceleration.
         </p>
 
-        {/* প্রতিটি এআই ইঞ্জিনের জন্য ইনপুট এবং Get Key বাটন */}
+        {/* Input for each AI engine */}
         <div className="space-y-4">
           {aiProviders.map((provider) => (
             <div key={provider.keyName} className="p-3 bg-gray-50 rounded-xl border border-gray-200">
               <div className="flex items-center justify-between mb-1">
                 <span className="font-semibold text-sm text-gray-800">{provider.name}</span>
-                {/* সরাসরি অফিশিয়াল সাইটে যাওয়ার Get Key বাটন */}
                 <a 
                   href={provider.getLink} 
                   target="_blank" 
@@ -168,14 +183,14 @@ export function AISettingsModal({ isOpen, onClose, onSaved }: AISettingsModalPro
           ))}
         </div>
 
-        {/* সেভ কনফার্মেশন নোটিফিকেশন */}
+        {/* Save confirmation */}
         {showSavedToast && (
           <div className="mt-3 p-2 bg-green-50 border border-green-200 text-green-700 rounded-lg text-xs font-semibold text-center">
-            ✓ API keys saved successfully!
+            ✓ API keys saved successfully! Cloud acceleration active.
           </div>
         )}
 
-        {/* ফুটার বাটন */}
+        {/* Footer buttons */}
         <div className="mt-6 pt-4 border-t border-gray-100 flex justify-end gap-3">
           <button 
             type="button"

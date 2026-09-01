@@ -238,7 +238,7 @@ export const ReelsFeedView: React.FC<ReelsFeedViewProps> = ({
                 {activeReelMenuId === reel.id && (
                   <div
                     id={`reel-menu-dropdown-${reel.id}`}
-                    className="absolute right-0 top-full mt-1.5 w-48 bg-gray-950/95 border border-gray-800 rounded-2xl shadow-2xl py-1.5 z-30 animate-scaleUp text-xs backdrop-blur-md"
+                    className="absolute right-0 top-full mt-1.5 w-48 bg-white border border-slate-200 rounded-2xl shadow-xl py-1.5 z-30 animate-scaleUp text-xs"
                     onClick={(e) => e.stopPropagation()}
                   >
                     {/* 1. Save Reel / Unsave Reel at top */}
@@ -249,9 +249,9 @@ export const ReelsFeedView: React.FC<ReelsFeedViewProps> = ({
                         handleToggleSaveReel(reel.id);
                         setActiveReelMenuId(null);
                       }}
-                      className="w-full px-3.5 py-2 text-left text-gray-200 hover:text-white hover:bg-purple-950/60 flex items-center gap-2.5 transition font-medium cursor-pointer"
+                      className="w-full px-3.5 py-2 text-left text-slate-700 hover:text-purple-700 hover:bg-purple-50 flex items-center gap-2.5 transition font-medium cursor-pointer"
                     >
-                      <Bookmark className={`w-4 h-4 ${reel.isSaved ? 'text-amber-400 fill-amber-400' : 'text-amber-400'}`} />
+                      <Bookmark className={`w-4 h-4 ${reel.isSaved ? 'text-amber-500 fill-amber-500' : 'text-amber-500'}`} />
                       <span className="font-semibold">{reel.isSaved ? 'Unsave Reel' : 'Save Reel'}</span>
                     </button>
 
@@ -263,23 +263,23 @@ export const ReelsFeedView: React.FC<ReelsFeedViewProps> = ({
                         setActiveReelMenuId(null);
                         showToast('Reel link copied');
                       }}
-                      className="w-full px-3.5 py-2 text-left text-gray-200 hover:text-white hover:bg-gray-900 flex items-center gap-2.5 transition cursor-pointer"
+                      className="w-full px-3.5 py-2 text-left text-slate-700 hover:text-slate-900 hover:bg-slate-50 flex items-center gap-2.5 transition cursor-pointer"
                     >
-                      <Copy className="w-4 h-4 text-teal-400" />
+                      <Copy className="w-4 h-4 text-teal-600" />
                       <span>Copy Link</span>
                     </button>
 
                     {/* 3. Author Actions vs Non-Author */}
                     {isContentOwner(reel.author.id, userProfile.id) ? (
                       <>
-                        <div className="h-px bg-gray-800/80 my-1" />
+                        <div className="h-px bg-slate-100 my-1" />
                         <button
                           type="button"
                           id={`edit-reel-btn-${reel.id}`}
                           onClick={() => handleStartEditReel(reel)}
-                          className="w-full px-3.5 py-2 text-left text-purple-300 hover:text-white hover:bg-purple-950/60 flex items-center gap-2.5 transition font-medium cursor-pointer"
+                          className="w-full px-3.5 py-2 text-left text-purple-700 hover:text-purple-900 hover:bg-purple-50 flex items-center gap-2.5 transition font-medium cursor-pointer"
                         >
-                          <Edit3 className="w-4 h-4 text-purple-400" />
+                          <Edit3 className="w-4 h-4 text-purple-600" />
                           <span>Edit Caption/Tags</span>
                         </button>
 
@@ -287,7 +287,7 @@ export const ReelsFeedView: React.FC<ReelsFeedViewProps> = ({
                           type="button"
                           id={`delete-reel-btn-${reel.id}`}
                           onClick={() => handleDeleteReel(reel.id)}
-                          className="w-full px-3.5 py-2 text-left text-rose-400 hover:text-rose-300 hover:bg-rose-950/40 flex items-center gap-2.5 transition font-medium cursor-pointer"
+                          className="w-full px-3.5 py-2 text-left text-rose-600 hover:text-rose-700 hover:bg-rose-50 flex items-center gap-2.5 transition font-medium cursor-pointer"
                         >
                           <Trash2 className="w-4 h-4" />
                           <span>Delete Reel</span>
@@ -295,16 +295,16 @@ export const ReelsFeedView: React.FC<ReelsFeedViewProps> = ({
                       </>
                     ) : (
                       <>
-                        <div className="h-px bg-gray-800/80 my-1" />
+                        <div className="h-px bg-slate-100 my-1" />
                         <button
                           type="button"
                           onClick={() => {
                             setActiveReelMenuId(null);
                             showToast('Reel reported to moderators');
                           }}
-                          className="w-full px-3.5 py-2 text-left text-gray-400 hover:text-gray-200 hover:bg-gray-900 flex items-center gap-2.5 transition cursor-pointer"
+                          className="w-full px-3.5 py-2 text-left text-slate-600 hover:text-slate-900 hover:bg-slate-50 flex items-center gap-2.5 transition cursor-pointer"
                         >
-                          <Flag className="w-4 h-4 text-gray-500" />
+                          <Flag className="w-4 h-4 text-slate-400" />
                           <span>Report Content</span>
                         </button>
                       </>
@@ -475,21 +475,21 @@ export const ReelsFeedView: React.FC<ReelsFeedViewProps> = ({
       {editingReel && (
         <div
           onClick={() => setEditingReel(null)}
-          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-fadeIn"
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs animate-fadeIn"
         >
           <div
-            className="w-full max-w-md bg-gray-900 border border-gray-800 rounded-3xl p-6 shadow-2xl space-y-4 animate-scaleUp"
+            className="w-full max-w-md bg-white border border-slate-200 rounded-3xl p-6 shadow-2xl space-y-4 animate-scaleUp"
             onClick={(e) => e.stopPropagation()}
           >
-            <div className="flex items-center justify-between">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-100">
               <div className="flex items-center gap-2">
-                <Film className="w-5 h-5 text-purple-400" />
-                <h3 className="text-base font-bold text-white">Edit Reel Caption</h3>
+                <Film className="w-5 h-5 text-purple-600" />
+                <h3 className="text-base font-bold text-slate-900">Edit Reel Caption</h3>
               </div>
               <button
                 type="button"
                 onClick={() => setEditingReel(null)}
-                className="p-1 text-gray-400 hover:text-white rounded-lg transition"
+                className="p-1.5 text-slate-400 hover:text-slate-900 hover:bg-slate-100 rounded-xl transition"
               >
                 <X className="w-5 h-5" />
               </button>
@@ -497,44 +497,44 @@ export const ReelsFeedView: React.FC<ReelsFeedViewProps> = ({
 
             <form onSubmit={handleSaveReelEdit} className="space-y-4">
               <div>
-                <label className="text-xs font-semibold text-gray-400 block mb-1">
+                <label className="text-xs font-semibold text-slate-700 block mb-1">
                   Reel Title
                 </label>
                 <input
                   type="text"
                   value={editingTitle}
                   onChange={(e) => setEditingTitle(e.target.value)}
-                  className="w-full bg-gray-950 border border-gray-800 focus:border-purple-500 rounded-xl px-3.5 py-2.5 text-xs text-white outline-none transition"
+                  className="w-full bg-slate-50 border border-slate-200 focus:border-purple-500 focus:bg-white rounded-xl px-3.5 py-2.5 text-xs text-slate-900 outline-none transition"
                   placeholder="Enter reel title"
                   required
                 />
               </div>
 
               <div>
-                <label className="text-xs font-semibold text-gray-400 block mb-1">
+                <label className="text-xs font-semibold text-slate-700 block mb-1">
                   Caption & Description
                 </label>
                 <textarea
                   value={editingCaption}
                   onChange={(e) => setEditingCaption(e.target.value)}
                   rows={3}
-                  className="w-full bg-gray-950 border border-gray-800 focus:border-purple-500 rounded-xl px-3.5 py-2.5 text-xs text-white outline-none resize-none transition"
+                  className="w-full bg-slate-50 border border-slate-200 focus:border-purple-500 focus:bg-white rounded-xl px-3.5 py-2.5 text-xs text-slate-900 outline-none resize-none transition"
                   placeholder="Describe this reel..."
                   required
                 />
               </div>
 
-              <div className="flex items-center justify-end gap-2 pt-2">
+              <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100">
                 <button
                   type="button"
                   onClick={() => setEditingReel(null)}
-                  className="px-4 py-2 text-xs font-semibold text-gray-400 hover:text-white transition"
+                  className="px-4 py-2 text-xs font-semibold text-slate-500 hover:text-slate-900 transition"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
-                  className="px-5 py-2 bg-gradient-to-r from-purple-600 to-teal-500 hover:from-purple-500 hover:to-teal-400 text-white text-xs font-bold rounded-xl shadow-md transition"
+                  className="px-5 py-2 bg-gradient-to-r from-purple-600 to-teal-500 hover:from-purple-500 hover:to-teal-400 text-white text-xs font-bold rounded-xl shadow-xs transition"
                 >
                   Save Changes
                 </button>

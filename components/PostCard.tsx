@@ -304,31 +304,31 @@ export const PostCard: React.FC<PostCardProps> = ({
   return (
     <article
       id={`post-${post.id}`}
-      className={`bg-gray-900/90 rounded-3xl border border-gray-800 shadow-xl overflow-hidden backdrop-blur-md transition duration-300 ${
+      className={`bg-white rounded-3xl border border-slate-200 shadow-xs overflow-hidden transition duration-300 ${
         isHighlighted ? 'ring-2 ring-purple-500 shadow-purple-500/20' : ''
       }`}
     >
       {/* 1. Header: Author & Options Menu (...) */}
-      <div className="p-4 flex items-center justify-between border-b border-gray-800/60">
+      <div className="p-4 flex items-center justify-between border-b border-slate-100">
         <div className="flex items-center gap-3 min-w-0">
           <img
             src={post.postingIdentity?.avatar || post.author.avatar}
             alt={post.postingIdentity?.name || post.author.name}
-            className="w-10 h-10 rounded-2xl object-cover border border-gray-700 shadow-sm shrink-0"
+            className="w-10 h-10 rounded-2xl object-cover border border-slate-200 shadow-xs shrink-0"
           />
           <div className="min-w-0">
             <div className="flex items-center gap-1.5 flex-wrap">
-              <h4 className="text-sm font-bold text-white truncate leading-tight">
+              <h4 className="text-sm font-bold text-slate-900 truncate leading-tight">
                 {post.postingIdentity?.name || post.author.name}
               </h4>
               {post.postingIdentity?.badge && (
-                <span className="text-[9px] px-1.5 py-0.5 rounded bg-purple-950 text-purple-300 border border-purple-800 font-semibold shrink-0">
+                <span className="text-[9px] px-1.5 py-0.5 rounded bg-purple-50 text-purple-700 border border-purple-200 font-semibold shrink-0">
                   {post.postingIdentity.badge}
                 </span>
               )}
             </div>
-            <div className="flex items-center gap-2 text-xs text-gray-400 font-mono">
-              <span className="text-teal-400">@{post.postingIdentity?.username || post.author.username}</span>
+            <div className="flex items-center gap-2 text-xs text-slate-500 font-mono">
+              <span className="text-teal-700 font-medium">@{post.postingIdentity?.username || post.author.username}</span>
               <span>•</span>
               <span>{post.createdAt}</span>
             </div>
@@ -337,7 +337,7 @@ export const PostCard: React.FC<PostCardProps> = ({
 
         <div className="flex items-center gap-2 shrink-0">
           {post.stylePreset && (
-            <span className="text-[10px] font-semibold px-2.5 py-1 bg-purple-950/80 border border-purple-800/60 text-purple-300 rounded-full hidden sm:inline-block">
+            <span className="text-[10px] font-semibold px-2.5 py-1 bg-purple-50 border border-purple-200 text-purple-700 rounded-full hidden sm:inline-block">
               {post.stylePreset}
             </span>
           )}
@@ -352,7 +352,7 @@ export const PostCard: React.FC<PostCardProps> = ({
                 setIsMenuOpen((prev) => !prev);
               }}
               className={`p-1.5 rounded-xl transition cursor-pointer ${
-                isMenuOpen ? 'bg-purple-950 text-purple-300' : 'text-gray-400 hover:text-white hover:bg-gray-800'
+                isMenuOpen ? 'bg-purple-100 text-purple-700' : 'text-slate-500 hover:text-slate-900 hover:bg-slate-100'
               }`}
               title="Post options"
               aria-label="Post options"
@@ -363,7 +363,7 @@ export const PostCard: React.FC<PostCardProps> = ({
             {isMenuOpen && (
               <div
                 id={`post-menu-dropdown-${post.id}`}
-                className="absolute right-0 top-full mt-1.5 w-48 bg-gray-950/95 border border-gray-800 rounded-2xl shadow-2xl py-1.5 z-40 animate-scaleUp text-xs backdrop-blur-md"
+                className="absolute right-0 top-full mt-1.5 w-48 bg-white border border-slate-200 rounded-2xl shadow-xl py-1.5 z-40 animate-scaleUp text-xs backdrop-blur-md"
                 onClick={(e) => e.stopPropagation()}
               >
                 {/* 1. Save Post / Unsave Post at the very top */}
@@ -371,10 +371,10 @@ export const PostCard: React.FC<PostCardProps> = ({
                   type="button"
                   id={`save-post-menu-btn-${post.id}`}
                   onClick={handleSaveToggle}
-                  className="w-full px-3.5 py-2 text-left text-gray-200 hover:text-white hover:bg-purple-950/60 flex items-center gap-2.5 transition font-medium cursor-pointer"
+                  className="w-full px-3.5 py-2 text-left text-slate-700 hover:text-purple-700 hover:bg-purple-50 flex items-center gap-2.5 transition font-medium cursor-pointer"
                 >
                   <Bookmark
-                    className={`w-4 h-4 ${isSaved ? 'text-amber-400 fill-amber-400' : 'text-amber-400'}`}
+                    className={`w-4 h-4 ${isSaved ? 'text-amber-500 fill-amber-500' : 'text-amber-500'}`}
                   />
                   <span className="font-semibold">{isSaved ? 'Unsave Post' : 'Save Post'}</span>
                 </button>
@@ -383,16 +383,16 @@ export const PostCard: React.FC<PostCardProps> = ({
                 <button
                   type="button"
                   onClick={handleCopyLink}
-                  className="w-full px-3.5 py-2 text-left text-gray-200 hover:text-white hover:bg-gray-900 flex items-center gap-2.5 transition cursor-pointer"
+                  className="w-full px-3.5 py-2 text-left text-slate-700 hover:text-slate-900 hover:bg-slate-50 flex items-center gap-2.5 transition cursor-pointer"
                 >
-                  <Copy className="w-4 h-4 text-teal-400" />
+                  <Copy className="w-4 h-4 text-teal-600" />
                   <span>Copy Link</span>
                 </button>
 
                 {/* 3. Author Only Actions: Edit Post & Delete Post */}
                 {isOwner ? (
                   <>
-                    <div className="h-px bg-gray-800/80 my-1" />
+                    <div className="h-px bg-slate-100 my-1" />
                     <button
                       type="button"
                       id={`edit-post-menu-btn-${post.id}`}
@@ -405,9 +405,9 @@ export const PostCard: React.FC<PostCardProps> = ({
                           setEditCaption(post.caption || post.prompt);
                         }
                       }}
-                      className="w-full px-3.5 py-2 text-left text-purple-300 hover:text-white hover:bg-purple-950/60 flex items-center gap-2.5 transition font-medium cursor-pointer"
+                      className="w-full px-3.5 py-2 text-left text-purple-700 hover:text-purple-900 hover:bg-purple-50 flex items-center gap-2.5 transition font-medium cursor-pointer"
                     >
-                      <Edit3 className="w-4 h-4 text-purple-400" />
+                      <Edit3 className="w-4 h-4 text-purple-600" />
                       <span>Edit Post</span>
                     </button>
 
@@ -418,7 +418,7 @@ export const PostCard: React.FC<PostCardProps> = ({
                         setIsMenuOpen(false);
                         onDeletePost?.(post.id);
                       }}
-                      className="w-full px-3.5 py-2 text-left text-rose-400 hover:text-rose-300 hover:bg-rose-950/40 flex items-center gap-2.5 transition font-medium cursor-pointer"
+                      className="w-full px-3.5 py-2 text-left text-rose-600 hover:text-rose-700 hover:bg-rose-50 flex items-center gap-2.5 transition font-medium cursor-pointer"
                     >
                       <Trash2 className="w-4 h-4" />
                       <span>Delete Post</span>
@@ -426,16 +426,16 @@ export const PostCard: React.FC<PostCardProps> = ({
                   </>
                 ) : (
                   <>
-                    <div className="h-px bg-gray-800/80 my-1" />
+                    <div className="h-px bg-slate-100 my-1" />
                     <button
                       type="button"
                       onClick={() => {
                         setIsMenuOpen(false);
                         onShowToast?.('Post reported to community moderators');
                       }}
-                      className="w-full px-3.5 py-2 text-left text-gray-400 hover:text-gray-200 hover:bg-gray-900 flex items-center gap-2.5 transition cursor-pointer"
+                      className="w-full px-3.5 py-2 text-left text-slate-600 hover:text-slate-900 hover:bg-slate-50 flex items-center gap-2.5 transition cursor-pointer"
                     >
-                      <Flag className="w-4 h-4 text-gray-500" />
+                      <Flag className="w-4 h-4 text-slate-400" />
                       <span>Report Post</span>
                     </button>
                   </>
@@ -448,13 +448,13 @@ export const PostCard: React.FC<PostCardProps> = ({
 
       {/* 2. Post Media / Text Body */}
       {isInlineEditing ? (
-        <form onSubmit={handleInlineSave} className="p-4 space-y-3 bg-gray-950/60 border-b border-gray-800">
-          <label className="text-xs font-bold text-purple-300 block">Edit Caption & Text:</label>
+        <form onSubmit={handleInlineSave} className="p-4 space-y-3 bg-slate-50 border-b border-slate-200">
+          <label className="text-xs font-bold text-purple-800 block">Edit Caption & Text:</label>
           <textarea
             value={editCaption}
             onChange={(e) => setEditCaption(e.target.value)}
             rows={3}
-            className="w-full bg-gray-900 border border-purple-500/50 rounded-xl p-3 text-xs text-white focus:outline-none focus:border-purple-400 resize-none font-medium"
+            className="w-full bg-white border border-purple-300 rounded-xl p-3 text-xs text-slate-900 focus:outline-none focus:border-purple-500 resize-none font-medium shadow-xs"
             placeholder="Write your updated post caption..."
             autoFocus
           />
@@ -462,13 +462,13 @@ export const PostCard: React.FC<PostCardProps> = ({
             <button
               type="button"
               onClick={() => setIsInlineEditing(false)}
-              className="px-3 py-1.5 bg-gray-800 hover:bg-gray-700 text-gray-300 text-xs font-semibold rounded-lg transition"
+              className="px-3 py-1.5 bg-slate-200 hover:bg-slate-300 text-slate-700 text-xs font-semibold rounded-lg transition cursor-pointer"
             >
               Cancel
             </button>
             <button
               type="submit"
-              className="px-4 py-1.5 bg-purple-600 hover:bg-purple-500 text-white text-xs font-bold rounded-lg flex items-center gap-1 shadow-md transition"
+              className="px-4 py-1.5 bg-purple-600 hover:bg-purple-700 text-white text-xs font-bold rounded-lg flex items-center gap-1 shadow-xs transition cursor-pointer"
             >
               <Check className="w-3.5 h-3.5" />
               <span>Save</span>
@@ -478,7 +478,7 @@ export const PostCard: React.FC<PostCardProps> = ({
       ) : isPureTextPost ? (
         <div
           className={`p-6 sm:p-8 flex items-center justify-center text-center ${
-            hasGradient ? GRADIENT_PRESETS[post.textBackgroundPreset!] : 'bg-gray-950/60 text-gray-100 text-left'
+            hasGradient ? GRADIENT_PRESETS[post.textBackgroundPreset!] : 'bg-slate-50 text-slate-900 text-left'
           }`}
         >
           <PostContent
@@ -487,18 +487,18 @@ export const PostCard: React.FC<PostCardProps> = ({
             className="w-full"
             textClassName={
               hasGradient
-                ? 'text-lg sm:text-xl font-black text-white leading-relaxed text-center'
-                : 'text-sm sm:text-base text-gray-200 leading-relaxed font-normal text-left'
+                ? 'text-lg sm:text-xl font-black text-white leading-relaxed text-center drop-shadow-sm'
+                : 'text-sm sm:text-base text-slate-900 leading-relaxed font-normal text-left'
             }
             buttonClassName={
               hasGradient
-                ? 'text-white/90 hover:text-white underline font-bold text-xs mt-2'
-                : 'text-blue-400 hover:text-blue-300 font-semibold text-sm mt-1'
+                ? 'text-white hover:underline font-bold text-xs mt-2'
+                : 'text-blue-600 hover:text-blue-800 font-semibold text-sm mt-1'
             }
           />
         </div>
       ) : (
-        <div className="relative group bg-gray-950 max-h-[520px] overflow-hidden flex items-center justify-center">
+        <div className="relative group bg-slate-100 max-h-[520px] overflow-hidden flex items-center justify-center">
           {post.videoSrc ? (
             <video
               src={post.videoSrc}
@@ -514,7 +514,7 @@ export const PostCard: React.FC<PostCardProps> = ({
               }`}
             >
               {post.imageGallery.map((img, i) => (
-                <div key={i} className="aspect-square bg-gray-950 overflow-hidden">
+                <div key={i} className="aspect-square bg-slate-100 overflow-hidden">
                   <img src={img} alt={`Gallery ${i}`} className="w-full h-full object-cover hover:scale-105 transition" />
                 </div>
               ))}
@@ -536,8 +536,8 @@ export const PostCard: React.FC<PostCardProps> = ({
             <PostContent
               text={post.caption}
               charLimit={160}
-              textClassName="text-sm text-gray-200 leading-relaxed font-normal"
-              buttonClassName="text-blue-400 hover:text-blue-300 font-semibold text-sm mt-1"
+              textClassName="text-sm text-slate-800 leading-relaxed font-normal"
+              buttonClassName="text-blue-600 hover:text-blue-800 font-semibold text-sm mt-1"
             />
           )}
 
@@ -550,13 +550,13 @@ export const PostCard: React.FC<PostCardProps> = ({
           )}
 
           {post.audioTrack && (
-            <div className="p-2.5 rounded-2xl bg-purple-950/25 border border-purple-500/30 flex items-center justify-between gap-3">
+            <div className="p-2.5 rounded-2xl bg-purple-50 border border-purple-200 flex items-center justify-between gap-3">
               <div className="flex items-center gap-2.5 min-w-0">
                 <div className="relative group shrink-0">
                   <img
                     src={post.audioTrack.cover_url}
                     alt={post.audioTrack.title}
-                    className="w-10 h-10 rounded-xl object-cover border border-purple-500/30"
+                    className="w-10 h-10 rounded-xl object-cover border border-purple-200"
                   />
                   <button
                     type="button"
@@ -578,19 +578,19 @@ export const PostCard: React.FC<PostCardProps> = ({
                     className="absolute inset-0 bg-black/40 hover:bg-black/60 rounded-xl flex items-center justify-center text-white transition cursor-pointer"
                   >
                     {isPlayingTrack ? (
-                      <Pause className="w-4 h-4 text-teal-400" />
+                      <Pause className="w-4 h-4 text-teal-300" />
                     ) : (
-                      <Play className="w-4 h-4 text-purple-300 fill-purple-300 ml-0.5" />
+                      <Play className="w-4 h-4 text-purple-200 fill-purple-200 ml-0.5" />
                     )}
                   </button>
                 </div>
 
                 <div className="min-w-0">
                   <div className="flex items-center gap-1.5">
-                    <Music className="w-3 h-3 text-purple-400 shrink-0" />
-                    <h4 className="text-xs font-bold text-white truncate">{post.audioTrack.title}</h4>
+                    <Music className="w-3 h-3 text-purple-600 shrink-0" />
+                    <h4 className="text-xs font-bold text-slate-900 truncate">{post.audioTrack.title}</h4>
                   </div>
-                  <p className="text-[10px] text-purple-300 truncate font-mono">
+                  <p className="text-[10px] text-purple-700 truncate font-mono">
                     {post.audioTrack.artist} • {formatDuration(post.audioTrack.duration)}
                   </p>
                 </div>
@@ -599,10 +599,10 @@ export const PostCard: React.FC<PostCardProps> = ({
               <button
                 type="button"
                 onClick={() => setIsLicenseModalOpen(true)}
-                className="px-2 py-1 rounded-lg bg-teal-950/80 border border-teal-500/40 text-teal-300 hover:text-white text-[10px] font-bold flex items-center gap-1 shrink-0 transition"
+                className="px-2 py-1 rounded-lg bg-teal-50 border border-teal-200 text-teal-800 hover:bg-teal-100 text-[10px] font-bold flex items-center gap-1 shrink-0 transition"
                 title="View verified licensing certificate"
               >
-                <ShieldCheck className="w-3 h-3 text-teal-400" />
+                <ShieldCheck className="w-3 h-3 text-teal-600" />
                 <span>{post.audioTrack.license_type}</span>
               </button>
             </div>
@@ -611,7 +611,7 @@ export const PostCard: React.FC<PostCardProps> = ({
           {post.tags && post.tags.length > 0 && (
             <div className="flex items-center gap-1.5 flex-wrap pt-1">
               {post.tags.map((tag, i) => (
-                <span key={i} className="text-[11px] text-teal-400/90 font-medium">
+                <span key={i} className="text-[11px] text-teal-700 font-medium">
                   #{tag}
                 </span>
               ))}
@@ -621,7 +621,7 @@ export const PostCard: React.FC<PostCardProps> = ({
       )}
 
       {/* 4. Action Bar (Like, Comment, Share, Save) */}
-      <div className="px-4 py-3 border-t border-gray-800/80 flex items-center justify-between text-xs text-gray-300">
+      <div className="px-4 py-3 border-t border-slate-100 flex items-center justify-between text-xs text-slate-600">
         <div className="flex items-center gap-1 sm:gap-2">
           {/* Reaction / Like Button */}
           <div className="relative" data-reaction-container={post.id}>
@@ -632,11 +632,11 @@ export const PostCard: React.FC<PostCardProps> = ({
               onMouseEnter={() => setShowReactionPicker(true)}
               className={`px-3 py-1.5 rounded-xl flex items-center gap-1.5 font-bold transition cursor-pointer ${
                 post.isLiked
-                  ? 'bg-rose-950/60 text-rose-400 border border-rose-800/50'
-                  : 'hover:bg-gray-800 text-gray-300'
+                  ? 'bg-rose-50 text-rose-600 border border-rose-200'
+                  : 'hover:bg-slate-100 text-slate-700'
               }`}
             >
-              <Heart className={`w-4 h-4 ${post.isLiked ? 'fill-current text-rose-500' : ''}`} />
+              <Heart className={`w-4 h-4 ${post.isLiked ? 'fill-current text-rose-600' : ''}`} />
               <span>{post.likesCount}</span>
             </button>
           </div>
@@ -647,7 +647,7 @@ export const PostCard: React.FC<PostCardProps> = ({
             id={`comments-toggle-${post.id}`}
             onClick={() => setShowComments((prev) => !prev)}
             className={`px-3 py-1.5 rounded-xl flex items-center gap-1.5 font-bold transition cursor-pointer ${
-              showComments ? 'bg-purple-950/60 text-purple-300 border border-purple-800/50' : 'hover:bg-gray-800 text-gray-300'
+              showComments ? 'bg-purple-50 text-purple-700 border border-purple-200' : 'hover:bg-slate-100 text-slate-700'
             }`}
           >
             <MessageCircle className="w-4 h-4" />
@@ -660,7 +660,7 @@ export const PostCard: React.FC<PostCardProps> = ({
               type="button"
               id={`share-post-${post.id}`}
               onClick={() => onSharePost(post)}
-              className="px-3 py-1.5 rounded-xl hover:bg-gray-800 text-gray-300 flex items-center gap-1.5 font-bold transition cursor-pointer"
+              className="px-3 py-1.5 rounded-xl hover:bg-slate-100 text-slate-700 flex items-center gap-1.5 font-bold transition cursor-pointer"
             >
               <Share2 className="w-4 h-4" />
               <span className="hidden sm:inline">Share</span>
@@ -675,12 +675,12 @@ export const PostCard: React.FC<PostCardProps> = ({
           onClick={handleSaveToggle}
           className={`p-2 rounded-xl border transition cursor-pointer flex items-center gap-1.5 ${
             isSaved
-              ? 'bg-amber-500/20 text-amber-300 border-amber-500/40 shadow-sm'
-              : 'border-gray-800 text-gray-400 hover:text-white hover:bg-gray-800'
+              ? 'bg-amber-50 text-amber-800 border-amber-300 shadow-xs'
+              : 'border-slate-200 text-slate-600 hover:text-slate-900 hover:bg-slate-100'
           }`}
           title={isSaved ? 'Unsave from bookmarks' : 'Save post to bookmarks'}
         >
-          <Bookmark className={`w-4 h-4 ${isSaved ? 'fill-current text-amber-400' : ''}`} />
+          <Bookmark className={`w-4 h-4 ${isSaved ? 'fill-current text-amber-500' : ''}`} />
           <span className="text-[11px] font-bold hidden sm:inline">
             {isSaved ? 'Saved' : 'Save'}
           </span>
@@ -689,37 +689,37 @@ export const PostCard: React.FC<PostCardProps> = ({
 
       {/* 5. Interactive Comments Section */}
       {showComments && (
-        <div className="p-4 bg-gray-950/80 border-t border-gray-800 space-y-4 animate-fadeIn">
+        <div className="p-4 bg-slate-50 border-t border-slate-200 space-y-4 animate-fadeIn">
           {/* Voice Comments */}
           {post.voiceComments && post.voiceComments.length > 0 && (
             <div className="space-y-2">
-              <span className="text-[10px] font-bold text-gray-400 uppercase tracking-wider block">
+              <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider block">
                 🎙️ Audio Voice Comments ({post.voiceComments.length})
               </span>
               <div className="space-y-2">
                 {post.voiceComments.map((vc) => (
                   <div
                     key={vc.id}
-                    className="p-2.5 bg-gray-900 rounded-2xl border border-gray-800 flex items-center justify-between gap-3"
+                    className="p-2.5 bg-white rounded-2xl border border-slate-200 flex items-center justify-between gap-3 shadow-xs"
                   >
                     <div className="flex items-center gap-2.5 min-w-0">
                       <button
                         type="button"
                         onClick={() => handlePlayVoice(vc.id, vc.audioUrl)}
-                        className={`p-2 rounded-full transition ${
+                        className={`p-2 rounded-full transition cursor-pointer ${
                           isPlayingVoiceId === vc.id
                             ? 'bg-purple-600 text-white animate-pulse'
-                            : 'bg-gray-800 text-purple-400 hover:bg-purple-900/60 hover:text-white'
+                            : 'bg-purple-50 text-purple-700 hover:bg-purple-100'
                         }`}
                       >
                         {isPlayingVoiceId === vc.id ? <Pause className="w-3.5 h-3.5" /> : <Play className="w-3.5 h-3.5" />}
                       </button>
                       <div className="min-w-0">
-                        <div className="text-xs font-bold text-white flex items-center gap-1.5">
+                        <div className="text-xs font-bold text-slate-900 flex items-center gap-1.5">
                           <span>{vc.author.name}</span>
-                          <span className="text-[10px] text-gray-400 font-mono">@{vc.author.username}</span>
+                          <span className="text-[10px] text-slate-500 font-mono">@{vc.author.username}</span>
                         </div>
-                        <div className="text-[10px] text-teal-400 font-mono">{vc.duration}s voice memo</div>
+                        <div className="text-[10px] text-teal-700 font-mono">{vc.duration}s voice memo</div>
                       </div>
                     </div>
 
@@ -727,7 +727,7 @@ export const PostCard: React.FC<PostCardProps> = ({
                       <button
                         type="button"
                         onClick={() => onDeleteVoiceComment(post.id, vc.id)}
-                        className="p-1.5 text-gray-500 hover:text-rose-400 transition"
+                        className="p-1.5 text-slate-400 hover:text-rose-600 transition cursor-pointer"
                         title="Delete voice note"
                       >
                         <Trash2 className="w-3.5 h-3.5" />
@@ -743,15 +743,15 @@ export const PostCard: React.FC<PostCardProps> = ({
           {post.comments && post.comments.length > 0 && (
             <div className="space-y-2.5">
               {post.comments.map((c) => (
-                <div key={c.id} className="p-3 bg-gray-900/90 rounded-2xl border border-gray-800 flex items-start justify-between gap-3">
+                <div key={c.id} className="p-3 bg-white rounded-2xl border border-slate-200 flex items-start justify-between gap-3 shadow-xs">
                   <div className="flex items-start gap-2.5 min-w-0">
-                    <img src={c.author.avatar} alt={c.author.name} className="w-7 h-7 rounded-xl object-cover shrink-0 mt-0.5" />
+                    <img src={c.author.avatar} alt={c.author.name} className="w-7 h-7 rounded-xl object-cover shrink-0 mt-0.5 border border-slate-200" />
                     <div className="min-w-0 space-y-0.5">
                       <div className="flex items-center gap-1.5">
-                        <span className="text-xs font-bold text-white">{c.author.name}</span>
-                        <span className="text-[10px] text-teal-400 font-mono">@{c.author.username}</span>
+                        <span className="text-xs font-bold text-slate-900">{c.author.name}</span>
+                        <span className="text-[10px] text-teal-700 font-mono">@{c.author.username}</span>
                       </div>
-                      <p className="text-xs text-gray-200 leading-relaxed">{c.text}</p>
+                      <p className="text-xs text-slate-800 leading-relaxed">{c.text}</p>
                     </div>
                   </div>
 
@@ -759,7 +759,7 @@ export const PostCard: React.FC<PostCardProps> = ({
                     <button
                       type="button"
                       onClick={() => onDeleteComment(post.id, c.id)}
-                      className="p-1 text-gray-500 hover:text-rose-400 transition shrink-0"
+                      className="p-1 text-slate-400 hover:text-rose-600 transition shrink-0 cursor-pointer"
                     >
                       <Trash2 className="w-3.5 h-3.5" />
                     </button>
@@ -770,21 +770,21 @@ export const PostCard: React.FC<PostCardProps> = ({
           )}
 
           {/* Comment Input Bar */}
-          <form onSubmit={handleCommentSubmit} className="flex items-center gap-2 pt-2 border-t border-gray-800/80">
+          <form onSubmit={handleCommentSubmit} className="flex items-center gap-2 pt-2 border-t border-slate-200">
             <input
               type="text"
               value={commentText}
               onChange={(e) => setCommentText(e.target.value)}
               placeholder={isDictating ? 'Listening...' : 'Write a comment or prompt reply...'}
-              className="flex-1 bg-gray-900 border border-gray-800 focus:border-purple-500 rounded-xl px-3.5 py-2 text-xs text-white outline-none transition font-medium"
+              className="flex-1 bg-white border border-slate-300 focus:border-purple-600 rounded-xl px-3.5 py-2 text-xs text-slate-900 placeholder:text-slate-400 outline-none transition font-medium shadow-xs"
             />
 
             {/* Speech Dictation Button */}
             <button
               type="button"
               onClick={handleToggleDictation}
-              className={`p-2 rounded-xl transition ${
-                isDictating ? 'bg-red-600 text-white animate-pulse' : 'bg-gray-800 text-gray-400 hover:text-white'
+              className={`p-2 rounded-xl transition cursor-pointer ${
+                isDictating ? 'bg-red-600 text-white animate-pulse' : 'bg-slate-200 text-slate-600 hover:text-slate-900'
               }`}
               title="Voice-to-Text Dictation"
             >
@@ -795,10 +795,10 @@ export const PostCard: React.FC<PostCardProps> = ({
             <button
               type="button"
               onClick={isRecordingVoice ? handleStopVoiceRecording : handleStartVoiceRecording}
-              className={`p-2 rounded-xl transition ${
+              className={`p-2 rounded-xl transition cursor-pointer ${
                 isRecordingVoice
                   ? 'bg-rose-600 text-white animate-pulse'
-                  : 'bg-purple-950/80 text-purple-300 hover:bg-purple-900'
+                  : 'bg-purple-100 text-purple-700 hover:bg-purple-200'
               }`}
               title={isRecordingVoice ? `Recording (${recordingSeconds}s)... Tap to send` : 'Record 10s Voice Note'}
             >
@@ -809,7 +809,7 @@ export const PostCard: React.FC<PostCardProps> = ({
             <button
               type="submit"
               disabled={!commentText.trim()}
-              className="p-2 bg-gradient-to-r from-purple-600 to-teal-500 disabled:opacity-40 text-white rounded-xl transition cursor-pointer shadow-md"
+              className="p-2 bg-gradient-to-r from-purple-600 to-teal-500 disabled:opacity-40 text-white rounded-xl transition cursor-pointer shadow-xs"
             >
               <Send className="w-4 h-4" />
             </button>

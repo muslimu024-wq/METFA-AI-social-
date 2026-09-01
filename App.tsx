@@ -110,6 +110,19 @@ export function App() {
     window.addEventListener('appinstalled', handleAppInstalled);
     window.addEventListener('swUpdated', handleSwUpdated);
 
+    // Cross-app navigation & deep link listener (for Sellme & AliExpress Marketplace)
+    try {
+      const urlParams = new URLSearchParams(window.location.search);
+      const targetTab = urlParams.get('tab') || urlParams.get('route');
+      const hash = window.location.hash.replace('#', '').toLowerCase();
+      if (targetTab === 'marketplace' || hash === 'marketplace' || urlParams.get('source') === 'sellme') {
+        setActiveTab('marketplace');
+      }
+    } catch {}
+
+    const handleOpenMarketplace = () => setActiveTab('marketplace');
+    window.addEventListener('metfa_open_marketplace', handleOpenMarketplace);
+
     // Global listener to trigger Auth Modal from any deep action
     const handleOpenAuth = () => setIsAuthModalOpen(true);
     const handleOpenApiKeys = () => setIsApiKeysModalOpen(true);
@@ -120,6 +133,7 @@ export function App() {
       window.removeEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
       window.removeEventListener('appinstalled', handleAppInstalled);
       window.removeEventListener('swUpdated', handleSwUpdated);
+      window.removeEventListener('metfa_open_marketplace', handleOpenMarketplace);
       window.removeEventListener('metfa_open_auth_modal', handleOpenAuth);
       window.removeEventListener('metfa_open_api_keys_modal', handleOpenApiKeys);
     };
@@ -171,7 +185,7 @@ export function App() {
   const isSocialTab = activeTab !== 'chat';
 
   return (
-    <div className="flex flex-col h-screen h-[100dvh] w-full bg-[#04060C] text-gray-100 overflow-hidden font-sans select-none">
+    <div className="flex flex-col h-screen h-[100dvh] w-full bg-slate-50 text-slate-900 overflow-hidden font-sans select-none">
       {/* PWA Update Ready Banner */}
       {pwaUpdateAvailable && (
         <div className="bg-gradient-to-r from-purple-700 via-indigo-600 to-teal-600 text-white px-4 py-2 text-xs flex items-center justify-between shadow-md z-50 shrink-0">

@@ -533,3 +533,48 @@ export const editReelHighlight = (reelId: string, updates: Partial<ReelHighlight
   return updated;
 };
 
+import {
+  getStoredApiKeys,
+  saveStoredApiKeys,
+  clearStoredApiKeys,
+  DEFAULT_API_KEYS,
+  type AppApiKeys,
+} from './apiKeysStore';
+
+// =========================================================================
+// API KEY & CLOUD ACCELERATION HELPERS
+// =========================================================================
+export {
+  getStoredApiKeys,
+  saveStoredApiKeys,
+  clearStoredApiKeys,
+  DEFAULT_API_KEYS,
+  type AppApiKeys,
+};
+
+export const getCloudAccelerationStatus = () => {
+  try {
+    const keys = getStoredApiKeys();
+    return {
+      hasGemini: Boolean(keys.geminiApiKey && keys.geminiApiKey.trim().length > 3),
+      hasOpenAI: Boolean(keys.openaiApiKey && keys.openaiApiKey.trim().length > 3),
+      hasGrok: Boolean(keys.grokApiKey && keys.grokApiKey.trim().length > 3),
+      hasClaude: Boolean(keys.claudeApiKey && keys.claudeApiKey.trim().length > 3),
+      isAccelerated: Boolean(
+        (keys.geminiApiKey && keys.geminiApiKey.trim().length > 3) ||
+        (keys.openaiApiKey && keys.openaiApiKey.trim().length > 3) ||
+        (keys.grokApiKey && keys.grokApiKey.trim().length > 3)
+      ),
+    };
+  } catch {
+    return {
+      hasGemini: false,
+      hasOpenAI: false,
+      hasGrok: false,
+      hasClaude: false,
+      isAccelerated: false,
+    };
+  }
+};
+
+
