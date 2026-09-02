@@ -119,21 +119,17 @@ export const Header: React.FC<HeaderProps> = ({
             {/* [Search Icon] (Opens Global Search Dialog with speech dictation, tags & group filters) */}
             <GlobalSearchBar onNavigateTab={onNavigateTab} />
 
-            {/* [Sellme Marketplace Navigation Button] */}
+            {/* [Sellme Marketplace Navigation Button - Direct 1-Click to shop.metfaai.com] */}
             <button
               type="button"
               id="header-sellme-marketplace-btn"
-              onClick={() => onNavigateTab('marketplace')}
-              className={`w-9 h-9 sm:w-10 sm:h-10 rounded-2xl flex items-center justify-center transition shrink-0 active:scale-95 shadow-xs group cursor-pointer ${
-                activeTab === 'marketplace'
-                  ? 'bg-gradient-to-tr from-purple-600 to-teal-500 text-white shadow-sm shadow-purple-600/30 ring-2 ring-teal-400/40'
-                  : 'bg-slate-100 hover:bg-slate-200 border border-slate-200 text-slate-700 hover:text-purple-600'
-              }`}
-              title="Sellme Marketplace & AliExpress (shop.metfaai.com)"
+              onClick={() => {
+                window.open('https://shop.metfaai.com', '_blank', 'noopener,noreferrer');
+              }}
+              className="w-9 h-9 sm:w-10 sm:h-10 rounded-2xl flex items-center justify-center transition shrink-0 active:scale-95 shadow-xs group cursor-pointer bg-slate-100 hover:bg-slate-200 border border-slate-200 text-slate-700 hover:text-purple-600"
+              title="Sellme App Store (shop.metfaai.com)"
             >
-              <ShoppingBag className={`w-4 h-4 sm:w-4.5 sm:h-4.5 group-hover:scale-110 transition-transform ${
-                activeTab === 'marketplace' ? 'text-white' : 'text-purple-600 group-hover:text-teal-600'
-              }`} />
+              <ShoppingBag className="w-4 h-4 sm:w-4.5 sm:h-4.5 group-hover:scale-110 transition-transform text-purple-600 group-hover:text-teal-600" />
             </button>
 
             {/* [AI Settings Dropdown Menu] - Rendered ONLY on "AI Tools" (chat) tab */}
@@ -330,19 +326,20 @@ export const Header: React.FC<HeaderProps> = ({
 
                 <button
                   type="button"
-                  onClick={() => handleNavigate('marketplace')}
-                  className={`w-full p-2.5 rounded-xl flex items-center justify-between text-xs font-bold transition cursor-pointer ${
-                    activeTab === 'marketplace'
-                      ? 'bg-gradient-to-r from-purple-600 to-teal-500 text-white'
-                      : 'text-slate-700 hover:bg-slate-100 hover:text-teal-600'
-                  }`}
-                  title="Sellme Marketplace & AliExpress"
+                  onClick={() => {
+                    window.open('https://shop.metfaai.com', '_blank', 'noopener,noreferrer');
+                    setIsSideDrawerOpen(false);
+                  }}
+                  className="w-full p-2.5 rounded-xl flex items-center justify-between text-xs font-bold transition cursor-pointer text-slate-700 hover:bg-slate-100 hover:text-teal-600"
+                  title="Sellme App Home (shop.metfaai.com)"
                 >
                   <div className="flex items-center gap-3">
-                    <ShoppingBag className={`w-4 h-4 ${activeTab === 'marketplace' ? 'text-white' : 'text-teal-600'}`} />
-                    <span>Sellme Marketplace & AliExpress</span>
+                    <ShoppingBag className="w-4 h-4 text-teal-600" />
+                    <span>Sellme App (shop.metfaai.com)</span>
                   </div>
-                  <span className="text-[10px] bg-teal-100 text-teal-800 px-2 py-0.5 rounded-full border border-teal-200 font-bold">Shop</span>
+                  <span className="text-[10px] bg-gradient-to-r from-teal-500 to-purple-600 text-white px-2 py-0.5 rounded-full font-bold shadow-xs">
+                    🛒 Open
+                  </span>
                 </button>
               </div>
 

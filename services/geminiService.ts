@@ -18,9 +18,15 @@ export async function sendMultimodalMessage(
   settingsOrHistory?: Partial<StudioSettings> | Array<{ role: 'user' | 'assistant'; content: string }>,
   maybeHistory?: Array<{ role: 'user' | 'assistant'; content: string }>
 ): Promise<MultimodalResponse> {
-  // 26-second client timeout ensures the client never hangs indefinitely while allowing server retry logic
+  // 60-second client timeout ensures sufficient time for multimodal reasoning and image analysis while preventing indefinite hanging
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 26000);
+  const timeoutId = setTimeout(() => {
+    try {
+      controller.abort();
+    } catch {
+      // ignore
+    }
+  }, 60000);
 
   try {
     let settings: Partial<StudioSettings> | undefined;
@@ -95,7 +101,7 @@ export async function sendMultimodalMessage(
       if (response.status === 503 || data?.error?.code === 'SERVICE_UNAVAILABLE_OR_TIMEOUT') {
         throw new Error(
           data?.error?.message ||
-          "Gemini models are currently under heavy load or timed out after multiple automatic retries. Please click 'Try Again' in a moment."
+          "Gemini models are currently under heavy load. Please click 'Try Again' in a moment."
         );
       }
       const errMsg = data?.error?.message || `Request failed with status ${response.status}`;
@@ -113,13 +119,20 @@ export async function sendMultimodalMessage(
     };
   } catch (error: any) {
     clearTimeout(timeoutId);
-    console.error("Error in sendMultimodalMessage:", error);
+    const isAbort =
+      error?.name === 'AbortError' ||
+      error?.message?.includes('aborted') ||
+      error?.message?.includes('signal is aborted') ||
+      controller.signal.aborted;
 
-    if (error.name === 'AbortError') {
+    if (isAbort) {
+      console.warn("sendMultimodalMessage request reached timeout limit.");
       throw new Error(
         "Request timed out. The server was busy and did not respond in time. Please tap 'Try Again' to retry."
       );
     }
+
+    console.error("Error in sendMultimodalMessage:", error);
 
     if (error instanceof Error) {
       throw new Error(error.message);
@@ -130,7 +143,13 @@ export async function sendMultimodalMessage(
 
 export async function editImageWithPrompt(base64Image: string, mimeType: string, prompt: string): Promise<string> {
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 26000);
+  const timeoutId = setTimeout(() => {
+    try {
+      controller.abort();
+    } catch {
+      // ignore
+    }
+  }, 60000);
 
   try {
     const storedKeys = getStoredApiKeys();
@@ -166,10 +185,16 @@ export async function editImageWithPrompt(base64Image: string, mimeType: string,
     return data.imageB64;
   } catch (error: any) {
     clearTimeout(timeoutId);
-    console.error("Error calling Gemini API for image edit:", error);
-    if (error.name === 'AbortError') {
+    const isAbort =
+      error?.name === 'AbortError' ||
+      error?.message?.includes('aborted') ||
+      error?.message?.includes('signal is aborted') ||
+      controller.signal.aborted;
+
+    if (isAbort) {
       throw new Error("Image transformation timed out. Please retry.");
     }
+    console.error("Error calling Gemini API for image edit:", error);
     if (error instanceof Error) {
       throw new Error(error.message);
     }
@@ -179,7 +204,13 @@ export async function editImageWithPrompt(base64Image: string, mimeType: string,
 
 export async function upscaleImageWithGemini(base64Image: string, mimeType: string = 'image/png'): Promise<string> {
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 26000);
+  const timeoutId = setTimeout(() => {
+    try {
+      controller.abort();
+    } catch {
+      // ignore
+    }
+  }, 60000);
 
   try {
     const storedKeys = getStoredApiKeys();
@@ -214,10 +245,16 @@ export async function upscaleImageWithGemini(base64Image: string, mimeType: stri
     return data.imageB64;
   } catch (error: any) {
     clearTimeout(timeoutId);
-    console.error("Error upscaling image with Gemini:", error);
-    if (error.name === 'AbortError') {
+    const isAbort =
+      error?.name === 'AbortError' ||
+      error?.message?.includes('aborted') ||
+      error?.message?.includes('signal is aborted') ||
+      controller.signal.aborted;
+
+    if (isAbort) {
       throw new Error("AI 4K Upscale timed out. Please retry.");
     }
+    console.error("Error upscaling image with Gemini:", error);
     if (error instanceof Error) {
       throw new Error(error.message);
     }
@@ -229,7 +266,13 @@ export const upscaleImageWithAI = upscaleImageWithGemini;
 
 export async function enhancePromptWithAI(userPrompt: string): Promise<string> {
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 12000);
+  const timeoutId = setTimeout(() => {
+    try {
+      controller.abort();
+    } catch {
+      // ignore
+    }
+  }, 30000);
 
   try {
     const storedKeys = getStoredApiKeys();
@@ -261,14 +304,20 @@ export async function enhancePromptWithAI(userPrompt: string): Promise<string> {
     return data.enhancedPrompt;
   } catch (error: any) {
     clearTimeout(timeoutId);
-    console.error("Error enhancing prompt with Gemini:", error);
+    console.warn("Prompt enhance fallback triggered:", error?.message || error);
     return userPrompt;
   }
 }
 
 export async function generateSocialCaptionAndHashtags(imagePrompt: string): Promise<string> {
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 12000);
+  const timeoutId = setTimeout(() => {
+    try {
+      controller.abort();
+    } catch {
+      // ignore
+    }
+  }, 30000);
 
   try {
     const storedKeys = getStoredApiKeys();
@@ -295,7 +344,7 @@ export async function generateSocialCaptionAndHashtags(imagePrompt: string): Pro
     return data.caption || "Transformed scene with Metfa Social Studio. ✨ #MetfaSocial #AIArtwork #DigitalArt #GenerativeArt";
   } catch (error: any) {
     clearTimeout(timeoutId);
-    console.error("Error generating social caption with Gemini:", error);
+    console.warn("Social caption generation fallback triggered:", error?.message || error);
     return `Transformed scene with Metfa Social Studio. ✨ #MetfaSocial #AIArtwork #DigitalArt #GenerativeArt`;
   }
 }

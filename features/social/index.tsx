@@ -13,10 +13,11 @@ import CreatePageModal from '../../components/CreatePageModal';
 import CreateGroupModal from '../../components/CreateGroupModal';
 import ShareToFeedModal from '../../components/ShareToFeedModal';
 import { CommunityPost, ReelHighlight } from '../../types/community';
-import { MarketplaceProduct } from '../../types/marketplace';
 import {
   getCommunityPosts,
   saveCommunityPosts,
+  fetchAndSyncCommunityPosts,
+  createPostAsync,
 } from '../../utils/communityStore';
 import {
   getReelHighlights,
@@ -49,7 +50,7 @@ export const SocialEcosystemModule: React.FC<SocialEcosystemProps> = ({
   shareModalData,
   onCloseShareModal,
 }) => {
-  const { userProfile, updateProfile } = useAuth();
+  const { user, userProfile, updateProfile, isSupabaseConnected } = useAuth();
 
   // Social State (Isolated from AI Studio chat & inference)
   const [posts, setPosts] = useState<CommunityPost[]>(() => getCommunityPosts());
@@ -60,6 +61,19 @@ export const SocialEcosystemModule: React.FC<SocialEcosystemProps> = ({
   const [isCreateReelOpen, setIsCreateReelOpen] = useState(false);
   const [isCreatePageOpen, setIsCreatePageOpen] = useState(false);
   const [isCreateGroupOpen, setIsCreateGroupOpen] = useState(false);
+
+  // Automatically load and synchronize posts from Supabase database
+  useEffect(() => {
+    let isMounted = true;
+    fetchAndSyncCommunityPosts().then((syncedPosts) => {
+      if (isMounted && syncedPosts && syncedPosts.length > 0) {
+        setPosts(syncedPosts);
+      }
+    });
+    return () => {
+      isMounted = false;
+    };
+  }, [user?.id, isSupabaseConnected]);
 
   // Automatically dismiss active modals when currentTab changes
   useEffect(() => {
@@ -85,29 +99,15 @@ export const SocialEcosystemModule: React.FC<SocialEcosystemProps> = ({
     };
   }, []);
 
-  const handlePostCreated = (newPostData: any) => {
-    const newPost: CommunityPost = {
-      ...newPostData,
-      id: `post_${Date.now()}`,
-      likesCount: 1,
-      remixCount: 0,
-      commentsCount: 0,
-      sharesCount: 0,
-      createdAt: 'Just now',
-      isLiked: true,
-      comments: [],
-    };
-    const updated = [newPost, ...posts];
-    setPosts(updated);
-    saveCommunityPosts(updated);
+  const handlePostCreated = async (newPostData: any) => {
     onNavigateTab('feed');
-
-    addNotification({
-      type: 'remix',
-      title: 'Post Published',
-      message: `Your artwork "${newPost.prompt.slice(0, 30)}..." is now live on the feed!`,
-      linkTab: 'feed',
-    });
+    try {
+      const authorId = user?.id || userProfile?.id;
+      const createdPost = await createPostAsync(newPostData, authorId);
+      setPosts((prev) => [createdPost, ...prev.filter((p) => p.id !== createdPost.id)]);
+    } catch (err) {
+      console.warn('[SocialModule] Error creating post:', err);
+    }
   };
 
   const handleReelCreated = (newReel: ReelHighlight) => {
@@ -182,34 +182,6 @@ export const SocialEcosystemModule: React.FC<SocialEcosystemProps> = ({
         <MarketplaceView
           userProfile={userProfile}
           onNavigateTab={onNavigateTab}
-          onShareProductToFeed={(product: MarketplaceProduct) => {
-            const productPostData = {
-              prompt: `Check out this trending product on Sellme Marketplace & AliExpress: ${product.title} ($${product.price})`,
-              imageSrc: product.imageUrl,
-              stylePreset: 'Marketplace Recommendation',
-            };
-            handlePostCreated({
-              id: `post_prod_${Date.now()}`,
-              author: {
-                id: userProfile.id,
-                name: userProfile.name,
-                username: userProfile.username,
-                avatar: userProfile.avatar,
-                isVerified: userProfile.isVerified,
-              },
-              content: `🔥 **Recommended Product from Sellme Marketplace & AliExpress**\n\n**${product.title}**\n\n💵 Price: **$${product.price.toFixed(2)}** ${product.originalPrice ? `~~$${product.originalPrice.toFixed(2)}~~` : ''}\n⭐ Rating: ${product.rating.toFixed(1)} / 5 (${product.ordersCount.toLocaleString()}+ orders)\n\n🛒 [Shop on Sellme & AliExpress](${product.affiliateUrl || product.productUrl})`,
-              image: product.imageUrl,
-              category: 'general',
-              likesCount: 1,
-              commentsCount: 0,
-              sharesCount: 0,
-              timestamp: 'Just now',
-              isLiked: false,
-              isBookmarked: false,
-              tags: product.tags,
-            });
-            onNavigateTab('feed');
-          }}
         />
       )}
 

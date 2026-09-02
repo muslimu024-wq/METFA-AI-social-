@@ -905,7 +905,7 @@ export function getSellmeShopUrl(params?: {
   searchQuery?: string;
   source?: string;
 }): string {
-  const baseUrl = 'https://shop.metfaai.com';
+  const baseUrl = 'https://shop.metfa.com';
   const url = new URL(baseUrl);
   url.searchParams.set('source', params?.source || 'metfa_social');
   url.searchParams.set('ref', 'metfa_social_app');

@@ -121,3 +121,84 @@ CREATE TRIGGER on_auth_user_created
 AFTER INSERT ON auth.users
 FOR EACH ROW
 EXECUTE FUNCTION public.handle_new_user();
+
+-- =====================================================================
+-- 8. CREATE PUBLIC POSTS TABLE & ROW LEVEL SECURITY (RLS)
+-- =====================================================================
+
+CREATE TABLE IF NOT EXISTS public.posts (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  author_id UUID NOT NULL REFERENCES public.profiles(id) ON DELETE CASCADE,
+  prompt TEXT NOT NULL,
+  caption TEXT,
+  style_preset TEXT,
+  image_src TEXT,
+  image_gallery JSONB DEFAULT '[]'::jsonb,
+  video_src TEXT,
+  original_image_src TEXT,
+  text_background_preset TEXT,
+  post_type TEXT DEFAULT 'text',
+  likes_count INTEGER DEFAULT 0,
+  remix_count INTEGER DEFAULT 0,
+  comments_count INTEGER DEFAULT 0,
+  shares_count INTEGER DEFAULT 0,
+  tags JSONB DEFAULT '[]'::jsonb,
+  feed_type TEXT DEFAULT 'for_you',
+  page_id TEXT,
+  page_name TEXT,
+  page_category TEXT,
+  group_id TEXT,
+  group_name TEXT,
+  posting_identity JSONB,
+  audio_track JSONB,
+  visibility TEXT DEFAULT 'public',
+  is_pinned BOOLEAN DEFAULT false,
+  is_edited BOOLEAN DEFAULT false,
+  is_ai_generated BOOLEAN DEFAULT false,
+  prompt_used TEXT,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Index for fast feed retrieval ordered by creation time
+CREATE INDEX IF NOT EXISTS idx_posts_created_at ON public.posts(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_posts_author_id ON public.posts(author_id);
+
+-- Enable Row Level Security (RLS)
+ALTER TABLE public.posts ENABLE ROW LEVEL SECURITY;
+
+-- Policy: Public posts are viewable by everyone
+DROP POLICY IF EXISTS "Public posts are viewable by everyone" ON public.posts;
+CREATE POLICY "Public posts are viewable by everyone"
+ON public.posts
+FOR SELECT
+USING (true);
+
+-- Policy: Authenticated users can insert their own posts
+DROP POLICY IF EXISTS "Users can insert their own posts" ON public.posts;
+CREATE POLICY "Users can insert their own posts"
+ON public.posts
+FOR INSERT
+WITH CHECK (auth.uid() = author_id);
+
+-- Policy: Users can update their own posts
+DROP POLICY IF EXISTS "Users can update their own posts" ON public.posts;
+CREATE POLICY "Users can update their own posts"
+ON public.posts
+FOR UPDATE
+USING (auth.uid() = author_id);
+
+-- Policy: Users can delete their own posts
+DROP POLICY IF EXISTS "Users can delete their own posts" ON public.posts;
+CREATE POLICY "Users can delete their own posts"
+ON public.posts
+FOR DELETE
+USING (auth.uid() = author_id);
+
+-- Trigger to automatically update updated_at on post modification
+DROP TRIGGER IF EXISTS on_posts_updated ON public.posts;
+CREATE TRIGGER on_posts_updated
+BEFORE UPDATE ON public.posts
+FOR EACH ROW
+EXECUTE FUNCTION public.handle_updated_at();
+

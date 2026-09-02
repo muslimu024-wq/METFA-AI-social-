@@ -237,7 +237,7 @@ async function startServer() {
     });
   }
 
-  // Core execution engine with 25s timeout, robust error handling, and fallback models
+  // Core execution engine with 18s timeout, robust error handling, and modern fallback models
   async function generateContentWithFallback(
     ai: GoogleGenAI,
     options: {
@@ -247,14 +247,15 @@ async function startServer() {
       config?: any;
     }
   ) {
-    const timeoutMs = options.timeoutMs ?? 25000;
+    const timeoutMs = options.timeoutMs ?? 18000;
     const errors: Array<{ model: string; error: string; code?: string; durationMs: number }> = [];
 
     // Normalize models array to ensure valid supported Gemini models only
     const validModels = options.models
       .map((m) => {
         if (!m || typeof m !== "string") return "gemini-3.7-flash";
-        if (m === "gemini-3.6-flash") return "gemini-3.7-flash";
+        if (m === "gemini-3.6-flash" || m === "gemini-2.5-flash" || m === "gemini-2.0-flash") return "gemini-3.7-flash";
+        if (m === "gemini-2.5-flash-lite" || m === "gemini-2.0-flash-lite") return "gemini-3.1-flash-lite";
         if (
           !m.startsWith("gemini-") &&
           !m.startsWith("veo-") &&
@@ -267,13 +268,11 @@ async function startServer() {
       })
       .filter((m, idx, arr) => arr.indexOf(m) === idx);
 
-    // Ensure fallback models are always present in the chain
+    // Ensure modern fallback models are always present in the chain for non-image tasks
     if (!validModels[0]?.includes("-image")) {
       const standardFallbackChain = [
         "gemini-3.7-flash",
         "gemini-3.1-flash-lite",
-        "gemini-2.5-flash",
-        "gemini-2.5-flash-lite",
       ];
       for (const modelName of standardFallbackChain) {
         if (!validModels.includes(modelName)) {
@@ -373,7 +372,7 @@ async function startServer() {
 
         // If 503 high demand or 429 quota spike occurred, wait a brief delay before trying next model
         if (errMsg.includes("503") || errMsg.includes("high demand") || errMsg.includes("429") || errMsg.includes("quota")) {
-          await new Promise((resolve) => setTimeout(resolve, 350));
+          await new Promise((resolve) => setTimeout(resolve, 250));
         }
 
         if (isLast) {
@@ -627,7 +626,7 @@ async function startServer() {
 
         const imageResult = await generateContentWithFallback(ai, {
           models: ["gemini-3.1-flash-lite-image", "gemini-3.1-flash-image"],
-          timeoutMs: 25000,
+          timeoutMs: 20000,
           contents: {
             parts: [
               {
@@ -739,7 +738,7 @@ ${METFA_AI_SAFETY_SYSTEM_INSTRUCTION}`;
 
     const result = await generateContentWithFallback(ai, {
       models: modelFallbackChain,
-      timeoutMs: 25000,
+      timeoutMs: 18000,
       contents: { parts },
       config: {
         systemInstruction,

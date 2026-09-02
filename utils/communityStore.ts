@@ -1,9 +1,21 @@
 import { CommunityPost, UserProfile, PostComment, VoiceComment } from '../types/community';
 import { addNotification } from './notificationStore';
 import { safeSetItem, safeGetItem, compressImageDataUrl } from './storageUtils';
+import {
+  fetchSupabasePosts,
+  createSupabasePost,
+  updateSupabasePost as doUpdateSupabasePost,
+  deleteSupabasePost as doDeleteSupabasePost,
+} from '../services/postService';
+import { isSupabaseConfigured } from '../services/supabaseClient';
 
 const POSTS_STORAGE_KEY = 'metfa_community_posts_v2';
 const USER_PROFILE_KEY = 'metfa_user_profile_v2';
+
+export const isUuid = (id?: string | null): boolean => {
+  if (!id || typeof id !== 'string') return false;
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id);
+};
 
 export const INITIAL_USER_PROFILE: UserProfile = {
   id: 'user_default',
@@ -250,6 +262,116 @@ export const saveCommunityPost = (post: Omit<CommunityPost, 'id' | 'likesCount' 
   });
 
   return newPost;
+};
+
+/**
+ * Asynchronously loads posts from Supabase (if configured) and synchronizes them with the local cache.
+ * Preserves initial seed posts for demo completeness while elevating persistent database posts.
+ */
+export const fetchAndSyncCommunityPosts = async (): Promise<CommunityPost[]> => {
+  if (!isSupabaseConfigured()) {
+    return getCommunityPosts();
+  }
+
+  try {
+    const { posts: dbPosts, error } = await fetchSupabasePosts();
+    if (error || !dbPosts) {
+      return getCommunityPosts();
+    }
+
+    if (dbPosts.length > 0) {
+      // Merge dbPosts with existing local/seed posts without duplicate IDs
+      const local = getCommunityPosts();
+      const dbIds = new Set(dbPosts.map((p) => p.id));
+      const filteredLocal = local.filter((p) => !dbIds.has(p.id) && !isUuid(p.id));
+      const combined = [...dbPosts, ...filteredLocal];
+      saveCommunityPosts(combined);
+      return combined;
+    }
+  } catch (err) {
+    console.warn('[CommunityStore] Error during fetchAndSyncCommunityPosts:', err);
+  }
+
+  return getCommunityPosts();
+};
+
+/**
+ * Asynchronously creates a post. If Supabase is configured and authorId is a valid UUID,
+ * inserts the record into Supabase public.posts with Row Level Security.
+ * Falls back to local persistent storage if Supabase is offline or for guest users.
+ */
+export const createPostAsync = async (
+  post: Omit<CommunityPost, 'id' | 'likesCount' | 'remixCount' | 'commentsCount' | 'sharesCount' | 'createdAt' | 'comments'>,
+  authorId?: string
+): Promise<CommunityPost> => {
+  if (isSupabaseConfigured() && authorId && isUuid(authorId)) {
+    try {
+      const { post: dbPost, error } = await createSupabasePost(post, authorId);
+      if (dbPost && !error) {
+        const current = getCommunityPosts();
+        const updated = [dbPost, ...current.filter((p) => p.id !== dbPost.id)];
+        saveCommunityPosts(updated);
+
+        addNotification({
+          type: 'like',
+          title: 'Post Published Globally',
+          message: `Your creation "${dbPost.prompt.substring(0, 35)}..." was published to Supabase database!`,
+          actor: {
+            name: dbPost.author.name,
+            username: dbPost.author.username,
+            avatar: dbPost.author.avatar,
+          },
+          linkTab: 'feed',
+          thumbnail: dbPost.imageSrc,
+        });
+
+        return dbPost;
+      }
+      console.warn('[CommunityStore] Supabase post creation failed, falling back to local:', error);
+    } catch (err) {
+      console.warn('[CommunityStore] Exception during createPostAsync, falling back to local:', err);
+    }
+  }
+
+  // Resilient fallback to local storage
+  return saveCommunityPost(post);
+};
+
+/**
+ * Asynchronously updates a community post's text, caption, prompt, tags, or styling presets.
+ * If the post was created in Supabase (UUID), updates public.posts in Supabase.
+ */
+export const updatePostAsync = async (
+  postId: string,
+  updates: Partial<CommunityPost>,
+  authorId?: string
+): Promise<CommunityPost[]> => {
+  if (isSupabaseConfigured() && isUuid(postId) && authorId && isUuid(authorId)) {
+    try {
+      await doUpdateSupabasePost(postId, updates, authorId);
+    } catch (err) {
+      console.warn('[CommunityStore] Error updating post in Supabase:', err);
+    }
+  }
+  return updateCommunityPost(postId, updates);
+};
+
+/**
+ * Asynchronously deletes a community post by ID.
+ * If the post was created in Supabase (UUID), deletes from public.posts in Supabase.
+ */
+export const deletePostAsync = async (
+  postId: string,
+  authorId?: string
+): Promise<CommunityPost[]> => {
+  if (isSupabaseConfigured() && isUuid(postId) && authorId && isUuid(authorId)) {
+    try {
+      await doDeleteSupabasePost(postId, authorId);
+    } catch (err) {
+      console.warn('[CommunityStore] Error deleting post from Supabase:', err);
+    }
+  }
+  return deleteCommunityPost(postId);
 };
 
 export const toggleLikePost = (postId: string): CommunityPost[] => {

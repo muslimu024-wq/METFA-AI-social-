@@ -43,6 +43,8 @@ import {
   isContentOwner,
   updateCommunityPost,
   deleteCommunityPost,
+  updatePostAsync,
+  deletePostAsync,
   updateComment,
   deleteComment,
   deleteVoiceComment,
@@ -127,8 +129,9 @@ export const CommunityFeed: React.FC<CommunityFeedProps> = ({
   }, []);
 
   // Post CRUD Handlers
-  const handleSavePostEdit = (updatedPost: CommunityPost) => {
-    const updated = updateCommunityPost(updatedPost.id, updatedPost);
+  const handleSavePostEdit = async (updatedPost: CommunityPost) => {
+    const authorId = authUser?.id || userProfile?.id;
+    const updated = await updatePostAsync(updatedPost.id, updatedPost, authorId);
     onUpdatePosts(updated);
     setEditingPost(null);
     showToast('Post updated successfully');
@@ -139,8 +142,9 @@ export const CommunityFeed: React.FC<CommunityFeedProps> = ({
       isOpen: true,
       title: 'Delete Post',
       message: 'Are you sure you want to permanently delete this post? This action cannot be undone and will remove it from the feed and your profile.',
-      onConfirm: () => {
-        const updated = deleteCommunityPost(postId);
+      onConfirm: async () => {
+        const authorId = authUser?.id || userProfile?.id;
+        const updated = await deletePostAsync(postId, authorId);
         onUpdatePosts(updated);
         setActivePostMenuId(null);
         showToast('Post deleted successfully');

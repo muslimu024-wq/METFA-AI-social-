@@ -64,7 +64,13 @@ export async function generateAICaptionAndHashtags(options: {
 
   try {
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 18000);
+    const timeoutId = setTimeout(() => {
+      try {
+        controller.abort();
+      } catch {
+        // ignore
+      }
+    }, 35000);
 
     const response = await fetch('/api/ai/caption-hashtags', {
       method: 'POST',
@@ -148,7 +154,13 @@ export async function refineTextWithAI(options: {
 
   try {
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 18000);
+    const timeoutId = setTimeout(() => {
+      try {
+        controller.abort();
+      } catch {
+        // ignore
+      }
+    }, 35000);
 
     const response = await fetch('/api/ai/refine-text', {
       method: 'POST',
@@ -227,7 +239,13 @@ export async function generateQuickAIReply(commentText: string, postCaption?: st
 
   try {
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 12000);
+    const timeoutId = setTimeout(() => {
+      try {
+        controller.abort();
+      } catch {
+        // ignore
+      }
+    }, 30000);
 
     const response = await fetch('/api/ai/quick-reply', {
       method: 'POST',
@@ -293,7 +311,13 @@ export async function generateCustomAIAvatar(options: {
 
   try {
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 20000);
+    const timeoutId = setTimeout(() => {
+      try {
+        controller.abort();
+      } catch {
+        // ignore
+      }
+    }, 45000);
 
     const response = await fetch('/api/ai/generate-avatar', {
       method: 'POST',
