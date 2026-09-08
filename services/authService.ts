@@ -10,7 +10,7 @@ import type { Session, User } from '@supabase/supabase-js';
 
 export interface AuthUser {
   id: string; // Supabase user UUID (or guest id)
-  metfaId: string; // Unified Metfa ID (e.g. MID-9281-ABCD)
+  metfaId: string; // Unified Metfa ID (e.g. MID-7482-ABCD)
   name: string;
   username: string; // @username
   authType: 'gmail' | 'phone' | 'email' | 'guest';
@@ -27,39 +27,27 @@ const AUTH_USER_KEY = 'metfa_auth_user_v2';
 const USER_PROFILE_KEY = 'metfa_user_profile_v2';
 const ACTIVE_IDENTITY_KEY = 'metfa_active_identity_v1';
 
+export const GUEST_AVATAR =
+  "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%2394a3b8' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2'/%3E%3Ccircle cx='12' cy='7' r='4'/%3E%3C/svg%3E";
+
 /**
- * Curated list of clean, professional creator avatars (high-res portrait photography)
+ * Curated list of clean, neutral default avatars
  */
 export const DEFAULT_AVATARS: string[] = [
-  'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=300&auto=format&fit=crop&q=80', // Female creator portrait
-  'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=300&auto=format&fit=crop&q=80', // Male creator portrait
-  'https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=300&auto=format&fit=crop&q=80', // Female portrait
-  'https://images.unsplash.com/photo-1500648767791-00dcc994a43e?w=300&auto=format&fit=crop&q=80', // Male portrait
-  'https://images.unsplash.com/photo-1539571696357-5a69c17a67c6?w=300&auto=format&fit=crop&q=80', // Creative portrait
-  'https://images.unsplash.com/photo-1517841905240-472988babdf9?w=300&auto=format&fit=crop&q=80', // Studio portrait
-  'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=300&auto=format&fit=crop&q=80', // Clean profile
-  'https://images.unsplash.com/photo-1580489944761-15a19d654956?w=300&auto=format&fit=crop&q=80', // Creator portrait
+  GUEST_AVATAR,
 ];
 
 /**
- * Returns a clean, professional default avatar image deterministically based on seed
- * without invoking external bot/cartoon avatar APIs.
+ * Returns the application's clean neutral default avatar UI
+ * without invoking fake people photos or external cartoon bot APIs.
  */
-export const getDefaultAvatar = (seed?: string): string => {
-  if (!seed || typeof seed !== 'string') return DEFAULT_AVATARS[0];
-  const cleanSeed = seed.trim().toLowerCase();
-  let hash = 0;
-  for (let i = 0; i < cleanSeed.length; i++) {
-    hash = (hash << 5) - hash + cleanSeed.charCodeAt(i);
-    hash |= 0;
-  }
-  const index = Math.abs(hash) % DEFAULT_AVATARS.length;
-  return DEFAULT_AVATARS[index];
+export const getDefaultAvatar = (_seed?: string): string => {
+  return GUEST_AVATAR;
 };
 
 /**
  * Sanitizes avatar URL to ensure user-uploaded images/photos are preserved,
- * while eliminating legacy cartoon bot/dicebear endpoints.
+ * while eliminating legacy dummy fake person photos and cartoon bot endpoints.
  */
 export const sanitizeAvatarUrl = (avatar?: string | null, seed?: string): string => {
   if (!avatar || typeof avatar !== 'string') return getDefaultAvatar(seed);
@@ -70,7 +58,8 @@ export const sanitizeAvatarUrl = (avatar?: string | null, seed?: string): string
     trimmed.includes('api.dicebear') ||
     trimmed.toLowerCase().includes('bottts') ||
     trimmed === 'undefined' ||
-    trimmed === 'null'
+    trimmed === 'null' ||
+    trimmed.includes('images.unsplash.com') // purge legacy fake person demo photos
   ) {
     return getDefaultAvatar(seed);
   }
@@ -78,7 +67,7 @@ export const sanitizeAvatarUrl = (avatar?: string | null, seed?: string): string
 };
 
 /**
- * Generates an automatic unique username (e.g. alex_1234)
+ * Generates an automatic unique username (e.g. creator_1234)
  */
 export const generateUniqueUsername = (input: string): string => {
   const clean = input
@@ -101,30 +90,64 @@ export const generateUnifiedMetfaId = (seed?: string): string => {
   return `MID-${timestampSuffix}-${randomHex}`;
 };
 
-// Default initial guest user
-export const INITIAL_GUEST_USER: AuthUser = {
-  id: 'usr_metfa_9281',
-  metfaId: 'MID-9281-ALEX',
-  name: 'Alex Rivera',
-  username: 'alex.rivera',
+// Default clean guest user representing an unauthenticated guest state
+export const GUEST_USER: AuthUser = {
+  id: '',
+  metfaId: '',
+  name: 'Guest',
+  username: 'guest',
   authType: 'guest',
-  phoneOrEmail: 'alex.rivera.ai@gmail.com',
-  avatar: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=200&auto=format&fit=crop&q=80',
+  phoneOrEmail: '',
+  avatar: GUEST_AVATAR,
   sessionToken: '',
-  tokenExpiry: Date.now() + 30 * 24 * 60 * 60 * 1000,
-  createdAt: '2026-01-10',
-  isVerified: true,
+  tokenExpiry: 0,
+  createdAt: '',
+  isVerified: false,
+};
+
+export const GUEST_PROFILE: UserProfile = {
+  id: '',
+  name: 'Guest',
+  username: 'guest',
+  avatar: GUEST_AVATAR,
+  bio: '',
+  location: '',
+  website: '',
+  isVerified: false,
+  joinDate: '',
+  stats: {
+    postsCount: 0,
+    followersCount: 0,
+    followingCount: 0,
+    totalLikes: 0,
+    reelsCount: 0,
+  },
 };
 
 /**
- * Retrieve current active cached SSO user
+ * Reset authentication and profile cache keys safely without deleting unrelated app data
+ */
+export const clearStaleAuthCache = (): void => {
+  safeRemoveItem(SSO_SESSION_KEY);
+  safeRemoveItem(AUTH_USER_KEY);
+  safeRemoveItem(USER_PROFILE_KEY);
+  safeRemoveItem(ACTIVE_IDENTITY_KEY);
+};
+
+/**
+ * Retrieve current active cached SSO user.
+ * Note: When Supabase is configured, LocalStorage is NEVER the source of truth for authentication.
+ * The authoritative identity is determined exclusively by the active Supabase session.
  */
 export const getActiveSSOUser = (): AuthUser => {
+  if (isSupabaseConfigured()) {
+    return GUEST_USER;
+  }
   try {
     const raw = safeGetItem(AUTH_USER_KEY);
     if (raw) {
       const data = JSON.parse(raw);
-      if (data && data.id && data.username) {
+      if (data && data.id && data.username && data.authType !== 'guest') {
         if (!data.metfaId) data.metfaId = generateUnifiedMetfaId();
         data.avatar = sanitizeAvatarUrl(data.avatar, data.username || data.name);
         return data;
@@ -133,7 +156,7 @@ export const getActiveSSOUser = (): AuthUser => {
   } catch (err) {
     console.error('Error loading active SSO user:', err);
   }
-  return INITIAL_GUEST_USER;
+  return GUEST_USER;
 };
 
 /**
@@ -166,61 +189,69 @@ export const persistSSOSession = (user: AuthUser, profileOverride?: UserProfile)
 
   // Synchronize UserProfile
   let updatedProfile: UserProfile;
-  try {
-    const rawProfile = safeGetItem(USER_PROFILE_KEY);
-    const currentProfile: Partial<UserProfile> = rawProfile ? JSON.parse(rawProfile) : {};
-
-    updatedProfile = profileOverride ? {
-      ...currentProfile,
+  if (profileOverride) {
+    // When profileOverride is provided: USE profileOverride as the profile source.
+    updatedProfile = {
       ...profileOverride,
       id: normalizedUser.id,
       name: resolvedName,
       username: resolvedUsername,
       avatar: resolvedAvatar,
       isVerified: resolvedIsVerified,
-    } : {
-      id: normalizedUser.id,
-      name: resolvedName,
-      username: resolvedUsername,
-      avatar: resolvedAvatar,
-      isVerified: resolvedIsVerified,
-      bio: currentProfile.bio || 'AI Creator & Visual Explorer on Metfa Social.',
-      location: currentProfile.location || 'Global Creator',
-      website: currentProfile.website || `https://metfa.ai/@${resolvedUsername}`,
-      joinDate: currentProfile.joinDate || `Joined ${new Date().toLocaleDateString('en-US', { month: 'long', year: 'numeric' })}`,
-      stats: currentProfile.stats || {
-        postsCount: 0,
-        followersCount: 142,
-        followingCount: 68,
-        totalLikes: 1240,
-        reelsCount: 0,
-      },
     };
+  } else {
+    // When no profileOverride is provided:
+    // Only reuse cached profile if cachedProfile.id === normalizedUser.id
+    let cachedProfile: UserProfile | null = null;
+    try {
+      const rawProfile = safeGetItem(USER_PROFILE_KEY);
+      if (rawProfile) {
+        const parsed = JSON.parse(rawProfile);
+        if (parsed && parsed.id === normalizedUser.id) {
+          console.log(`[METFA AUTH] Cached profile ID: ${parsed.id}`);
+          cachedProfile = parsed;
+        } else if (parsed) {
+          console.log(`[METFA AUTH] Cache rejected because IDs differ: cached=${parsed.id}, current=${normalizedUser.id}`);
+          safeRemoveItem(USER_PROFILE_KEY);
+        }
+      }
+    } catch {}
 
-    safeSetItem(USER_PROFILE_KEY, JSON.stringify(updatedProfile));
-    if (typeof window !== 'undefined') {
-      window.dispatchEvent(new CustomEvent('metfa_profile_updated', { detail: updatedProfile }));
+    if (cachedProfile) {
+      updatedProfile = {
+        ...cachedProfile,
+        id: normalizedUser.id,
+        name: resolvedName,
+        username: resolvedUsername,
+        avatar: resolvedAvatar,
+        isVerified: resolvedIsVerified,
+      };
+    } else {
+      console.log(`[METFA AUTH] Creating new profile: ${normalizedUser.id}`);
+      updatedProfile = {
+        id: normalizedUser.id,
+        name: resolvedName,
+        username: resolvedUsername,
+        avatar: resolvedAvatar,
+        isVerified: resolvedIsVerified,
+        bio: '',
+        location: '',
+        website: '',
+        joinDate: `Joined ${new Date().toLocaleDateString('en-US', { month: 'long', year: 'numeric' })}`,
+        stats: {
+          postsCount: 0,
+          followersCount: 0,
+          followingCount: 0,
+          totalLikes: 0,
+          reelsCount: 0,
+        },
+      };
     }
-  } catch (e) {
-    console.error('Error syncing UserProfile in persistSSOSession:', e);
-    updatedProfile = {
-      id: normalizedUser.id,
-      name: resolvedName,
-      username: resolvedUsername,
-      avatar: resolvedAvatar,
-      isVerified: resolvedIsVerified,
-      bio: 'AI Creator & Visual Explorer on Metfa Social.',
-      location: 'Global Creator',
-      website: `https://metfa.ai/@${resolvedUsername}`,
-      joinDate: `Joined ${new Date().toLocaleDateString('en-US', { month: 'long', year: 'numeric' })}`,
-      stats: {
-        postsCount: 0,
-        followersCount: 142,
-        followingCount: 68,
-        totalLikes: 1240,
-        reelsCount: 0,
-      },
-    };
+  }
+
+  safeSetItem(USER_PROFILE_KEY, JSON.stringify(updatedProfile));
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new CustomEvent('metfa_profile_updated', { detail: updatedProfile }));
   }
 
   // Synchronize ActiveIdentity
@@ -230,7 +261,7 @@ export const persistSSOSession = (user: AuthUser, profileOverride?: UserProfile)
     name: resolvedName,
     username: resolvedUsername,
     avatar: resolvedAvatar,
-    badge: resolvedIsVerified ? 'Verified Creator' : 'Creator',
+    badge: resolvedIsVerified ? 'Verified Creator' : (normalizedUser.authType === 'guest' ? 'Guest' : 'Creator'),
   };
   safeSetItem(ACTIVE_IDENTITY_KEY, JSON.stringify(activeIdentity));
 
@@ -243,8 +274,9 @@ export const persistSSOSession = (user: AuthUser, profileOverride?: UserProfile)
 /**
  * Fetch profile from Supabase Database
  */
-export async function fetchSupabaseProfile(userId: string): Promise<UserProfile | null> {
+export async function fetchSupabaseProfile(userId: string): Promise<(UserProfile & { metfaId?: string }) | null> {
   if (!isSupabaseConfigured() || !userId) return null;
+  console.log(`[METFA AUTH] Loading profile for: ${userId}`);
   try {
     const { data, error } = await supabase
       .from('profiles')
@@ -253,13 +285,14 @@ export async function fetchSupabaseProfile(userId: string): Promise<UserProfile 
       .maybeSingle();
 
     if (error) {
-      console.warn('[Supabase] Failed to fetch profile:', error.message);
+      console.warn('[METFA AUTH] Failed to fetch profile:', error.message);
       return null;
     }
     if (!data) return null;
+    console.log(`[METFA AUTH] Profile ID: ${data.id}`);
     return mapSupabaseRowToUserProfile(data);
   } catch (err) {
-    console.warn('[Supabase] Error reading profile:', err);
+    console.warn('[METFA AUTH] Error reading profile:', err);
     return null;
   }
 }
@@ -270,22 +303,28 @@ export async function fetchSupabaseProfile(userId: string): Promise<UserProfile 
 export async function upsertSupabaseProfile(
   userId: string,
   profile: Partial<UserProfile> & { email?: string; phone?: string; metfaId?: string }
-): Promise<UserProfile | null> {
+): Promise<(UserProfile & { metfaId?: string }) | null> {
   if (!isSupabaseConfigured() || !userId) return null;
   try {
     const row: Partial<SupabaseProfileRow> = {
       id: userId,
-      display_name: profile.name || 'Metfa Creator',
+      display_name: profile.name || 'Creator',
       username: profile.username || 'creator',
       avatar_url: sanitizeAvatarUrl(profile.avatar, profile.username || profile.name),
-      bio: profile.bio,
-      location: profile.location,
-      website: profile.website,
+      bio: profile.bio || '',
+      location: profile.location || '',
+      website: profile.website || '',
       is_verified: profile.isVerified ?? true,
       email: profile.email,
       phone: profile.phone,
       metfa_id: profile.metfaId || generateUnifiedMetfaId(userId),
-      stats: profile.stats,
+      stats: profile.stats || {
+        postsCount: 0,
+        followersCount: 0,
+        followingCount: 0,
+        totalLikes: 0,
+        reelsCount: 0,
+      },
       updated_at: new Date().toISOString(),
     };
 
@@ -296,12 +335,13 @@ export async function upsertSupabaseProfile(
       .single();
 
     if (error) {
-      console.warn('[Supabase] Error upserting profile:', error.message);
+      console.warn('[METFA AUTH] Error upserting profile:', error.message);
       return null;
     }
+    console.log(`[METFA AUTH] Profile ID: ${userId}`);
     return mapSupabaseRowToUserProfile(data);
   } catch (err) {
-    console.warn('[Supabase] Error during profile upsert:', err);
+    console.warn('[METFA AUTH] Error during profile upsert:', err);
     return null;
   }
 }
@@ -313,8 +353,12 @@ export async function mapSupabaseUserToAuthUser(
   sbUser: User,
   session?: Session | null
 ): Promise<{ authUser: AuthUser; userProfile: UserProfile }> {
+  console.log(`[METFA AUTH] Supabase user ID: ${sbUser.id}`);
   // 1. Check if database profile already exists
   let dbProfile = await fetchSupabaseProfile(sbUser.id);
+  if (dbProfile) {
+    console.log(`[METFA AUTH] Profile ID: ${dbProfile.id}`);
+  }
 
   const rawMetadata = sbUser.user_metadata || {};
   const email = sbUser.email || (rawMetadata.email as string) || '';
@@ -336,10 +380,19 @@ export async function mapSupabaseUserToAuthUser(
     username || name
   );
 
-  const metfaId = generateUnifiedMetfaId(sbUser.id);
+  // FIX: IF dbProfile?.metfa_id exists: use dbProfile.metfa_id
+  // ELSE: generate a Metfa ID ONCE, save it into public.profiles.metfa_id, then reuse that same value forever.
+  let metfaId: string = dbProfile?.metfaId || (dbProfile as any)?.metfa_id || '';
+  let shouldSaveMetfaId = false;
+
+  if (!metfaId) {
+    metfaId = generateUnifiedMetfaId(sbUser.id);
+    shouldSaveMetfaId = true;
+  }
 
   // If no database profile row exists yet, create it now
   if (!dbProfile && isSupabaseConfigured()) {
+    console.log(`[METFA AUTH] Creating new profile: ${sbUser.id}`);
     dbProfile = await upsertSupabaseProfile(sbUser.id, {
       name,
       username,
@@ -348,6 +401,19 @@ export async function mapSupabaseUserToAuthUser(
       phone,
       metfaId,
       isVerified: true,
+      stats: {
+        postsCount: 0,
+        followersCount: 0,
+        followingCount: 0,
+        totalLikes: 0,
+        reelsCount: 0,
+      },
+    });
+  } else if (dbProfile && shouldSaveMetfaId && isSupabaseConfigured()) {
+    console.log(`[METFA AUTH] Saving generated Metfa ID to profile: ${metfaId}`);
+    await upsertSupabaseProfile(sbUser.id, {
+      ...dbProfile,
+      metfaId,
     });
   }
 
@@ -377,9 +443,9 @@ export async function mapSupabaseUserToAuthUser(
     joinDate: `Joined ${new Date(sbUser.created_at || Date.now()).toLocaleDateString('en-US', { month: 'long', year: 'numeric' })}`,
     stats: {
       postsCount: 0,
-      followersCount: 142,
-      followingCount: 68,
-      totalLikes: 1240,
+      followersCount: 0,
+      followingCount: 0,
+      totalLikes: 0,
       reelsCount: 0,
     },
   };
@@ -396,6 +462,8 @@ export async function signInWithGoogleOAuth(params?: {
   avatar?: string;
 }): Promise<{ url?: string; error?: string; user?: AuthUser; profile?: UserProfile }> {
   if (isSupabaseConfigured()) {
+    console.log('[METFA AUTH] Supabase configured: true');
+    console.log('[METFA AUTH] Initiating real Google OAuth via Supabase...');
     try {
       const redirectUrl = typeof window !== 'undefined' ? window.location.origin : undefined;
       const { data, error } = await supabase.auth.signInWithOAuth({
@@ -410,6 +478,7 @@ export async function signInWithGoogleOAuth(params?: {
       });
 
       if (error) {
+        console.warn('[METFA AUTH] Google OAuth error:', error.message);
         return { error: error.message };
       }
       if (data?.url) {
@@ -420,53 +489,12 @@ export async function signInWithGoogleOAuth(params?: {
       }
       return {};
     } catch (err: any) {
+      console.error('[METFA AUTH] Google OAuth exception:', err);
       return { error: err?.message || 'Google OAuth failed to initialize.' };
     }
   }
 
-  // Graceful 1-Click Fast Google Sign-in if Supabase credentials are not configured yet
-  const email = params?.email?.trim() || 'google.creator@gmail.com';
-  const name = params?.fullName?.trim() || (email.includes('@') && !email.startsWith('google.creator') ? email.split('@')[0] : 'Google Creator');
-  const cleanUsername = generateUniqueUsername(name);
-  const avatar = sanitizeAvatarUrl(params?.avatar, cleanUsername);
-  const userId = `usr_google_${Math.random().toString(36).substring(2, 9)}`;
-  const metfaId = generateUnifiedMetfaId();
-
-  const googleUser: AuthUser = {
-    id: userId,
-    metfaId,
-    name,
-    username: cleanUsername,
-    authType: 'gmail',
-    phoneOrEmail: email,
-    avatar,
-    sessionToken: `google_token_${Date.now()}`,
-    tokenExpiry: Date.now() + 30 * 24 * 60 * 60 * 1000,
-    createdAt: new Date().toISOString().split('T')[0],
-    isVerified: true,
-  };
-
-  const googleProfile: UserProfile = {
-    id: userId,
-    name,
-    username: cleanUsername,
-    avatar,
-    bio: 'Verified Creator on Metfa Social via Google Account.',
-    location: 'Global Creator',
-    website: `https://metfa.ai/@${cleanUsername}`,
-    isVerified: true,
-    joinDate: `Joined ${new Date().toLocaleDateString('en-US', { month: 'long', year: 'numeric' })}`,
-    stats: {
-      postsCount: 0,
-      followersCount: 210,
-      followingCount: 95,
-      totalLikes: 1540,
-      reelsCount: 0,
-    },
-  };
-
-  persistSSOSession(googleUser, googleProfile);
-  return { user: googleUser, profile: googleProfile };
+  return { error: 'Supabase authentication is not configured.' };
 }
 
 /**
@@ -487,17 +515,103 @@ export async function saveProfileAndEnterMetfa(params: {
     : generateUniqueUsername(cleanName || identifier);
   const cleanAvatar = sanitizeAvatarUrl(avatar, cleanUsername || cleanName);
 
-  // If Supabase is configured, execute real Auth and DB operations
+  // If Supabase is configured, execute real Auth and DB operations ONLY
   if (isSupabaseConfigured()) {
+    console.log('[METFA AUTH] Supabase configured: true');
     try {
-      const emailToUse = authMethod === 'gmail'
-        ? identifier.trim()
-        : `${identifier.replace(/[^0-9]/g, '')}@metfa.social`;
-      
-      // Default deterministic secure key for 1-tap onboarding if user didn't specify password
-      const userPassword = params.password || `MetfaPass_${identifier.replace(/[^a-zA-Z0-9]/g, '').slice(-8)}!9`;
+      if (authMethod === 'phone') {
+        const cleanPhone = identifier.replace(/[^\d+]/g, '');
+        const userPassword = params.password || `MetfaPass_${cleanPhone.slice(-6)}!9`;
 
-      // Attempt 1: Try signing up new user
+        // Attempt real Supabase phone sign up
+        const { data: phoneSignUpData, error: phoneSignUpError } = await supabase.auth.signUp({
+          phone: cleanPhone,
+          password: userPassword,
+          options: {
+            data: {
+              full_name: cleanName,
+              username: cleanUsername,
+              avatar_url: cleanAvatar,
+            },
+          },
+        });
+
+        let currentSbUser = phoneSignUpData?.user;
+        let session = phoneSignUpData?.session;
+
+        if (phoneSignUpError && (
+          phoneSignUpError.message.toLowerCase().includes('already registered') ||
+          phoneSignUpError.message.toLowerCase().includes('already exists')
+        )) {
+          const { data: phoneSignInData, error: phoneSignInError } = await supabase.auth.signInWithPassword({
+            phone: cleanPhone,
+            password: userPassword,
+          });
+          if (phoneSignInError) {
+            return {
+              user: GUEST_USER,
+              profile: GUEST_PROFILE,
+              error: `Phone account exists: ${phoneSignInError.message}`,
+            };
+          }
+          currentSbUser = phoneSignInData?.user;
+          session = phoneSignInData?.session;
+        } else if (phoneSignUpError) {
+          return {
+            user: GUEST_USER,
+            profile: GUEST_PROFILE,
+            error: phoneSignUpError.message.includes('provider is disabled') || phoneSignUpError.message.includes('SMS')
+              ? 'Phone authentication requires SMS provider setup in Supabase. Please sign in with Email or Google.'
+              : phoneSignUpError.message,
+          };
+        }
+
+        if (currentSbUser && !session) {
+          const { data: sessionData } = await supabase.auth.getSession();
+          session = sessionData?.session;
+          if (!session) {
+            return {
+              user: GUEST_USER,
+              profile: GUEST_PROFILE,
+              error: 'Verification code sent. Please verify your phone number to continue.',
+            };
+          }
+        }
+
+        const { data: { user: authenticatedUser } } = await supabase.auth.getUser();
+        if (!authenticatedUser || !authenticatedUser.id) {
+          return {
+            user: GUEST_USER,
+            profile: GUEST_PROFILE,
+            error: 'Authentication failed to establish a valid Supabase session.',
+          };
+        }
+
+        console.log(`[METFA AUTH] Authenticated user: ${authenticatedUser.id}`);
+        // Check first if a profile already exists so we NEVER overwrite existing account data
+        const existingDbPhoneProfile = await fetchSupabaseProfile(authenticatedUser.id);
+        let profile = existingDbPhoneProfile;
+        if (!existingDbPhoneProfile) {
+          profile = await upsertSupabaseProfile(authenticatedUser.id, {
+            name: cleanName,
+            username: cleanUsername,
+            avatar: cleanAvatar,
+            phone: identifier,
+            isVerified: true,
+          });
+        }
+
+        const { authUser, userProfile } = await mapSupabaseUserToAuthUser(authenticatedUser, session);
+        const finalProfile = profile || userProfile;
+        persistSSOSession(authUser, finalProfile);
+        return { user: authUser, profile: finalProfile };
+      }
+
+      // Email / Gmail auth method
+      const emailToUse = identifier.trim().toLowerCase();
+      const userPassword = params.password || `MetfaPass_${emailToUse.replace(/[^a-zA-Z0-9]/g, '').slice(-8)}!9`;
+
+      // 1. Try signing up new user
       const { data: signUpData, error: signUpError } = await supabase.auth.signUp({
         email: emailToUse,
         password: userPassword,
@@ -506,7 +620,6 @@ export async function saveProfileAndEnterMetfa(params: {
             full_name: cleanName,
             username: cleanUsername,
             avatar_url: cleanAvatar,
-            phone_number: authMethod === 'phone' ? identifier : undefined,
           },
         },
       });
@@ -514,99 +627,242 @@ export async function saveProfileAndEnterMetfa(params: {
       let currentSbUser = signUpData?.user;
       let session = signUpData?.session;
 
-      // Attempt 2: If user already registered, sign them in directly
-      if (signUpError && signUpError.message.toLowerCase().includes('already registered')) {
+      // 2. If user already registered, sign them in directly with password
+      if (signUpError && (
+        signUpError.message.toLowerCase().includes('already registered') ||
+        signUpError.message.toLowerCase().includes('already in use') ||
+        signUpError.message.toLowerCase().includes('already exists')
+      )) {
+        console.log('[METFA AUTH] Account already registered, signing in with password...');
         const { data: signInData, error: signInError } = await supabase.auth.signInWithPassword({
           email: emailToUse,
           password: userPassword,
         });
 
         if (signInError) {
+          console.warn('[METFA AUTH] Sign-in failed for existing account:', signInError.message);
           return {
-            user: INITIAL_GUEST_USER,
-            profile: mapSupabaseRowToUserProfile({}),
-            error: `Account exists: ${signInError.message}. If you have a different password, please sign in.`,
+            user: GUEST_USER,
+            profile: GUEST_PROFILE,
+            error: `This account already exists. Please switch to "Sign In" to log in.`,
           };
         }
         currentSbUser = signInData?.user;
         session = signInData?.session;
       } else if (signUpError) {
+        console.warn('[METFA AUTH] Sign-up failed:', signUpError.message);
         return {
-          user: INITIAL_GUEST_USER,
-          profile: mapSupabaseRowToUserProfile({}),
+          user: GUEST_USER,
+          profile: GUEST_PROFILE,
           error: signUpError.message,
         };
       }
 
-      if (currentSbUser) {
-        // Upsert profile in Supabase profiles table
-        const profile = await upsertSupabaseProfile(currentSbUser.id, {
+      // Check if session exists in client
+      if (!session) {
+        const { data: sessionData } = await supabase.auth.getSession();
+        session = sessionData?.session;
+        if (!currentSbUser && session?.user) {
+          currentSbUser = session.user;
+        }
+      }
+
+      // If user was created but no session exists (email confirmation required)
+      if (currentSbUser && !session) {
+        console.log(`[METFA AUTH] User created (${currentSbUser.id}), pending email confirmation`);
+        return {
+          user: GUEST_USER,
+          profile: GUEST_PROFILE,
+          error: 'Account created! Please check your email to confirm your registration before signing in.',
+        };
+      }
+
+      // Requirement: After authentication, verify:
+      // const { data: { user: authenticatedUser } } = await supabase.auth.getUser();
+      // If authenticatedUser exists: use authenticatedUser.id everywhere.
+      const { data: { user: authenticatedUser } } = await supabase.auth.getUser();
+
+      if (!authenticatedUser || !authenticatedUser.id) {
+        return {
+          user: GUEST_USER,
+          profile: GUEST_PROFILE,
+          error: 'Authentication failed to establish a valid Supabase session.',
+        };
+      }
+
+      console.log(`[METFA AUTH] Authenticated user: ${authenticatedUser.id}`);
+
+      // Upsert profile in Supabase profiles table using auth.users.id only if not already present
+      // Check first if a profile already exists so we NEVER overwrite existing account data
+      const existingDbEmailProfile = await fetchSupabaseProfile(authenticatedUser.id);
+      let profile = existingDbEmailProfile;
+      if (!existingDbEmailProfile) {
+        profile = await upsertSupabaseProfile(authenticatedUser.id, {
           name: cleanName,
           username: cleanUsername,
           avatar: cleanAvatar,
-          email: authMethod === 'gmail' ? identifier : undefined,
-          phone: authMethod === 'phone' ? identifier : undefined,
+          email: emailToUse,
           isVerified: true,
         });
-
-        const { authUser, userProfile } = await mapSupabaseUserToAuthUser(currentSbUser, session);
-        persistSSOSession(authUser, profile || userProfile);
-        return { user: authUser, profile: profile || userProfile };
       }
+
+      const { authUser, userProfile } = await mapSupabaseUserToAuthUser(authenticatedUser, session);
+      const finalProfile = profile || userProfile;
+      persistSSOSession(authUser, finalProfile);
+      return { user: authUser, profile: finalProfile };
     } catch (err: any) {
-      console.error('[Supabase Auth Error]:', err);
+      console.error('[METFA AUTH] Authentication exception:', err);
       return {
-        user: INITIAL_GUEST_USER,
-        profile: mapSupabaseRowToUserProfile({}),
+        user: GUEST_USER,
+        profile: GUEST_PROFILE,
         error: err?.message || 'Authentication failed. Please check network connection.',
       };
     }
   }
 
-  // Graceful Local Fallback if Supabase credentials are not populated
-  const userId = `usr_${Math.random().toString(36).substring(2, 9)}`;
-  const metfaId = generateUnifiedMetfaId();
-  const localUser: AuthUser = {
-    id: userId,
-    metfaId,
-    name: cleanName,
-    username: cleanUsername,
-    authType: authMethod,
-    phoneOrEmail: identifier,
-    avatar: cleanAvatar,
-    sessionToken: `local_token_${Date.now()}`,
-    tokenExpiry: Date.now() + 30 * 24 * 60 * 60 * 1000,
-    createdAt: new Date().toISOString().split('T')[0],
-    isVerified: true,
+  return {
+    user: GUEST_USER,
+    profile: GUEST_PROFILE,
+    error: 'Supabase authentication is not configured. Real authentication requires Supabase configuration.',
   };
+}
 
-  const localProfile: UserProfile = {
-    id: userId,
-    name: cleanName,
-    username: cleanUsername,
-    avatar: cleanAvatar,
-    bio: 'AI Creator & Visual Explorer on Metfa Social.',
-    location: 'Global Creator',
-    website: `https://metfa.ai/@${cleanUsername}`,
-    isVerified: true,
-    joinDate: `Joined ${new Date().toLocaleDateString('en-US', { month: 'long', year: 'numeric' })}`,
-    stats: {
-      postsCount: 0,
-      followersCount: 142,
-      followingCount: 68,
-      totalLikes: 1240,
-      reelsCount: 0,
-    },
+/**
+ * 2b. REAL USER SIGN IN ("Sign In / Log In" for existing accounts)
+ * Strictly preserves existing user ID, profile, posts, reels, messages, and account data without overwriting.
+ */
+export async function signInExistingUser(params: {
+  authMethod: 'gmail' | 'phone';
+  identifier: string; // Email or Phone number
+  password?: string;
+}): Promise<{ user: AuthUser; profile: UserProfile; error?: string }> {
+  const { authMethod, identifier, password } = params;
+
+  if (isSupabaseConfigured()) {
+    console.log('[METFA AUTH] Supabase configured: true. Attempting sign-in for existing user...');
+    try {
+      let session: Session | null = null;
+      let currentSbUser: User | null = null;
+
+      if (authMethod === 'phone') {
+        const cleanPhone = identifier.replace(/[^\d+]/g, '');
+        const defaultPassword = `MetfaPass_${cleanPhone.slice(-6)}!9`;
+        const userPassword = password || defaultPassword;
+
+        let { data: signInData, error: signInError } = await supabase.auth.signInWithPassword({
+          phone: cleanPhone,
+          password: userPassword,
+        });
+
+        // If custom password failed, try default password as fallback in case account was created without password
+        if (signInError && password && password !== defaultPassword) {
+          const fallbackRes = await supabase.auth.signInWithPassword({
+            phone: cleanPhone,
+            password: defaultPassword,
+          });
+          if (!fallbackRes.error && fallbackRes.data?.user) {
+            signInData = fallbackRes.data;
+            signInError = null;
+          }
+        }
+
+        if (signInError) {
+          return {
+            user: GUEST_USER,
+            profile: GUEST_PROFILE,
+            error: signInError.message.includes('Invalid login credentials')
+              ? 'Invalid phone number or password. If you are new to METFA Social, please switch to Sign Up.'
+              : signInError.message,
+          };
+        }
+
+        currentSbUser = signInData?.user || null;
+        session = signInData?.session || null;
+      } else {
+        // Gmail / Email
+        const emailToUse = identifier.trim().toLowerCase();
+        const defaultPassword = `MetfaPass_${emailToUse.replace(/[^a-zA-Z0-9]/g, '').slice(-8)}!9`;
+        const userPassword = password || defaultPassword;
+
+        let { data: signInData, error: signInError } = await supabase.auth.signInWithPassword({
+          email: emailToUse,
+          password: userPassword,
+        });
+
+        // If custom password failed, try default password as fallback
+        if (signInError && password && password !== defaultPassword) {
+          const fallbackRes = await supabase.auth.signInWithPassword({
+            email: emailToUse,
+            password: defaultPassword,
+          });
+          if (!fallbackRes.error && fallbackRes.data?.user) {
+            signInData = fallbackRes.data;
+            signInError = null;
+          }
+        }
+
+        if (signInError) {
+          return {
+            user: GUEST_USER,
+            profile: GUEST_PROFILE,
+            error: signInError.message.includes('Invalid login credentials')
+              ? 'Invalid email or password. If you are new to METFA Social, please switch to Sign Up.'
+              : signInError.message,
+          };
+        }
+
+        currentSbUser = signInData?.user || null;
+        session = signInData?.session || null;
+      }
+
+      if (!session) {
+        const { data: sessionData } = await supabase.auth.getSession();
+        session = sessionData?.session || null;
+        if (!currentSbUser && session?.user) {
+          currentSbUser = session.user;
+        }
+      }
+
+      const { data: { user: authenticatedUser } } = await supabase.auth.getUser();
+      if (!authenticatedUser || !authenticatedUser.id) {
+        return {
+          user: GUEST_USER,
+          profile: GUEST_PROFILE,
+          error: 'Authentication failed to establish a valid Supabase session.',
+        };
+      }
+
+      console.log(`[METFA AUTH] Authenticated existing user ID: ${authenticatedUser.id}`);
+
+      // PRESERVE EXISTING PROFILE & ACCOUNT DATA - NEVER OVERWRITE
+      const existingProfile = await fetchSupabaseProfile(authenticatedUser.id);
+      const { authUser, userProfile } = await mapSupabaseUserToAuthUser(authenticatedUser, session);
+      const finalProfile = existingProfile || userProfile;
+
+      persistSSOSession(authUser, finalProfile);
+      return { user: authUser, profile: finalProfile };
+    } catch (err: any) {
+      console.error('[METFA AUTH] Sign-in exception:', err);
+      return {
+        user: GUEST_USER,
+        profile: GUEST_PROFILE,
+        error: err?.message || 'Sign in failed. Please check network connection.',
+      };
+    }
+  }
+
+  return {
+    user: GUEST_USER,
+    profile: GUEST_PROFILE,
+    error: 'Supabase authentication is not configured.',
   };
-
-  persistSSOSession(localUser, localProfile);
-  return { user: localUser, profile: localProfile };
 }
 
 /**
  * 3. REAL SUPABASE SIGN OUT
  */
 export async function supabaseSignOut(): Promise<AuthUser> {
+  console.log('[METFA AUTH] Signing out user...');
   if (isSupabaseConfigured()) {
     try {
       await supabase.auth.signOut();
@@ -615,22 +871,23 @@ export async function supabaseSignOut(): Promise<AuthUser> {
     }
   }
 
-  safeRemoveItem(SSO_SESSION_KEY);
-  safeRemoveItem(AUTH_USER_KEY);
-  const guestUser: AuthUser = {
-    id: `guest_${Date.now()}`,
-    metfaId: generateUnifiedMetfaId(),
-    name: 'Guest Explorer',
-    username: generateUniqueUsername('guest'),
-    authType: 'guest',
-    phoneOrEmail: '',
-    avatar: 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=150&auto=format&fit=crop&q=80',
-    sessionToken: '',
-    tokenExpiry: 0,
-    createdAt: new Date().toISOString().split('T')[0],
-    isVerified: false,
-  };
-  persistSSOSession(guestUser);
+  clearStaleAuthCache();
+  const guestUser = GUEST_USER;
+  const guestProfile = GUEST_PROFILE;
+
+  if (typeof window !== 'undefined') {
+    const guestIdentity: PostingIdentity = {
+      type: 'personal',
+      id: guestUser.id,
+      name: guestUser.name,
+      username: guestUser.username,
+      avatar: guestUser.avatar,
+      badge: 'Guest',
+    };
+    window.dispatchEvent(new CustomEvent('metfa_identity_changed', { detail: guestIdentity }));
+    window.dispatchEvent(new CustomEvent('metfa_profile_updated', { detail: guestProfile }));
+    window.dispatchEvent(new CustomEvent('metfa_auth_changed', { detail: guestUser }));
+  }
   return guestUser;
 }
 

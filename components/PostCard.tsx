@@ -2,6 +2,7 @@ import React, { useState, useRef, useEffect } from 'react';
 import {
   Heart,
   MessageCircle,
+  MessageSquare,
   Share2,
   Sparkles,
   Bookmark,
@@ -20,10 +21,15 @@ import {
   Pause,
   Music,
   ShieldCheck,
+  UserPlus,
+  Film,
+  Maximize2,
+  Minimize2,
 } from 'lucide-react';
 import { CommunityPost, UserProfile } from '../types/community';
 import { AudioTrack } from '../types/audio';
 import { isContentOwner } from '../utils/communityStore';
+import { isUserFollowed, toggleFollowUser } from '../utils/followStore';
 import { isPostSaved, toggleSavePost } from '../utils/bookmarkStore';
 import { formatDuration } from '../utils/audioStore';
 import { AiRecipeBox } from './AiRecipeBox';
@@ -61,8 +67,10 @@ export interface PostCardProps {
   onDeleteComment?: (postId: string, commentId: string) => void;
   onDeleteVoiceComment?: (postId: string, voiceId: string) => void;
   onStartEdit?: (post: CommunityPost) => void;
+  onOpenChat?: (authorId: string, authorProfile?: UserProfile) => void;
   isHighlighted?: boolean;
   onShowToast?: (message: string) => void;
+  priority?: boolean;
 }
 
 export const PostCard: React.FC<PostCardProps> = ({
@@ -79,8 +87,10 @@ export const PostCard: React.FC<PostCardProps> = ({
   onDeleteComment,
   onDeleteVoiceComment,
   onStartEdit,
+  onOpenChat,
   isHighlighted,
   onShowToast,
+  priority = false,
 }) => {
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const [showComments, setShowComments] = useState(false);
@@ -109,9 +119,22 @@ export const PostCard: React.FC<PostCardProps> = ({
   const [isDictating, setIsDictating] = useState(false);
   const speechRecognitionRef = useRef<any>(null);
 
-  const isOwner =
-    isContentOwner(post.author.id, userProfile.id) ||
-    (post.postingIdentity && isContentOwner(post.postingIdentity.id, userProfile.id));
+  const isOwner = isContentOwner(post.author, userProfile, undefined, post.postingIdentity, post.id);
+  const [isFollowed, setIsFollowed] = useState(
+    isUserFollowed(post.author?.id) || isUserFollowed(post.author?.username)
+  );
+
+  const handleToggleFollow = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    const res = toggleFollowUser(post.author);
+    setIsFollowed(res.isFollowing);
+    const authorName = post.author?.name || `@${post.author?.username || 'user'}`;
+    if (res.isFollowing) {
+      onShowToast?.(`You are now following ${authorName}`);
+    } else {
+      onShowToast?.(`Unfollowed ${authorName}`);
+    }
+  };
 
   const isSaved = post.isBookmarked ?? isPostSaved(post.id);
 
@@ -314,6 +337,8 @@ export const PostCard: React.FC<PostCardProps> = ({
           <img
             src={post.postingIdentity?.avatar || post.author.avatar}
             alt={post.postingIdentity?.name || post.author.name}
+            loading={priority ? undefined : 'lazy'}
+            decoding="async"
             className="w-10 h-10 rounded-2xl object-cover border border-slate-200 shadow-xs shrink-0"
           />
           <div className="min-w-0">
@@ -326,8 +351,75 @@ export const PostCard: React.FC<PostCardProps> = ({
                   {post.postingIdentity.badge}
                 </span>
               )}
+
+              {/* Follow / Unfollow Button for Non-owners */}
+              {!isOwner && (
+                <button
+                  type="button"
+                  id={`postcard-follow-btn-${post.id}`}
+                  onClick={handleToggleFollow}
+                  className={`text-[10px] px-2 py-0.5 rounded-full font-bold transition flex items-center gap-1 cursor-pointer shrink-0 ml-1 ${
+                    isFollowed
+                      ? 'bg-slate-100 hover:bg-rose-50 text-slate-700 hover:text-rose-600 border border-slate-200 hover:border-rose-200'
+                      : 'bg-purple-600 hover:bg-purple-700 text-white shadow-xs'
+                  }`}
+                  title={isFollowed ? 'Following (Click to Unfollow)' : 'Follow Creator'}
+                >
+                  {isFollowed ? (
+                    <>
+                      <Check className="w-2.5 h-2.5 text-emerald-600" />
+                      <span>Following</span>
+                    </>
+                  ) : (
+                    <>
+                      <UserPlus className="w-2.5 h-2.5" />
+                      <span>Follow</span>
+                    </>
+                  )}
+                </button>
+              )}
+
+              {/* Direct Message Button for Non-owners */}
+              {!isOwner && (
+                <button
+                  type="button"
+                  id={`postcard-message-btn-${post.id}`}
+                  onClick={() => {
+                    const profileObj: UserProfile = {
+                      id: post.author.id,
+                      name: post.author.name,
+                      username: post.author.username,
+                      avatar: post.author.avatar,
+                      bio: '',
+                      joinDate: '',
+                      isVerified: post.author.isVerified || false,
+                      stats: {
+                        postsCount: 0,
+                        followersCount: 0,
+                        followingCount: 0,
+                        totalLikes: 0,
+                        reelsCount: 0,
+                      },
+                    };
+                    if (onOpenChat) {
+                      onOpenChat(post.author.id, profileObj);
+                    } else {
+                      window.dispatchEvent(
+                        new CustomEvent('metfa_open_chat', {
+                          detail: { partnerId: post.author.id, partnerProfile: profileObj },
+                        })
+                      );
+                    }
+                  }}
+                  className="text-[10px] px-2 py-0.5 rounded-full font-bold bg-teal-50 hover:bg-teal-100 text-teal-700 border border-teal-200 transition flex items-center gap-1 cursor-pointer shrink-0 ml-1 shadow-2xs active:scale-95"
+                  title={`Direct Message @${post.author.username}`}
+                >
+                  <MessageSquare className="w-2.5 h-2.5 text-teal-600" />
+                  <span>Message</span>
+                </button>
+              )}
             </div>
-            <div className="flex items-center gap-2 text-xs text-slate-500 font-mono">
+            <div className="flex items-center gap-2 text-xs text-slate-500 font-mono mt-0.5">
               <span className="text-teal-700 font-medium">@{post.postingIdentity?.username || post.author.username}</span>
               <span>•</span>
               <span>{post.createdAt}</span>
@@ -340,6 +432,27 @@ export const PostCard: React.FC<PostCardProps> = ({
             <span className="text-[10px] font-semibold px-2.5 py-1 bg-purple-50 border border-purple-200 text-purple-700 rounded-full hidden sm:inline-block">
               {post.stylePreset}
             </span>
+          )}
+
+          {/* Quick Direct Edit Button for Owner */}
+          {isOwner && (
+            <button
+              type="button"
+              id={`postcard-quick-edit-btn-${post.id}`}
+              onClick={() => {
+                if (onStartEdit) {
+                  onStartEdit(post);
+                } else {
+                  setIsInlineEditing(true);
+                  setEditCaption(post.caption || post.prompt);
+                }
+              }}
+              className="px-2 py-1 text-xs font-semibold rounded-xl bg-purple-50 hover:bg-purple-100 text-purple-700 hover:text-purple-900 border border-purple-200 transition flex items-center gap-1 cursor-pointer shadow-2xs"
+              title="Edit Post content"
+            >
+              <Edit3 className="w-3.5 h-3.5 text-purple-600" />
+              <span>Edit</span>
+            </button>
           )}
 
           {/* Top-Right Context Dropdown Menu (...) */}
@@ -446,36 +559,78 @@ export const PostCard: React.FC<PostCardProps> = ({
         </div>
       </div>
 
-      {/* 2. Post Media / Text Body */}
-      {isInlineEditing ? (
-        <form onSubmit={handleInlineSave} className="p-4 space-y-3 bg-slate-50 border-b border-slate-200">
-          <label className="text-xs font-bold text-purple-800 block">Edit Caption & Text:</label>
-          <textarea
-            value={editCaption}
-            onChange={(e) => setEditCaption(e.target.value)}
-            rows={3}
-            className="w-full bg-white border border-purple-300 rounded-xl p-3 text-xs text-slate-900 focus:outline-none focus:border-purple-500 resize-none font-medium shadow-xs"
-            placeholder="Write your updated post caption..."
-            autoFocus
-          />
-          <div className="flex items-center justify-end gap-2">
-            <button
-              type="button"
-              onClick={() => setIsInlineEditing(false)}
-              className="px-3 py-1.5 bg-slate-200 hover:bg-slate-300 text-slate-700 text-xs font-semibold rounded-lg transition cursor-pointer"
-            >
-              Cancel
-            </button>
-            <button
-              type="submit"
-              className="px-4 py-1.5 bg-purple-600 hover:bg-purple-700 text-white text-xs font-bold rounded-lg flex items-center gap-1 shadow-xs transition cursor-pointer"
-            >
-              <Check className="w-3.5 h-3.5" />
-              <span>Save</span>
-            </button>
+      {/* 2. Fullscreen Post Editor Modal */}
+      {isInlineEditing && (
+        <div className="fixed inset-0 z-50 flex flex-col bg-white text-slate-900 w-full h-full overflow-hidden animate-in fade-in duration-150">
+          {/* Header */}
+          <div className="flex items-center justify-between px-4 sm:px-8 py-3.5 border-b border-slate-200 bg-white shrink-0">
+            <div className="flex items-center gap-2.5">
+              <div className="p-2 rounded-xl bg-purple-100 text-purple-700">
+                <Edit3 className="w-5 h-5" />
+              </div>
+              <div>
+                <h3 className="text-sm sm:text-base font-bold text-slate-900">
+                  Full-Screen Post Editor
+                </h3>
+                <p className="text-[11px] text-slate-500">
+                  Edit and refine your text with full view and clarity
+                </p>
+              </div>
+            </div>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setIsInlineEditing(false)}
+                className="p-2 rounded-xl text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition cursor-pointer"
+                title="Close"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
           </div>
-        </form>
-      ) : isPureTextPost ? (
+
+          {/* Fullscreen Body */}
+          <form onSubmit={handleInlineSave} className="flex-1 flex flex-col min-h-0 p-4 sm:p-8 space-y-4 max-w-4xl mx-auto w-full">
+            <div className="flex items-center justify-between text-xs text-slate-500">
+              <span className="font-semibold text-slate-700">Post Text / Prompt Content:</span>
+              <span className="font-mono">{editCaption.length} characters</span>
+            </div>
+
+            <textarea
+              value={editCaption}
+              onChange={(e) => setEditCaption(e.target.value)}
+              className="w-full flex-1 p-5 bg-slate-50 border border-slate-200 rounded-2xl text-base sm:text-lg text-slate-900 focus:outline-none focus:border-purple-600 focus:bg-white resize-none font-medium leading-relaxed shadow-inner"
+              placeholder="Write or refine your post text..."
+              autoFocus
+            />
+
+            <div className="flex items-center justify-between pt-3 border-t border-slate-100 shrink-0">
+              <span className="text-xs text-slate-400">
+                Full-screen mode gives you comfortable room to review words and formatting
+              </span>
+              <div className="flex items-center gap-3">
+                <button
+                  type="button"
+                  onClick={() => setIsInlineEditing(false)}
+                  className="px-4 py-2 rounded-xl text-slate-600 hover:bg-slate-100 text-sm font-semibold transition cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="px-6 py-2 bg-purple-600 hover:bg-purple-700 text-white text-sm font-bold rounded-xl flex items-center gap-2 shadow-sm transition cursor-pointer"
+                >
+                  <Check className="w-4 h-4" />
+                  <span>Save Changes</span>
+                </button>
+              </div>
+            </div>
+          </form>
+        </div>
+      )}
+
+      {/* Post Media / Text Body */}
+      {isPureTextPost ? (
         <div
           className={`p-6 sm:p-8 flex items-center justify-center text-center ${
             hasGradient ? GRADIENT_PRESETS[post.textBackgroundPreset!] : 'bg-slate-50 text-slate-900 text-left'
@@ -504,7 +659,7 @@ export const PostCard: React.FC<PostCardProps> = ({
               src={post.videoSrc}
               controls
               playsInline
-              poster={post.imageSrc}
+              poster={post.videoThumbnail || (post.imageSrc && !post.imageSrc.includes('photo-1508739773434') ? post.imageSrc : undefined)}
               className="w-full max-h-[520px] object-cover bg-black"
             />
           ) : post.imageGallery && post.imageGallery.length > 1 ? (
@@ -515,7 +670,13 @@ export const PostCard: React.FC<PostCardProps> = ({
             >
               {post.imageGallery.map((img, i) => (
                 <div key={i} className="aspect-square bg-slate-100 overflow-hidden">
-                  <img src={img} alt={`Gallery ${i}`} className="w-full h-full object-cover hover:scale-105 transition" />
+                  <img
+                    src={img}
+                    alt={`Gallery ${i}`}
+                    loading="lazy"
+                    decoding="async"
+                    className="w-full h-full object-cover hover:scale-105 transition"
+                  />
                 </div>
               ))}
             </div>
@@ -523,6 +684,8 @@ export const PostCard: React.FC<PostCardProps> = ({
             <img
               src={post.imageSrc || post.imageGallery?.[0]}
               alt={post.prompt}
+              loading={priority ? 'eager' : 'lazy'}
+              decoding="async"
               className="w-full h-auto max-h-[520px] object-cover"
             />
           )}
@@ -532,6 +695,17 @@ export const PostCard: React.FC<PostCardProps> = ({
       {/* 3. Caption & AI Prompt Recipe Card (Default Closed / Opt-in) */}
       {!isInlineEditing && (
         <div className="p-4 space-y-3">
+          {post.videoTitle && (
+            <div className="flex items-center gap-2">
+              <span className="p-1 rounded-lg bg-purple-100 text-purple-700">
+                <Film className="w-3.5 h-3.5" />
+              </span>
+              <h4 className="text-base font-bold text-slate-900 leading-snug">
+                {post.videoTitle}
+              </h4>
+            </div>
+          )}
+
           {!isPureTextPost && post.caption && (
             <PostContent
               text={post.caption}
@@ -556,6 +730,8 @@ export const PostCard: React.FC<PostCardProps> = ({
                   <img
                     src={post.audioTrack.cover_url}
                     alt={post.audioTrack.title}
+                    loading="lazy"
+                    decoding="async"
                     className="w-10 h-10 rounded-xl object-cover border border-purple-200"
                   />
                   <button
@@ -745,7 +921,13 @@ export const PostCard: React.FC<PostCardProps> = ({
               {post.comments.map((c) => (
                 <div key={c.id} className="p-3 bg-white rounded-2xl border border-slate-200 flex items-start justify-between gap-3 shadow-xs">
                   <div className="flex items-start gap-2.5 min-w-0">
-                    <img src={c.author.avatar} alt={c.author.name} className="w-7 h-7 rounded-xl object-cover shrink-0 mt-0.5 border border-slate-200" />
+                    <img
+                      src={c.author.avatar}
+                      alt={c.author.name}
+                      loading="lazy"
+                      decoding="async"
+                      className="w-7 h-7 rounded-xl object-cover shrink-0 mt-0.5 border border-slate-200"
+                    />
                     <div className="min-w-0 space-y-0.5">
                       <div className="flex items-center gap-1.5">
                         <span className="text-xs font-bold text-slate-900">{c.author.name}</span>

@@ -7,8 +7,8 @@ const SAVED_POSTS_KEY = 'metfa_saved_posts_ids_v2';
 const SAVED_REELS_KEY = 'metfa_saved_reels_ids_v2';
 
 // Seed default saved items if first time
-const DEFAULT_SAVED_POST_IDS = ['post_2'];
-const DEFAULT_SAVED_REEL_IDS = ['reel_2'];
+const DEFAULT_SAVED_POST_IDS: string[] = [];
+const DEFAULT_SAVED_REEL_IDS: string[] = [];
 
 /**
  * Retrieve saved post IDs array from localStorage
@@ -129,7 +129,7 @@ export const toggleSaveReel = (reelId: string): { isSaved: boolean; updatedReels
   let targetReel: ReelHighlight | undefined;
   const updatedReels = reels.map((r) => {
     if (r.id === reelId) {
-      const currentSaves = r.savesCount ?? (r.id === 'reel_2' ? 245 : 128);
+      const currentSaves = r.savesCount ?? 0;
       const nextCount = nextSaved ? currentSaves + 1 : Math.max(0, currentSaves - 1);
       targetReel = {
         ...r,

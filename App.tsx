@@ -1,16 +1,18 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, Suspense, lazy } from 'react';
 import { RotateCw, Sparkles, X } from 'lucide-react';
 import Header from './components/Header';
 import BottomNav from './components/BottomNav';
-import AuthModal from './components/AuthModal';
-import RewardedAdModal from './components/RewardedAdModal';
-import CreatePageModal from './components/CreatePageModal';
-import CreateGroupModal from './components/CreateGroupModal';
-import AISettingsModal from './components/AISettingsModal';
-import { AIStudioModule } from './features/ai-studio';
 import { SocialEcosystemModule, SocialSubTab } from './features/social';
 import { getDailyCredits, addRewardCredits, DailyCreditsData } from './utils/creditManager';
 import { useAuth } from './context/AuthContext';
+
+// Lazy-load genuinely heavy, non-initial features & modals
+const AIStudioModule = lazy(() => import('./features/ai-studio'));
+const AuthModal = lazy(() => import('./components/AuthModal'));
+const RewardedAdModal = lazy(() => import('./components/RewardedAdModal'));
+const CreatePageModal = lazy(() => import('./components/CreatePageModal'));
+const CreateGroupModal = lazy(() => import('./components/CreateGroupModal'));
+const AISettingsModal = lazy(() => import('./components/AISettingsModal'));
 
 export function App() {
   const { userProfile, isAuthenticated, metfaId } = useAuth();
@@ -28,8 +30,28 @@ export function App() {
     return 'feed';
   });
 
+  // Track if AI Studio module has been activated to defer downloading its heavy bundle until first accessed
+  const [hasLoadedChat, setHasLoadedChat] = useState<boolean>(() => {
+    try {
+      const params = new URLSearchParams(window.location.search);
+      return params.get('tab') === 'chat';
+    } catch {
+      return false;
+    }
+  });
+
+  useEffect(() => {
+    if (activeTab === 'chat' && !hasLoadedChat) {
+      setHasLoadedChat(true);
+    }
+  }, [activeTab, hasLoadedChat]);
+
   // Keep URL search query aligned with active tab
   const handleNavigateTab = useCallback((tab: string) => {
+    if (tab === 'marketplace') {
+      window.open('https://shop.metfaai.com', '_blank', 'noopener,noreferrer');
+      return;
+    }
     setActiveTab(tab as any);
     try {
       const url = new URL(window.location.href);
@@ -87,6 +109,10 @@ export function App() {
     stylePreset?: string;
   } | null>(null);
 
+  // Active Direct Chat Target (passed to MessagesModule)
+  const [activeChatPartnerId, setActiveChatPartnerId] = useState<string | null>(null);
+  const [activeChatPartnerProfile, setActiveChatPartnerProfile] = useState<any | null>(null);
+
   // Listen for PWA Install Prompt
   useEffect(() => {
     const handleBeforeInstallPrompt = (e: Event) => {
@@ -110,18 +136,47 @@ export function App() {
     window.addEventListener('appinstalled', handleAppInstalled);
     window.addEventListener('swUpdated', handleSwUpdated);
 
-    // Cross-app navigation & deep link listener (for Sellme & AliExpress Marketplace)
-    try {
-      const urlParams = new URLSearchParams(window.location.search);
-      const targetTab = urlParams.get('tab') || urlParams.get('route');
-      const hash = window.location.hash.replace('#', '').toLowerCase();
-      if (targetTab === 'marketplace' || hash === 'marketplace' || urlParams.get('source') === 'sellme') {
-        setActiveTab('marketplace');
-      }
-    } catch {}
+    // Cross-app navigation & deep link listener (for Social Posts, Sellme & AliExpress Marketplace)
+    const handleCheckHashRoute = () => {
+      try {
+        const rawHash = window.location.hash || '';
+        const urlParams = new URLSearchParams(window.location.search);
+        const targetTab = urlParams.get('tab') || urlParams.get('route');
 
-    const handleOpenMarketplace = () => setActiveTab('marketplace');
+        if (
+          rawHash.startsWith('#post-') ||
+          rawHash.startsWith('#/post-') ||
+          rawHash.startsWith('#post_') ||
+          targetTab === 'feed'
+        ) {
+          setActiveTab('feed');
+        } else if (
+          targetTab === 'marketplace' ||
+          rawHash.replace('#', '').toLowerCase() === 'marketplace' ||
+          urlParams.get('source') === 'sellme'
+        ) {
+          window.open('https://shop.metfaai.com', '_blank', 'noopener,noreferrer');
+          setActiveTab('feed');
+        }
+      } catch {}
+    };
+
+    handleCheckHashRoute();
+    window.addEventListener('hashchange', handleCheckHashRoute);
+
+    const handleOpenMarketplace = () => {
+      window.open('https://shop.metfaai.com', '_blank', 'noopener,noreferrer');
+    };
     window.addEventListener('metfa_open_marketplace', handleOpenMarketplace);
+
+    // Global listener to open chat with a specific user
+    const handleOpenChat = (e: any) => {
+      const { partnerId, partnerProfile } = e.detail || {};
+      setActiveChatPartnerId(partnerId || null);
+      setActiveChatPartnerProfile(partnerProfile || null);
+      handleNavigateTab('messages');
+    };
+    window.addEventListener('metfa_open_chat', handleOpenChat);
 
     // Global listener to trigger Auth Modal from any deep action
     const handleOpenAuth = () => setIsAuthModalOpen(true);
@@ -133,7 +188,9 @@ export function App() {
       window.removeEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
       window.removeEventListener('appinstalled', handleAppInstalled);
       window.removeEventListener('swUpdated', handleSwUpdated);
+      window.removeEventListener('hashchange', handleCheckHashRoute);
       window.removeEventListener('metfa_open_marketplace', handleOpenMarketplace);
+      window.removeEventListener('metfa_open_chat', handleOpenChat);
       window.removeEventListener('metfa_open_auth_modal', handleOpenAuth);
       window.removeEventListener('metfa_open_api_keys_modal', handleOpenApiKeys);
     };
@@ -230,15 +287,26 @@ export function App() {
 
       {/* 2. Decoupled Feature Modules Viewport */}
       <main className="flex-1 min-h-0 flex flex-col relative overflow-hidden">
-        {/* Module A: AI Studio (LLM routing, vision, multimodal tools, settings) */}
+        {/* Module A: AI Studio (LLM routing, vision, multimodal tools, settings) - lazy-loaded only when requested */}
         <div className={`w-full h-full flex flex-col flex-1 min-h-0 ${activeTab === 'chat' ? 'flex' : 'hidden'}`}>
-          <AIStudioModule
-            onShareToSocialFeed={(data) => {
-              setShareModalData(data);
-              handleNavigateTab('feed');
-            }}
-            onNavigateToSocial={(tab) => handleNavigateTab(tab)}
-          />
+          {(activeTab === 'chat' || hasLoadedChat) && (
+            <Suspense
+              fallback={
+                <div className="flex-1 flex flex-col items-center justify-center gap-3 p-8 text-slate-400">
+                  <div className="w-8 h-8 rounded-full border-2 border-purple-500 border-t-transparent animate-spin" />
+                  <span className="text-xs font-medium">Loading AI Studio...</span>
+                </div>
+              }
+            >
+              <AIStudioModule
+                onShareToSocialFeed={(data) => {
+                  setShareModalData(data);
+                  handleNavigateTab('feed');
+                }}
+                onNavigateToSocial={(tab) => handleNavigateTab(tab)}
+              />
+            </Suspense>
+          )}
         </div>
 
         {/* Module B: Social Ecosystem (Feed, Reels, Live Streams, Pages, Groups, Profile) */}
@@ -252,6 +320,8 @@ export function App() {
             onRemixPrompt={handleRemixPrompt}
             shareModalData={shareModalData}
             onCloseShareModal={() => setShareModalData(null)}
+            activeChatPartnerId={activeChatPartnerId}
+            activeChatPartnerProfile={activeChatPartnerProfile}
           />
         </div>
       </main>
@@ -263,37 +333,57 @@ export function App() {
       />
 
       {/* 4. Global SSO Auth Modal */}
-      <AuthModal
-        isOpen={isAuthModalOpen}
-        onClose={() => setIsAuthModalOpen(false)}
-      />
+      {isAuthModalOpen && (
+        <Suspense fallback={null}>
+          <AuthModal
+            isOpen={isAuthModalOpen}
+            onClose={() => setIsAuthModalOpen(false)}
+          />
+        </Suspense>
+      )}
 
       {/* 5. Prompt Credits Refill Modal */}
-      <RewardedAdModal
-        isOpen={isRewardedAdOpen}
-        onClose={() => setIsRewardedAdOpen(false)}
-        onRewardClaimed={handleRewardClaimed}
-      />
+      {isRewardedAdOpen && (
+        <Suspense fallback={null}>
+          <RewardedAdModal
+            isOpen={isRewardedAdOpen}
+            onClose={() => setIsRewardedAdOpen(false)}
+            onRewardClaimed={handleRewardClaimed}
+          />
+        </Suspense>
+      )}
 
       {/* 6. Quick Page Creation Modal */}
-      <CreatePageModal
-        isOpen={isCreatePageOpen}
-        onClose={() => setIsCreatePageOpen(false)}
-        userProfile={userProfile}
-      />
+      {isCreatePageOpen && (
+        <Suspense fallback={null}>
+          <CreatePageModal
+            isOpen={isCreatePageOpen}
+            onClose={() => setIsCreatePageOpen(false)}
+            userProfile={userProfile}
+          />
+        </Suspense>
+      )}
 
       {/* 7. Quick Group Creation Modal */}
-      <CreateGroupModal
-        isOpen={isCreateGroupOpen}
-        onClose={() => setIsCreateGroupOpen(false)}
-        userProfile={userProfile}
-      />
+      {isCreateGroupOpen && (
+        <Suspense fallback={null}>
+          <CreateGroupModal
+            isOpen={isCreateGroupOpen}
+            onClose={() => setIsCreateGroupOpen(false)}
+            userProfile={userProfile}
+          />
+        </Suspense>
+      )}
 
       {/* 8. App Secrets & AI API Keys Modal */}
-      <AISettingsModal
-        isOpen={isApiKeysModalOpen}
-        onClose={() => setIsApiKeysModalOpen(false)}
-      />
+      {isApiKeysModalOpen && (
+        <Suspense fallback={null}>
+          <AISettingsModal
+            isOpen={isApiKeysModalOpen}
+            onClose={() => setIsApiKeysModalOpen(false)}
+          />
+        </Suspense>
+      )}
     </div>
   );
 }

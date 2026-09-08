@@ -106,7 +106,7 @@ export const StudioSettingsDrawer: React.FC<StudioSettingsDrawerProps> = ({
                   onClick={() =>
                     onUpdateSettings({
                       engine: 'gemini',
-                      model: 'gemini-3.7-flash',
+                      model: 'gemini-3.8-flash',
                     })
                   }
                   className={`p-2.5 rounded-2xl border text-center transition flex flex-col items-center gap-1 cursor-pointer ${
@@ -167,11 +167,11 @@ export const StudioSettingsDrawer: React.FC<StudioSettingsDrawerProps> = ({
                   Gemini Model Flavor
                 </label>
                 <select
-                  value={settings.model || 'gemini-3.7-flash'}
+                  value={settings.model || 'gemini-3.8-flash'}
                   onChange={(e) => onUpdateSettings({ model: e.target.value })}
                   className="w-full bg-gray-950 border border-gray-800 rounded-xl px-3 py-2.5 text-xs text-white focus:outline-none focus:border-purple-500 font-medium"
                 >
-                  <option value="gemini-3.7-flash">⚡ Gemini 3.7 Flash (Primary - Fast Multimodal & Reasoning)</option>
+                  <option value="gemini-3.8-flash">⚡ Gemini 3.8 Flash (Primary - High Performance & Multimodal)</option>
                   <option value="gemini-3.1-flash-lite">🌱 Gemini 3.1 Flash Lite (Ultra-lightweight Fast)</option>
                   <option value="gemini-3.1-flash-lite-image">🎨 Gemini 3.1 Flash Lite Image (Visual Inpainting)</option>
                 </select>

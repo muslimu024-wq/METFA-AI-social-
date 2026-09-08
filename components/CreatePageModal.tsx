@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { FileText, X, Check, UploadCloud } from 'lucide-react';
 import { SocialPage, UserProfile } from '../types/community';
 import { createSocialPage } from '../utils/socialStore';
+import { GUEST_AVATAR } from '../services/authService';
 
 interface CreatePageModalProps {
   isOpen: boolean;
@@ -20,7 +21,7 @@ export const CreatePageModal: React.FC<CreatePageModalProps> = ({
   const [username, setUsername] = useState('');
   const [category, setCategory] = useState('Technology & AI');
   const [description, setDescription] = useState('');
-  const [avatar, setAvatar] = useState('https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?w=200');
+  const [avatar, setAvatar] = useState(userProfile.avatar || GUEST_AVATAR);
 
   if (!isOpen) return null;
 
@@ -37,7 +38,7 @@ export const CreatePageModal: React.FC<CreatePageModalProps> = ({
       description: description.trim() || 'Official Metfa Creator Studio Page',
       category,
       avatar,
-      coverImage: 'https://images.unsplash.com/photo-1579546929518-9e396f3cc809?w=1000',
+      coverImage: '',
       isVerified: true,
       tags: ['AIStudio', category.replace(/\s+/g, '')],
     });

@@ -19,7 +19,7 @@ export const INITIAL_CHAT_MESSAGES: ChatMessage[] = [
     role: 'assistant',
     content: `👋 **Welcome to Metfa Social!**
 
-I am your multimodal intelligence companion powered by **Gemini 3.7 Flash** with low-latency response times and automatic high-availability fallback.
+I am your multimodal intelligence companion powered by **Gemini 3.8 Flash** with low-latency response times and automatic high-availability fallback.
 
 Here is what we can do together:
 
@@ -30,12 +30,12 @@ Here is what we can do together:
 
 How can I help you create or debug today?`,
     timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-    modelUsed: 'gemini-3.7-flash',
+    modelUsed: 'gemini-3.8-flash',
   },
 ];
 
 export const DEFAULT_STUDIO_SETTINGS: StudioSettings = {
-  model: 'gemini-3.7-flash',
+  model: 'gemini-3.8-flash',
   qualityLevel: 'hd',
   stylePreset: '',
   temperature: 0.7,
@@ -161,7 +161,18 @@ export const getStudioSettings = (): StudioSettings => {
     const raw = safeGetItem(SETTINGS_STORAGE_KEY);
     if (raw) {
       const data = JSON.parse(raw);
-      if (data) return { ...DEFAULT_STUDIO_SETTINGS, ...data };
+      if (data) {
+        if (
+          data.model === 'gemini-3.7-flash' ||
+          data.model === 'gemini-3.6-flash' ||
+          data.model === 'gemini-2.5-flash' ||
+          data.model === 'gemini-2.0-flash' ||
+          !data.model
+        ) {
+          data.model = 'gemini-3.8-flash';
+        }
+        return { ...DEFAULT_STUDIO_SETTINGS, ...data };
+      }
     }
   } catch (err) {
     console.error('Error loading studio settings:', err);

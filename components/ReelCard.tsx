@@ -66,7 +66,7 @@ export const ReelCard: React.FC<ReelCardProps> = ({
 
   const isOwner = isContentOwner(reel.author.id, userProfile.id);
   const isSaved = reel.isSaved ?? isReelSaved(reel.id);
-  const savesCount = reel.savesCount ?? (reel.id === 'reel_2' ? 245 : 128);
+  const savesCount = reel.savesCount ?? 0;
 
   // Resolve audio track
   const resolvedAudioTrack: AudioTrack | null = React.useMemo(() => {
@@ -185,6 +185,8 @@ export const ReelCard: React.FC<ReelCardProps> = ({
           <img
             src={reel.thumbnailSrc || 'https://images.unsplash.com/photo-1508739773434-c26b3d09e071?w=600&auto=format&fit=crop&q=80'}
             alt={reel.title}
+            loading="lazy"
+            decoding="async"
             className="w-full h-full object-cover"
           />
         )}
@@ -438,6 +440,8 @@ export const ReelCard: React.FC<ReelCardProps> = ({
               <img
                 src={reel.author.avatar}
                 alt={reel.author.name}
+                loading="lazy"
+                decoding="async"
                 className="w-9 h-9 rounded-full object-cover border-2 border-purple-500 shadow-md"
               />
               <div className="min-w-0 pr-16">

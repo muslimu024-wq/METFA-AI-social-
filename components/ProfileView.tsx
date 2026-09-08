@@ -30,6 +30,7 @@ import {
   BookmarkCheck,
   Heart,
   MessageCircle,
+  MessageSquare,
   Play,
 } from 'lucide-react';
 import { UserProfile, CommunityPost, ReelHighlight } from '../types/community';
@@ -60,6 +61,7 @@ interface ProfileViewProps {
   onOpenAuthModal?: () => void;
   onCreatePageClick?: () => void;
   onCreateGroupClick?: () => void;
+  onOpenChatWithUser?: (userId: string, userProfile?: UserProfile) => void;
 }
 
 const AVATAR_STYLES = [
@@ -85,6 +87,7 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
   onOpenAuthModal,
   onCreatePageClick,
   onCreateGroupClick,
+  onOpenChatWithUser,
 }) => {
   const { user: authUser, activeIdentity, updateProfile, switchIdentity } = useAuth();
   const [isEditing, setIsEditing] = useState(false);
@@ -307,6 +310,7 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
               <img
                 src={activeIdentity.avatar || userProfile.avatar}
                 alt={activeIdentity.name || userProfile.name}
+                decoding="async"
                 className="w-24 h-24 sm:w-32 sm:h-32 rounded-3xl object-cover border-4 border-white shadow-xl bg-slate-100 group-hover:opacity-90 transition"
               />
 
@@ -518,6 +522,24 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
               </div>
             )}
 
+            {/* Messages Quick Shortcut */}
+            <button
+              type="button"
+              id="profile-direct-messages-btn"
+              onClick={() => {
+                if (onOpenChatWithUser) {
+                  onOpenChatWithUser('', undefined);
+                } else {
+                  window.dispatchEvent(new CustomEvent('metfa_open_chat', { detail: {} }));
+                }
+              }}
+              className="px-4 py-2 bg-teal-50 hover:bg-teal-100 text-teal-800 text-xs font-bold rounded-xl border border-teal-200 flex items-center gap-1.5 shadow-xs transition active:scale-95 cursor-pointer"
+              title="Direct Messages"
+            >
+              <MessageSquare className="w-3.5 h-3.5 text-teal-600" />
+              <span>Messages</span>
+            </button>
+
             {/* 2. Sleek Account Switcher Dropdown Trigger */}
             <div className="relative">
               <button
@@ -569,6 +591,8 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
                       <img
                         src={authUser.avatar}
                         alt="Personal"
+                        loading="lazy"
+                        decoding="async"
                         className="w-8 h-8 rounded-lg object-cover shrink-0 border border-slate-200"
                       />
                       <div className="min-w-0">
@@ -603,6 +627,8 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
                               <img
                                 src={p.avatar}
                                 alt={p.name}
+                                loading="lazy"
+                                decoding="async"
                                 className="w-7 h-7 rounded-lg object-cover shrink-0 border border-slate-200"
                               />
                               <div className="min-w-0">
@@ -641,6 +667,8 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
                               <img
                                 src={g.avatar}
                                 alt={g.name}
+                                loading="lazy"
+                                decoding="async"
                                 className="w-7 h-7 rounded-lg object-cover shrink-0 border border-slate-200"
                               />
                               <div className="min-w-0">
@@ -717,8 +745,8 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
               <span className="sm:hidden">Photo</span>
             </button>
 
-            {/* 5. SSO / Auth Modal Trigger */}
-            {onOpenAuthModal && (
+            {/* 5. SSO / Auth Modal Trigger — Render ONLY for guest users so authenticated users are not prompted */}
+            {onOpenAuthModal && authUser.authType === 'guest' && (
               <button
                 type="button"
                 id="profile-auth-btn"
@@ -726,7 +754,8 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
                 className="px-3.5 py-2 bg-gradient-to-r from-purple-600 to-teal-600 hover:from-purple-500 hover:to-teal-500 text-white text-xs font-bold rounded-xl flex items-center gap-1.5 shadow-xs transition active:scale-95 ml-auto sm:ml-0 cursor-pointer"
               >
                 <LogIn className="w-3.5 h-3.5" />
-                <span className="hidden sm:inline">Phone / Gmail</span>
+                <span className="hidden sm:inline">Sign In / Sign Up</span>
+                <span className="sm:hidden">Sign In</span>
               </button>
             )}
           </div>
@@ -821,6 +850,8 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
                     <img
                       src={post.imageSrc}
                       alt={post.prompt}
+                      loading="lazy"
+                      decoding="async"
                       className="w-full h-full object-cover group-hover:scale-105 transition duration-300"
                     />
                   ) : (
@@ -856,6 +887,8 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
                   <img
                     src={reel.thumbnailSrc || reel.videoSrc}
                     alt={reel.title}
+                    loading="lazy"
+                    decoding="async"
                     className="w-full h-full object-cover group-hover:scale-105 transition duration-300"
                   />
                   <div className="absolute inset-0 bg-gradient-to-t from-black/90 via-black/20 to-transparent flex flex-col justify-between p-3">
@@ -947,6 +980,8 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
                             <img
                               src={post.author.avatar}
                               alt={post.author.name}
+                              loading="lazy"
+                              decoding="async"
                               className="w-7 h-7 rounded-full object-cover border border-slate-200 shrink-0"
                             />
                             <div className="min-w-0">
@@ -973,6 +1008,8 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
                             <img
                               src={post.imageSrc}
                               alt={post.prompt}
+                              loading="lazy"
+                              decoding="async"
                               className="w-full h-full object-cover"
                             />
                           </div>
@@ -1022,6 +1059,8 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
                       <img
                         src={reel.thumbnailSrc || reel.videoSrc}
                         alt={reel.title}
+                        loading="lazy"
+                        decoding="async"
                         className="absolute inset-0 w-full h-full object-cover group-hover:scale-105 transition duration-300"
                       />
                       <div className="relative z-10 p-2.5 flex items-start justify-between bg-gradient-to-b from-black/80 via-transparent to-transparent">
@@ -1115,12 +1154,14 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
                   <img
                     src={generatedAvatarPreview}
                     alt="AI Avatar Preview"
+                    decoding="async"
                     className="w-full h-full object-cover"
                   />
                 ) : (
                   <img
                     src={userProfile.avatar}
                     alt="Current Avatar"
+                    decoding="async"
                     className="w-full h-full object-cover opacity-80"
                   />
                 )}

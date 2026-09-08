@@ -1,13 +1,16 @@
 import { CommunityPost, UserProfile, PostComment, VoiceComment } from '../types/community';
 import { addNotification } from './notificationStore';
-import { safeSetItem, safeGetItem, compressImageDataUrl } from './storageUtils';
+import { safeSetItem, safeGetItem, safeRemoveItem, compressImageDataUrl } from './storageUtils';
 import {
   fetchSupabasePosts,
+  fetchSupabasePostById,
   createSupabasePost,
   updateSupabasePost as doUpdateSupabasePost,
   deleteSupabasePost as doDeleteSupabasePost,
 } from '../services/postService';
-import { isSupabaseConfigured } from '../services/supabaseClient';
+import { isSupabaseConfigured, supabase } from '../services/supabaseClient';
+import { uploadMediaItem } from '../services/storageService';
+import { GUEST_AVATAR, sanitizeAvatarUrl } from '../services/authService';
 
 const POSTS_STORAGE_KEY = 'metfa_community_posts_v2';
 const USER_PROFILE_KEY = 'metfa_user_profile_v2';
@@ -18,203 +21,109 @@ export const isUuid = (id?: string | null): boolean => {
 };
 
 export const INITIAL_USER_PROFILE: UserProfile = {
-  id: 'user_default',
-  name: 'Alex Rivera',
-  username: 'alex.rivera',
-  avatar: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=200&auto=format&fit=crop&q=80',
-  bio: 'Visual Concept Designer & AI Artist. Creating futuristic architectures, fantasy landscapes, and cinematic lighting studies.',
-  location: 'Tokyo / Remote',
-  website: 'https://metfa.ai/@alex.rivera',
-  isVerified: true,
-  joinDate: 'Joined January 2026',
+  id: '',
+  name: 'Guest',
+  username: 'guest',
+  avatar: GUEST_AVATAR,
+  bio: '',
+  location: '',
+  website: '',
+  isVerified: false,
+  joinDate: '',
   stats: {
-    postsCount: 14,
-    followersCount: 3840,
-    followingCount: 420,
-    totalLikes: 19200,
-    reelsCount: 6,
+    postsCount: 0,
+    followersCount: 0,
+    followingCount: 0,
+    totalLikes: 0,
+    reelsCount: 0,
   },
 };
 
-export const INITIAL_POSTS: CommunityPost[] = [
-  {
-    id: 'post_1',
-    author: {
-      id: 'user_elena',
-      name: 'Elena Rostova',
-      username: 'elena_ai',
-      avatar: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80',
-      isVerified: true,
-    },
-    postingIdentity: {
-      type: 'page',
-      id: 'page_gemini_creators',
-      name: 'Gemini AI Vision Lab',
-      username: 'gemini.lab',
-      avatar: 'https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?w=200&auto=format&fit=crop&q=80',
-      badge: 'Official Page',
-    },
-    pageId: 'page_gemini_creators',
-    pageName: 'Gemini AI Vision Lab',
-    pageCategory: 'Technology & AI',
-    prompt: 'Hyper-realistic neon cyberpunk city at night with flying vehicles and glowing holographic signs, rain reflection on streets, 8k resolution, cinematic lighting',
-    caption: 'Explored multi-layered neural inpainting with Gemini 3.7 Flash. The volumetric fog and wet pavement reflections are unreal! ✨ #MetfaAI #Cyberpunk #Inpainting',
-    stylePreset: 'Cyberpunk 2088',
-    imageSrc: 'https://images.unsplash.com/photo-1508739773434-c26b3d09e071?w=1000&auto=format&fit=crop&q=80',
-    originalImageSrc: 'https://images.unsplash.com/photo-1514565131-fce0801e5785?w=1000&auto=format&fit=crop&q=80',
-    likesCount: 542,
-    remixCount: 128,
-    commentsCount: 34,
-    sharesCount: 89,
-    isLiked: false,
-    isBookmarked: false,
-    comments: [
-      {
-        id: 'c_1',
-        author: {
-          id: 'user_marcus',
-          name: 'Marcus Vance',
-          username: 'marcus_vfx',
-          avatar: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150&auto=format&fit=crop&q=80',
-          isVerified: true,
-        },
-        text: 'The wet asphalt specular reflection is immaculate! Did you use the prompt enhancer tool?',
-        timestamp: '1h ago',
-        likesCount: 12,
-      },
-      {
-        id: 'c_alex_2',
-        author: {
-          id: 'user_default',
-          name: 'Alex Rivera',
-          username: 'alex.rivera',
-          avatar: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=200&auto=format&fit=crop&q=80',
-          isVerified: true,
-        },
-        text: 'The volumetric fog and wet pavement specular highlights look incredible! Great work Elena.',
-        timestamp: '35m ago',
-        likesCount: 6,
-      },
-    ],
-    voiceComments: [
-      {
-        id: 'vc_1',
-        author: {
-          id: 'user_alexa',
-          name: 'Alexa Chen',
-          username: 'alexa_design',
-          avatar: 'https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=150&auto=format&fit=crop&q=80',
-          isVerified: false,
-        },
-        audioUrl: 'https://actions.google.com/sounds/v1/water/rain_heavy.ogg',
-        duration: 8,
-        timestamp: '45m ago',
-        likesCount: 5,
-        waveform: [20, 45, 80, 60, 90, 75, 40, 60, 85, 30],
-      },
-    ],
-    createdAt: '2 hours ago',
-    tags: ['Cyberpunk', 'GeminiVision', 'DigitalArt', '4K'],
-    feedType: 'for_you',
-  },
-  {
-    id: 'post_2',
-    author: {
-      id: 'user_marcus',
-      name: 'Marcus Vance',
-      username: 'marcus_vfx',
-      avatar: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150&auto=format&fit=crop&q=80',
-      isVerified: true,
-    },
-    postingIdentity: {
-      type: 'group',
-      id: 'group_scene_inpainting',
-      name: 'Neural Scene Inpainters & Remakers',
-      username: 'scene.inpainters',
-      avatar: 'https://images.unsplash.com/photo-1544005313-94ddf0286df2?w=200&auto=format&fit=crop&q=80',
-      badge: 'Community Group',
-    },
-    groupId: 'group_scene_inpainting',
-    groupName: 'Neural Scene Inpainters & Remakers',
-    prompt: 'Enchanted mossy ancient temple ruins submerged in crystal emerald waters, sunbeams piercing through jungle canopy, floating bioluminescent flora',
-    caption: 'Experimented with prompt restructuring to achieve volumetric underwater lighting. What do you guys think? 🌿🏛️ #NatureArt #MetfaCreative',
-    stylePreset: 'Fantasy Realm',
-    imageSrc: 'https://images.unsplash.com/photo-1518709268805-4e9042af9f23?w=1000&auto=format&fit=crop&q=80',
-    likesCount: 820,
-    remixCount: 215,
-    commentsCount: 58,
-    sharesCount: 142,
-    isLiked: true,
-    isBookmarked: true,
-    comments: [],
-    createdAt: '4 hours ago',
-    tags: ['Fantasy', 'ConceptArt', 'Photorealism', 'Nature'],
-    feedType: 'trending',
-  },
-  {
-    id: 'post_alex_1',
-    author: {
-      id: 'user_default',
-      name: 'Alex Rivera',
-      username: 'alex.rivera',
-      avatar: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=200&auto=format&fit=crop&q=80',
-      isVerified: true,
-    },
-    prompt: 'Bioluminescent cybernetic jellyfish drifting through deep twilight ocean trench, iridescent volumetric light rays, 8k octane render',
-    caption: 'Deep oceanic neural synthesis rendered with Gemini multimodal vision. Notice the subtle light refraction through the water! 🌊✨ #DeepOcean #OctaneRender #MetfaArt',
-    stylePreset: 'Photorealistic Studio',
-    imageSrc: 'https://images.unsplash.com/photo-1544551763-46a013bb70d5?w=1000&auto=format&fit=crop&q=80',
-    likesCount: 310,
-    remixCount: 45,
-    commentsCount: 2,
-    sharesCount: 22,
-    isLiked: true,
-    isBookmarked: false,
-    comments: [
-      {
-        id: 'c_alex_own',
-        author: {
-          id: 'user_default',
-          name: 'Alex Rivera',
-          username: 'alex.rivera',
-          avatar: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=200&auto=format&fit=crop&q=80',
-          isVerified: true,
-        },
-        text: 'Used the custom prompt enhancer for this one, really helped with the bioluminescence balance!',
-        timestamp: '30m ago',
-        likesCount: 4,
-      },
-      {
-        id: 'c_marcus_reply',
-        author: {
-          id: 'user_marcus',
-          name: 'Marcus Vance',
-          username: 'marcus_vfx',
-          avatar: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150&auto=format&fit=crop&q=80',
-          isVerified: true,
-        },
-        text: 'The caustic reflections on the tentacles look incredible Alex!',
-        timestamp: '20m ago',
-        likesCount: 2,
-      },
-    ],
-    createdAt: '1 hour ago',
-    tags: ['Underwater', 'Bioluminescence', '8K', 'DigitalArt'],
-    feedType: 'for_you',
-  },
-];
+/**
+ * Known legacy dummy/seed post IDs and author names to purge from feed
+ */
+const DUMMY_POST_IDS = new Set([
+  'post_1',
+  'post_2',
+  'post_3',
+  'post_4',
+  'post_mateo_1',
+  'user_elena',
+  'user_marcus',
+  'user_mateo',
+]);
+
+const DUMMY_AUTHOR_NAMES = new Set([
+  'Elena Rostova',
+  'Marcus Vance',
+  'Mateo Silva',
+  'Alexa Chen',
+  'Alex Rivera',
+]);
+
+/**
+ * Filter helper to ensure no dummy/demo posts contaminate the feed
+ */
+export const isRealPost = (p: CommunityPost): boolean => {
+  if (!p || !p.id) return false;
+  if (DUMMY_POST_IDS.has(p.id)) return false;
+  if (p.author?.name && DUMMY_AUTHOR_NAMES.has(p.author.name)) return false;
+  if (p.author?.id && DUMMY_POST_IDS.has(p.author.id)) return false;
+  return true;
+};
+
+/**
+ * Production empty initial posts array. Real posts MUST be loaded from Supabase.
+ */
+export const INITIAL_POSTS: CommunityPost[] = [];
+
+/**
+ * Extracts a target postId from a URL hash string.
+ * Supports: #post-post_1788406851913, #post-uuid, #post_1788406851913, #post/123
+ */
+export const extractPostIdFromHash = (rawHash?: string | null): string | null => {
+  if (!rawHash) return null;
+  const cleaned = rawHash.replace(/^#\/?/, '').trim();
+  if (!cleaned) return null;
+
+  if (cleaned.startsWith('post-')) {
+    return cleaned.substring(5).trim();
+  }
+  if (cleaned.startsWith('post_')) {
+    return cleaned.trim();
+  }
+  return null;
+};
+
+/**
+ * Matches a post against a target ID extracted from hash or URL, accounting for "post-" prefixes.
+ */
+export const matchesPostId = (post: CommunityPost, targetId: string): boolean => {
+  if (!post || !targetId) return false;
+  const t = targetId.toLowerCase().trim();
+  const pid = (post.id || '').toLowerCase().trim();
+  return (
+    pid === t ||
+    pid === `post-${t}` ||
+    `post-${pid}` === t ||
+    `post-${pid}` === `post-${t}`
+  );
+};
 
 export const getCommunityPosts = (): CommunityPost[] => {
   try {
     const raw = safeGetItem(POSTS_STORAGE_KEY);
     if (raw) {
       const data = JSON.parse(raw);
-      if (Array.isArray(data) && data.length > 0) return data;
+      if (Array.isArray(data)) {
+        const sanitized = data.filter(isRealPost);
+        return sanitized;
+      }
     }
   } catch (err) {
     console.error('Error loading community posts:', err);
   }
-  return INITIAL_POSTS;
+  return [];
 };
 
 export const saveCommunityPosts = (posts: CommunityPost[]): void => {
@@ -227,6 +136,141 @@ export const saveCommunityPosts = (posts: CommunityPost[]): void => {
   }
   if (typeof window !== 'undefined') {
     window.dispatchEvent(new CustomEvent('metfa_posts_updated', { detail: posts }));
+  }
+};
+
+const OWNED_POSTS_STORAGE_KEY = 'metfa_my_owned_post_ids';
+const IDB_COMMUNITY_DB = 'metfa_community_posts_db';
+const IDB_COMMUNITY_STORE = 'posts';
+
+function openCommunityIDB(): Promise<IDBDatabase> {
+  return new Promise((resolve, reject) => {
+    if (typeof window === 'undefined' || !window.indexedDB) {
+      return reject(new Error('IndexedDB not supported'));
+    }
+    const req = indexedDB.open(IDB_COMMUNITY_DB, 1);
+    req.onupgradeneeded = (e: any) => {
+      const db = e.target.result as IDBDatabase;
+      if (!db.objectStoreNames.contains(IDB_COMMUNITY_STORE)) {
+        db.createObjectStore(IDB_COMMUNITY_STORE, { keyPath: 'id' });
+      }
+    };
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+}
+
+export async function savePostsToIDB(posts: CommunityPost[]): Promise<void> {
+  try {
+    const db = await openCommunityIDB();
+    const tx = db.transaction(IDB_COMMUNITY_STORE, 'readwrite');
+    const store = tx.objectStore(IDB_COMMUNITY_STORE);
+    for (const p of posts) {
+      if (isRealPost(p)) {
+        store.put(p);
+      }
+    }
+  } catch (err) {
+    console.warn('[CommunityStore] IDB write error:', err);
+  }
+}
+
+export async function getPostsFromIDB(): Promise<CommunityPost[]> {
+  try {
+    const db = await openCommunityIDB();
+    return new Promise((resolve) => {
+      const tx = db.transaction(IDB_COMMUNITY_STORE, 'readonly');
+      const store = tx.objectStore(IDB_COMMUNITY_STORE);
+      const req = store.getAll();
+      req.onsuccess = () => {
+        const list = (req.result as CommunityPost[]) || [];
+        resolve(list.filter(isRealPost));
+      };
+      req.onerror = () => resolve([]);
+    });
+  } catch {
+    return [];
+  }
+}
+
+export async function deletePostFromIDB(postId: string): Promise<void> {
+  try {
+    const db = await openCommunityIDB();
+    const tx = db.transaction(IDB_COMMUNITY_STORE, 'readwrite');
+    tx.objectStore(IDB_COMMUNITY_STORE).delete(postId);
+  } catch {}
+}
+
+export async function fetchServerPosts(): Promise<CommunityPost[]> {
+  try {
+    const res = await fetch('/api/posts');
+    if (res.ok) {
+      const data = await res.json();
+      if (Array.isArray(data?.posts)) {
+        return data.posts.filter(isRealPost);
+      }
+    }
+  } catch (err) {
+    console.warn('[CommunityStore] Error fetching from /api/posts:', err);
+  }
+  return [];
+}
+
+export async function saveServerPost(post: CommunityPost): Promise<void> {
+  try {
+    await fetch('/api/posts', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(post),
+    });
+  } catch (err) {
+    console.warn('[CommunityStore] Error saving post to /api/posts:', err);
+  }
+}
+
+export async function updateServerPost(postId: string, updates: Partial<CommunityPost>): Promise<void> {
+  try {
+    await fetch(`/api/posts/${postId}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(updates),
+    });
+  } catch (err) {
+    console.warn('[CommunityStore] Error updating post on /api/posts:', err);
+  }
+}
+
+export async function deleteServerPost(postId: string): Promise<void> {
+  try {
+    await fetch(`/api/posts/${postId}`, {
+      method: 'DELETE',
+    });
+  } catch (err) {
+    console.warn('[CommunityStore] Error deleting post on /api/posts:', err);
+  }
+}
+
+export const recordOwnedPostId = (postId: string): void => {
+  if (typeof window === 'undefined' || !postId) return;
+  try {
+    const raw = localStorage.getItem(OWNED_POSTS_STORAGE_KEY);
+    const set = new Set(raw ? JSON.parse(raw) : []);
+    set.add(postId);
+    localStorage.setItem(OWNED_POSTS_STORAGE_KEY, JSON.stringify(Array.from(set)));
+  } catch (err) {
+    console.warn('[CommunityStore] Error saving owned post id:', err);
+  }
+};
+
+export const isLocallyOwnedPost = (postId?: string): boolean => {
+  if (typeof window === 'undefined' || !postId) return false;
+  try {
+    const raw = localStorage.getItem(OWNED_POSTS_STORAGE_KEY);
+    if (!raw) return false;
+    const list: string[] = JSON.parse(raw);
+    return list.includes(postId);
+  } catch {
+    return false;
   }
 };
 
@@ -245,101 +289,212 @@ export const saveCommunityPost = (post: Omit<CommunityPost, 'id' | 'likesCount' 
     createdAt: 'Just now',
   };
 
+  recordOwnedPostId(newPost.id);
   const updated = [newPost, ...current];
   saveCommunityPosts(updated);
+  savePostsToIDB(updated);
+  saveServerPost(newPost);
 
   addNotification({
     type: 'like',
     title: 'Post Published Successfully',
-    message: `Your creation "${newPost.prompt.substring(0, 35)}..." was shared to the Metfa community feed!`,
+    message: `Your creation "${(newPost.videoTitle || newPost.prompt).substring(0, 35)}..." was shared to the Metfa community feed!`,
     actor: {
       name: newPost.author.name,
       username: newPost.author.username,
       avatar: newPost.author.avatar,
     },
     linkTab: 'feed',
-    thumbnail: newPost.imageSrc,
+    thumbnail: newPost.imageSrc || newPost.videoThumbnail,
   });
 
   return newPost;
 };
 
 /**
- * Asynchronously loads posts from Supabase (if configured) and synchronizes them with the local cache.
- * Preserves initial seed posts for demo completeness while elevating persistent database posts.
+ * Asynchronously loads posts from Supabase, Server Disk API, and IndexedDB,
+ * ensuring posts survive browser refresh, reopening the website, and navigating away.
  */
 export const fetchAndSyncCommunityPosts = async (): Promise<CommunityPost[]> => {
-  if (!isSupabaseConfigured()) {
-    return getCommunityPosts();
+  let dbPosts: CommunityPost[] = [];
+  if (isSupabaseConfigured()) {
+    try {
+      const { posts, error } = await fetchSupabasePosts();
+      if (!error && posts) {
+        dbPosts = posts.filter(isRealPost);
+      }
+    } catch (err) {
+      console.warn('[CommunityStore] Error during fetchSupabasePosts:', err);
+    }
   }
 
-  try {
-    const { posts: dbPosts, error } = await fetchSupabasePosts();
-    if (error || !dbPosts) {
-      return getCommunityPosts();
-    }
+  // Also fetch from server persistent disk database
+  const serverPosts = await fetchServerPosts();
 
-    if (dbPosts.length > 0) {
-      // Merge dbPosts with existing local/seed posts without duplicate IDs
-      const local = getCommunityPosts();
-      const dbIds = new Set(dbPosts.map((p) => p.id));
-      const filteredLocal = local.filter((p) => !dbIds.has(p.id) && !isUuid(p.id));
-      const combined = [...dbPosts, ...filteredLocal];
-      saveCommunityPosts(combined);
-      return combined;
-    }
-  } catch (err) {
-    console.warn('[CommunityStore] Error during fetchAndSyncCommunityPosts:', err);
-  }
+  // Also load from IndexedDB
+  const idbPosts = await getPostsFromIDB();
 
-  return getCommunityPosts();
+  // Local storage posts
+  const localPosts = getCommunityPosts();
+
+  // Merge sources: Supabase > Server API > IndexedDB > LocalStorage
+  const postMap = new Map<string, CommunityPost>();
+  for (const p of localPosts) postMap.set(p.id, p);
+  for (const p of idbPosts) postMap.set(p.id, p);
+  for (const p of serverPosts) postMap.set(p.id, p);
+  for (const p of dbPosts) postMap.set(p.id, p);
+
+  const authoritativePosts = Array.from(postMap.values()).filter(isRealPost);
+
+  // Sort newest first
+  authoritativePosts.sort((a, b) => {
+    const timeA = (a as any).created_at ? new Date((a as any).created_at).getTime() : (parseInt(a.id.replace(/\D/g, '')) || 0);
+    const timeB = (b as any).created_at ? new Date((b as any).created_at).getTime() : (parseInt(b.id.replace(/\D/g, '')) || 0);
+    return timeB - timeA;
+  });
+
+  saveCommunityPosts(authoritativePosts);
+  savePostsToIDB(authoritativePosts);
+
+  return authoritativePosts;
 };
 
 /**
- * Asynchronously creates a post. If Supabase is configured and authorId is a valid UUID,
- * inserts the record into Supabase public.posts with Row Level Security.
- * Falls back to local persistent storage if Supabase is offline or for guest users.
+ * Asynchronously creates a post with guaranteed persistence:
+ * 1. Uploads any Base64 media to Supabase Storage or server disk
+ * 2. If Supabase is configured and authorId is valid, inserts into Supabase public.posts
+ * 3. Persists to server disk (/api/posts)
+ * 4. Saves to IndexedDB and local storage
  */
 export const createPostAsync = async (
   post: Omit<CommunityPost, 'id' | 'likesCount' | 'remixCount' | 'commentsCount' | 'sharesCount' | 'createdAt' | 'comments'>,
   authorId?: string
 ): Promise<CommunityPost> => {
-  if (isSupabaseConfigured() && authorId && isUuid(authorId)) {
+  let resolvedAuthorId = authorId;
+  const postToSave = { ...post };
+
+  // 1. Upload Base64 video if present to get permanent HTTP URL
+  if (postToSave.videoSrc && postToSave.videoSrc.startsWith('data:')) {
     try {
-      const { post: dbPost, error } = await createSupabasePost(post, authorId);
+      const upload = await uploadMediaItem(postToSave.videoSrc, {
+        userId: resolvedAuthorId,
+        type: 'video',
+        fileName: `${postToSave.videoTitle || 'video'}.mp4`,
+      });
+      if (upload?.url) {
+        postToSave.videoSrc = upload.url;
+      }
+    } catch (e) {
+      console.warn('[CommunityStore] Error uploading video:', e);
+    }
+  }
+
+  // 2. Upload Base64 image if present
+  if (postToSave.imageSrc && postToSave.imageSrc.startsWith('data:')) {
+    try {
+      const upload = await uploadMediaItem(postToSave.imageSrc, {
+        userId: resolvedAuthorId,
+        type: 'image',
+        fileName: 'cover_image.jpg',
+      });
+      if (upload?.url) {
+        postToSave.imageSrc = upload.url;
+      }
+    } catch (e) {
+      console.warn('[CommunityStore] Error uploading image:', e);
+    }
+  }
+
+  // 3. Upload video thumbnail if present
+  if (postToSave.videoThumbnail && postToSave.videoThumbnail.startsWith('data:')) {
+    try {
+      const upload = await uploadMediaItem(postToSave.videoThumbnail, {
+        userId: resolvedAuthorId,
+        type: 'image',
+        fileName: 'video_thumbnail.jpg',
+      });
+      if (upload?.url) {
+        postToSave.videoThumbnail = upload.url;
+      }
+    } catch (e) {
+      console.warn('[CommunityStore] Error uploading video thumbnail:', e);
+    }
+  }
+
+  // 3b. Upload Base64 image gallery items if present
+  if (Array.isArray(postToSave.imageGallery) && postToSave.imageGallery.length > 0) {
+    const uploadedGallery: string[] = [];
+    for (let i = 0; i < postToSave.imageGallery.length; i++) {
+      const item = postToSave.imageGallery[i];
+      if (item && item.startsWith('data:')) {
+        try {
+          const upload = await uploadMediaItem(item, {
+            userId: resolvedAuthorId,
+            type: 'image',
+            fileName: `gallery_${i}_${Date.now()}.jpg`,
+          });
+          uploadedGallery.push(upload?.url || item);
+        } catch {
+          uploadedGallery.push(item);
+        }
+      } else if (item) {
+        uploadedGallery.push(item);
+      }
+    }
+    postToSave.imageGallery = uploadedGallery;
+    if (!postToSave.imageSrc && uploadedGallery.length > 0) {
+      postToSave.imageSrc = uploadedGallery[0];
+    }
+  }
+
+  // 4. Resolve author ID for Supabase
+  if (isSupabaseConfigured() && (!resolvedAuthorId || !isUuid(resolvedAuthorId))) {
+    try {
+      const { data } = await supabase.auth.getSession();
+      if (data?.session?.user?.id && isUuid(data.session.user.id)) {
+        resolvedAuthorId = data.session.user.id;
+      }
+    } catch {}
+  }
+
+  if (isSupabaseConfigured() && resolvedAuthorId && isUuid(resolvedAuthorId)) {
+    try {
+      const { post: dbPost, error } = await createSupabasePost(postToSave, resolvedAuthorId);
       if (dbPost && !error) {
+        recordOwnedPostId(dbPost.id);
         const current = getCommunityPosts();
         const updated = [dbPost, ...current.filter((p) => p.id !== dbPost.id)];
         saveCommunityPosts(updated);
+        savePostsToIDB(updated);
+        saveServerPost(dbPost);
 
         addNotification({
           type: 'like',
           title: 'Post Published Globally',
-          message: `Your creation "${dbPost.prompt.substring(0, 35)}..." was published to Supabase database!`,
+          message: `Your creation "${(dbPost.videoTitle || dbPost.prompt).substring(0, 35)}..." was published!`,
           actor: {
             name: dbPost.author.name,
             username: dbPost.author.username,
             avatar: dbPost.author.avatar,
           },
           linkTab: 'feed',
-          thumbnail: dbPost.imageSrc,
+          thumbnail: dbPost.imageSrc || dbPost.videoThumbnail,
         });
 
         return dbPost;
       }
-      console.warn('[CommunityStore] Supabase post creation failed, falling back to local:', error);
+      console.warn('[CommunityStore] Supabase post creation failed, falling back to server disk:', error);
     } catch (err) {
-      console.warn('[CommunityStore] Exception during createPostAsync, falling back to local:', err);
+      console.warn('[CommunityStore] Exception during createPostAsync, falling back to server disk:', err);
     }
   }
 
-  // Resilient fallback to local storage
-  return saveCommunityPost(post);
+  // 5. Persistent fallback: save to local store, IndexedDB, and server disk
+  return saveCommunityPost(postToSave);
 };
 
 /**
  * Asynchronously updates a community post's text, caption, prompt, tags, or styling presets.
- * If the post was created in Supabase (UUID), updates public.posts in Supabase.
  */
 export const updatePostAsync = async (
   postId: string,
@@ -353,12 +508,14 @@ export const updatePostAsync = async (
       console.warn('[CommunityStore] Error updating post in Supabase:', err);
     }
   }
-  return updateCommunityPost(postId, updates);
+  updateServerPost(postId, updates);
+  const updatedList = updateCommunityPost(postId, updates);
+  savePostsToIDB(updatedList);
+  return updatedList;
 };
 
 /**
- * Asynchronously deletes a community post by ID.
- * If the post was created in Supabase (UUID), deletes from public.posts in Supabase.
+ * Asynchronously deletes a community post by ID across Supabase, server disk, and IDB.
  */
 export const deletePostAsync = async (
   postId: string,
@@ -371,7 +528,11 @@ export const deletePostAsync = async (
       console.warn('[CommunityStore] Error deleting post from Supabase:', err);
     }
   }
-  return deleteCommunityPost(postId);
+  deleteServerPost(postId);
+  deletePostFromIDB(postId);
+  const updatedList = deleteCommunityPost(postId);
+  savePostsToIDB(updatedList);
+  return updatedList;
 };
 
 export const toggleLikePost = (postId: string): CommunityPost[] => {
@@ -411,7 +572,24 @@ export const getUserProfile = (): UserProfile => {
     const raw = safeGetItem(USER_PROFILE_KEY);
     if (raw) {
       const data = JSON.parse(raw);
-      if (data && data.name && data.username) return data;
+      if (data && data.name && data.username) {
+        if (isSupabaseConfigured()) {
+          const isStale =
+            data.id === 'user_default' ||
+            data.id === 'usr_metfa_9281' ||
+            data.username === 'alex.rivera' ||
+            data.id?.startsWith('usr_') ||
+            data.id?.startsWith('usr_google_');
+          if (isStale) {
+            safeRemoveItem(USER_PROFILE_KEY);
+            return INITIAL_USER_PROFILE;
+          }
+        }
+        return {
+          ...data,
+          avatar: sanitizeAvatarUrl(data.avatar, data.username),
+        };
+      }
     }
   } catch (err) {
     console.error('Error loading user profile:', err);
@@ -428,14 +606,20 @@ export const saveUserProfile = (profile: UserProfile): void => {
 
 /**
  * Validates whether the active user or profile owns the given post or comment.
- * Accepts either full author/user objects or string IDs.
+ * Accepts either full author/user objects or string IDs, plus optional postId.
  */
 export const isContentOwner = (
   author: { id?: string; username?: string } | string | undefined | null,
   userProfile?: { id?: string; username?: string } | string | null,
   authUser?: { id?: string; username?: string } | string | null,
-  postingIdentity?: { id?: string; username?: string } | string | null
+  postingIdentity?: { id?: string; username?: string } | string | null,
+  postId?: string
 ): boolean => {
+  // If this post was created locally on this browser, the user is the owner
+  if (postId && isLocallyOwnedPost(postId)) {
+    return true;
+  }
+
   if (!author) return false;
 
   const authorId = typeof author === 'string' ? author : author.id;
@@ -446,17 +630,14 @@ export const isContentOwner = (
   const getUsername = (item?: { id?: string; username?: string } | string | null) =>
     typeof item === 'string' ? undefined : item?.username;
 
-  const validIds = [
-    getId(userProfile),
-    getId(authUser),
-    'user_default',
-    'usr_metfa_9281',
-  ].filter(Boolean) as string[];
+  const userProfileId = getId(userProfile);
+  const authUserId = getId(authUser);
+
+  const validIds = [userProfileId, authUserId].filter(Boolean) as string[];
 
   const validUsernames = [
     getUsername(userProfile)?.toLowerCase(),
     getUsername(authUser)?.toLowerCase(),
-    'alex.rivera',
   ].filter(Boolean) as string[];
 
   if (authorId && validIds.includes(authorId)) return true;
@@ -466,6 +647,9 @@ export const isContentOwner = (
   if (postIdentityId && validIds.includes(postIdentityId)) return true;
   const postIdentityUsername = getUsername(postingIdentity);
   if (postIdentityUsername && validUsernames.includes(postIdentityUsername.toLowerCase())) return true;
+
+  // If authorId matches userProfileId directly even if empty or guest
+  if (authorId && userProfileId && authorId === userProfileId) return true;
 
   return false;
 };

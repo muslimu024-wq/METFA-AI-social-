@@ -114,49 +114,41 @@ export interface SupabaseProfileRow {
   updated_at?: string;
 }
 
+const DEFAULT_NEUTRAL_AVATAR =
+  "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%2394a3b8' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2'/%3E%3Ccircle cx='12' cy='7' r='4'/%3E%3C/svg%3E";
+
 /**
  * Converts a Supabase database profile row to the app's UserProfile type
  */
-export function mapSupabaseRowToUserProfile(row: Partial<SupabaseProfileRow>): UserProfile {
-  const defaultAvatars = [
-    'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=300&auto=format&fit=crop&q=80',
-    'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=300&auto=format&fit=crop&q=80',
-    'https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=300&auto=format&fit=crop&q=80',
-    'https://images.unsplash.com/photo-1500648767791-00dcc994a43e?w=300&auto=format&fit=crop&q=80',
-  ];
-  const seed = (row.username || row.display_name || 'creator').toLowerCase();
-  let hash = 0;
-  for (let i = 0; i < seed.length; i++) {
-    hash = (hash << 5) - hash + seed.charCodeAt(i);
-    hash |= 0;
-  }
-  const cleanFallback = defaultAvatars[Math.abs(hash) % defaultAvatars.length];
+export function mapSupabaseRowToUserProfile(row: Partial<SupabaseProfileRow>): UserProfile & { metfaId?: string } {
   const rawAvatar = row.avatar_url?.trim();
   const safeAvatar =
     rawAvatar &&
     !rawAvatar.includes('dicebear.com') &&
     !rawAvatar.includes('api.dicebear') &&
-    !rawAvatar.toLowerCase().includes('bottts')
+    !rawAvatar.toLowerCase().includes('bottts') &&
+    !rawAvatar.includes('images.unsplash.com')
       ? rawAvatar
-      : cleanFallback;
+      : DEFAULT_NEUTRAL_AVATAR;
 
   return {
-    id: row.id || 'user_default',
-    name: row.display_name || row.username || 'Metfa Creator',
+    id: row.id || '',
+    metfaId: row.metfa_id,
+    name: row.display_name || row.username || 'Creator',
     username: row.username || 'creator',
     avatar: safeAvatar,
-    bio: row.bio || 'AI Creator & Visual Explorer on Metfa Social.',
-    location: row.location || 'Global Creator',
-    website: row.website || `https://metfa.ai/@${row.username || 'creator'}`,
+    bio: row.bio || '',
+    location: row.location || '',
+    website: row.website || '',
     isVerified: row.is_verified ?? true,
     joinDate: row.created_at
       ? `Joined ${new Date(row.created_at).toLocaleDateString('en-US', { month: 'long', year: 'numeric' })}`
       : 'Joined Recently',
     stats: row.stats || {
       postsCount: 0,
-      followersCount: 142,
-      followingCount: 68,
-      totalLikes: 1240,
+      followersCount: 0,
+      followingCount: 0,
+      totalLikes: 0,
       reelsCount: 0,
     },
   };

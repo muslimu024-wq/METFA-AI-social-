@@ -237,6 +237,34 @@ async function startServer() {
     });
   }
 
+  // Helper: extract clean, human-readable error messages from Gemini API responses
+  function cleanErrorMessage(rawMsg: string): string {
+    if (!rawMsg) return "AI service encountered a temporary issue. Please try again.";
+    if (
+      rawMsg.includes("limit: 0") ||
+      rawMsg.includes("generate_content_free_tier") ||
+      (rawMsg.includes("429") && rawMsg.includes("quota") && rawMsg.includes("image"))
+    ) {
+      return "Direct AI image generation requires a Gemini API key with billing enabled (or an OpenAI / Grok key in Settings > API Keys), as image models have a quota limit of 0 on Google's free tier.";
+    }
+    if (rawMsg.includes("429") || rawMsg.includes("RESOURCE_EXHAUSTED") || rawMsg.includes("quota")) {
+      return "The AI service reached its rate limit. Please wait a few moments and click Try Again.";
+    }
+    if (rawMsg.includes("503") || rawMsg.includes("high demand") || rawMsg.includes("overloaded") || rawMsg.includes("unavailable")) {
+      return "Google Gemini models are currently experiencing high demand. Please try again in a few moments.";
+    }
+    try {
+      const match = rawMsg.match(/\{"error":\s*(\{.*?\})\s*\}/s);
+      if (match) {
+        const parsed = JSON.parse(match[0]);
+        if (parsed?.error?.message) {
+          return cleanErrorMessage(parsed.error.message);
+        }
+      }
+    } catch {}
+    return rawMsg.replace(/\{"error":\{.*?\}\}/gs, "").trim() || rawMsg;
+  }
+
   // Core execution engine with 18s timeout, robust error handling, and modern fallback models
   async function generateContentWithFallback(
     ai: GoogleGenAI,
@@ -253,8 +281,8 @@ async function startServer() {
     // Normalize models array to ensure valid supported Gemini models only
     const validModels = options.models
       .map((m) => {
-        if (!m || typeof m !== "string") return "gemini-3.7-flash";
-        if (m === "gemini-3.6-flash" || m === "gemini-2.5-flash" || m === "gemini-2.0-flash") return "gemini-3.7-flash";
+        if (!m || typeof m !== "string") return "gemini-3.8-flash";
+        if (m === "gemini-3.7-flash" || m === "gemini-3.6-flash" || m === "gemini-2.5-flash" || m === "gemini-2.0-flash") return "gemini-3.8-flash";
         if (m === "gemini-2.5-flash-lite" || m === "gemini-2.0-flash-lite") return "gemini-3.1-flash-lite";
         if (
           !m.startsWith("gemini-") &&
@@ -262,17 +290,19 @@ async function startServer() {
           !m.startsWith("lyria-") &&
           !m.startsWith("imagen-")
         ) {
-          return "gemini-3.7-flash";
+          return "gemini-3.8-flash";
         }
         return m;
       })
       .filter((m, idx, arr) => arr.indexOf(m) === idx);
 
     // Ensure modern fallback models are always present in the chain for non-image tasks
-    if (!validModels[0]?.includes("-image")) {
+    const isImageTask = validModels[0]?.includes("-image");
+    if (!isImageTask) {
       const standardFallbackChain = [
-        "gemini-3.7-flash",
+        "gemini-3.8-flash",
         "gemini-3.1-flash-lite",
+        "gemini-flash-latest",
       ];
       for (const modelName of standardFallbackChain) {
         if (!validModels.includes(modelName)) {
@@ -291,7 +321,7 @@ async function startServer() {
 
       try {
         console.log(
-          `[Gemini API] Invoking primary/fallback model "${model}" (attempt ${i + 1}/${
+          `[Gemini API] Invoking model "${model}" (attempt ${i + 1}/${
             validModels.length
           }, timeout ${timeoutMs}ms)...`
         );
@@ -308,7 +338,7 @@ async function startServer() {
 
         const latencyMs = Date.now() - startTime;
         console.log(
-          `[Gemini API] Successfully generated with "${model}" in ${latencyMs}ms (fallback used: ${
+          `[Gemini API] Successfully generated with "${model}" in ${latencyMs}ms (fallback: ${
             i > 0
           })`
         );
@@ -326,7 +356,7 @@ async function startServer() {
         const errCode =
           err?.code || (err?.name === "TimeoutError" ? "TIMEOUT_EXCEEDED" : err?.status || "503");
 
-        console.log(`[Gemini API] Model "${model}" failover triggered (${durationMs}ms): ${errMsg.slice(0, 120)}`);
+        console.log(`[Gemini API] Model "${model}" failover triggered (${durationMs}ms): ${cleanErrorMessage(errMsg).slice(0, 100)}`);
         errors.push({
           model,
           error: errMsg,
@@ -334,8 +364,18 @@ async function startServer() {
           durationMs,
         });
 
-        // If failure was due to invalid API key (400 / 401 / API_KEY_INVALID / UNAUTHENTICATED) on a custom key,
-        // automatically fallback to system environment GEMINI_API_KEY (if valid) or abort immediately
+        // Detect if image task failed due to free-tier quota (limit: 0).
+        // Since all image models share this same limit: 0, fail fast without hammering redundant endpoints
+        if (isImageTask && (errMsg.includes("limit: 0") || errMsg.includes("free_tier") || errMsg.includes("RESOURCE_EXHAUSTED"))) {
+          const quotaErr = new Error(
+            "Direct AI image generation requires a Gemini API key with billing enabled (or an OpenAI / Grok key in Settings > API Keys), as image models have a quota limit of 0 on Google's free tier."
+          );
+          (quotaErr as any).isImageQuotaExceeded = true;
+          (quotaErr as any).status = 429;
+          throw quotaErr;
+        }
+
+        // If failure was due to invalid API key, fallback to system environment GEMINI_API_KEY
         if (
           errMsg.includes("API_KEY_INVALID") ||
           errMsg.includes("API key not valid") ||
@@ -349,7 +389,7 @@ async function startServer() {
             (isValidGeminiApiKey(process.env.VITE_GEMINI_API_KEY) && process.env.VITE_GEMINI_API_KEY?.trim());
 
           if (!attemptedEnvFallback && validEnvKey) {
-            console.log("[Gemini API] Key authentication error. Automatically switching to system GEMINI_API_KEY...");
+            console.log("[Gemini API] Key authentication error. Switching to system GEMINI_API_KEY...");
             attemptedEnvFallback = true;
             activeAi = new GoogleGenAI({
               apiKey: validEnvKey,
@@ -359,30 +399,25 @@ async function startServer() {
                 },
               },
             });
-            // Retry current model with valid environment key
             i--;
             continue;
           } else {
-            // No alternate valid key to try - break to avoid repetitive 401 calls
-            throw new Error(
-              `Gemini authentication error: ${errMsg}`
-            );
+            throw new Error(`Gemini authentication error: ${cleanErrorMessage(errMsg)}`);
           }
         }
 
-        // If 503 high demand or 429 quota spike occurred, wait a brief delay before trying next model
+        // For 503 high demand or 429 rate limit, apply backoff with jitter before next attempt
         if (errMsg.includes("503") || errMsg.includes("high demand") || errMsg.includes("429") || errMsg.includes("quota")) {
-          await new Promise((resolve) => setTimeout(resolve, 250));
+          const backoffDelay = Math.min(800 + Math.floor(Math.random() * 400), 1500);
+          await new Promise((resolve) => setTimeout(resolve, backoffDelay));
         }
 
         if (isLast) {
           console.error(`[Gemini API] All fallback models exhausted for request.`);
-          const combinedError = new Error(
-            `AI service error after trying ${validModels.length} model(s): ${errMsg}`
-          );
-          (combinedError as any).allErrors = errors;
-          (combinedError as any).status = err?.status || 500;
-          throw combinedError;
+          const userFriendlyError = new Error(cleanErrorMessage(errMsg));
+          (userFriendlyError as any).allErrors = errors;
+          (userFriendlyError as any).status = err?.status === 429 ? 429 : err?.status === 503 ? 503 : 500;
+          throw userFriendlyError;
         }
 
         const nextModel = validModels[i + 1];
@@ -609,6 +644,8 @@ async function startServer() {
     const isImageTransformIntent =
       isPresetActive || imageActionKeywords.some((kw) => p.includes(kw));
 
+    let imageQuotaNotice: string | undefined = undefined;
+
     // Visual transformation route
     if (isImageTransformIntent && hasImageAttachment && primaryImage) {
       let finalPrompt =
@@ -663,10 +700,12 @@ async function startServer() {
           };
         }
       } catch (imgErr: any) {
-        console.warn(
-          "[Gemini API] Direct image generation models timed out or failed, proceeding with multimodal vision analysis:",
-          imgErr?.message || imgErr
-        );
+        if (imgErr?.isImageQuotaExceeded || imgErr?.message?.includes("free tier") || imgErr?.message?.includes("quota")) {
+          imageQuotaNotice = "Direct image output requires a Gemini API key with billing enabled (or OpenAI/xAI key in Settings > API Keys). Metfa Multimodal Vision analyzed your uploaded image and prompt below:";
+          console.log("[Gemini API] Free tier detected (image model quota limit is 0). Proceeding with multimodal vision analysis.");
+        } else {
+          console.log("[Gemini API] Direct image generation unavailable. Proceeding with multimodal vision analysis.");
+        }
       }
     }
 
@@ -719,21 +758,23 @@ Your capabilities:
 
 ${METFA_AI_SAFETY_SYSTEM_INSTRUCTION}`;
 
-    let configuredPrimaryModel = "gemini-3.7-flash";
+    let configuredPrimaryModel = "gemini-3.8-flash";
     if (
       settings?.model &&
       typeof settings.model === "string" &&
       settings.model.startsWith("gemini-") &&
       settings.model !== "gemini-2.5-flash" &&
-      settings.model !== "gemini-3.6-flash"
+      settings.model !== "gemini-3.6-flash" &&
+      settings.model !== "gemini-3.7-flash"
     ) {
       configuredPrimaryModel = settings.model;
     }
 
     const modelFallbackChain = [
       configuredPrimaryModel,
-      "gemini-3.7-flash",
+      "gemini-3.8-flash",
       "gemini-3.1-flash-lite",
+      "gemini-flash-latest",
     ].filter((m, idx, arr) => arr.indexOf(m) === idx);
 
     const result = await generateContentWithFallback(ai, {
@@ -751,6 +792,7 @@ ${METFA_AI_SAFETY_SYSTEM_INSTRUCTION}`;
 
     return {
       text: outputText,
+      systemNotice: imageQuotaNotice,
       isImageGeneration: false,
       modelUsed: result.modelUsed,
       isFallback: result.isFallback,
@@ -763,11 +805,421 @@ ${METFA_AI_SAFETY_SYSTEM_INSTRUCTION}`;
     res.json({
       status: "ok",
       app: "Metfa Social",
-      defaultModel: "gemini-3.7-flash",
+      defaultModel: "gemini-3.8-flash",
       hasGeminiKey: !!getGeminiApiKey(),
       hasOpenAiKey: !!getOpenAiApiKey(),
       hasXaiKey: !!getXaiApiKey(),
     });
+  });
+
+  // =========================================================================
+  // PERSISTENT MEDIA STORAGE & COMMUNITY POSTS PERSISTENCE API
+  // Ensures uploaded videos and images are permanently saved to disk
+  // and posts survive server reloads, browser refreshes, and navigation.
+  // =========================================================================
+  const uploadsDir = path.join(process.cwd(), "public", "uploads");
+  if (!fs.existsSync(uploadsDir)) {
+    fs.mkdirSync(uploadsDir, { recursive: true });
+  }
+  app.use("/uploads", express.static(uploadsDir));
+
+  const dataDir = path.join(process.cwd(), "data");
+  if (!fs.existsSync(dataDir)) {
+    fs.mkdirSync(dataDir, { recursive: true });
+  }
+  const postsFilePath = path.join(dataDir, "posts.json");
+
+  const readPersistentPosts = (): any[] => {
+    try {
+      if (fs.existsSync(postsFilePath)) {
+        const raw = fs.readFileSync(postsFilePath, "utf-8");
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed)) return parsed;
+      }
+    } catch (e) {
+      console.warn("[Posts] Error reading posts.json:", e);
+    }
+    return [];
+  };
+
+  const writePersistentPosts = (posts: any[]): void => {
+    try {
+      fs.writeFileSync(postsFilePath, JSON.stringify(posts, null, 2), "utf-8");
+    } catch (e) {
+      console.error("[Posts] Error writing posts.json:", e);
+    }
+  };
+
+  // Upload media endpoint (video or image)
+  app.post("/api/storage/upload", (req, res) => {
+    try {
+      const { fileBase64, fileName, mimeType, type } = req.body;
+      if (!fileBase64) {
+        return res.status(400).json({ error: "Missing fileBase64" });
+      }
+
+      const matches = fileBase64.match(/^data:([A-Za-z-+\/]+);base64,(.+)$/);
+      let buffer: Buffer;
+      let detectedMime = mimeType || "application/octet-stream";
+
+      if (matches && matches.length === 3) {
+        detectedMime = matches[1];
+        buffer = Buffer.from(matches[2], "base64");
+      } else {
+        buffer = Buffer.from(fileBase64, "base64");
+      }
+
+      let ext = "bin";
+      if (detectedMime.includes("mp4") || type === "video") ext = "mp4";
+      else if (detectedMime.includes("webm")) ext = "webm";
+      else if (detectedMime.includes("png")) ext = "png";
+      else if (detectedMime.includes("jpeg") || detectedMime.includes("jpg")) ext = "jpg";
+      else if (detectedMime.includes("webp")) ext = "webp";
+      else if (fileName && fileName.includes(".")) {
+        const parts = fileName.split(".");
+        ext = parts[parts.length - 1];
+      }
+
+      const cleanBaseName = (fileName ? path.parse(fileName).name : "media").replace(/[^a-zA-Z0-9_-]/g, "_");
+      const uniqueFileName = `${Date.now()}_${Math.random().toString(36).substring(2, 7)}_${cleanBaseName}.${ext}`;
+      const filePath = path.join(uploadsDir, uniqueFileName);
+
+      fs.writeFileSync(filePath, buffer);
+
+      return res.json({
+        url: `/uploads/${uniqueFileName}`,
+        fileName: uniqueFileName,
+        size: buffer.length,
+        mimeType: detectedMime,
+      });
+    } catch (err: any) {
+      console.error("[Storage] Upload failed:", err);
+      return res.status(500).json({ error: err?.message || "Failed to upload file" });
+    }
+  });
+
+  // Persistent community posts endpoints
+  app.get("/api/posts", (_req, res) => {
+    const posts = readPersistentPosts();
+    res.json({ posts });
+  });
+
+  app.post("/api/posts", (req, res) => {
+    try {
+      const newPost = req.body;
+      if (!newPost || !newPost.id) {
+        return res.status(400).json({ error: "Invalid post data: missing ID" });
+      }
+      const posts = readPersistentPosts();
+      const filtered = posts.filter((p) => p.id !== newPost.id);
+      const updated = [newPost, ...filtered];
+      writePersistentPosts(updated);
+      res.json({ post: newPost, success: true });
+    } catch (err: any) {
+      res.status(500).json({ error: err?.message || "Failed to save post" });
+    }
+  });
+
+  app.put("/api/posts/:id", (req, res) => {
+    try {
+      const { id } = req.params;
+      const updates = req.body;
+      const posts = readPersistentPosts();
+      let found = false;
+      const updated = posts.map((p) => {
+        if (p.id === id) {
+          found = true;
+          return { ...p, ...updates, updatedAt: new Date().toISOString() };
+        }
+        return p;
+      });
+      if (found) {
+        writePersistentPosts(updated);
+        res.json({ success: true });
+      } else {
+        res.status(404).json({ error: "Post not found" });
+      }
+    } catch (err: any) {
+      res.status(500).json({ error: err?.message || "Failed to update post" });
+    }
+  });
+
+  app.delete("/api/posts/:id", (req, res) => {
+    try {
+      const { id } = req.params;
+      const posts = readPersistentPosts();
+      const updated = posts.filter((p) => p.id !== id);
+      writePersistentPosts(updated);
+      res.json({ success: true });
+    } catch (err: any) {
+      res.status(500).json({ error: err?.message || "Failed to delete post" });
+    }
+  });
+
+  // =========================================================================
+  // PERSISTENT 1-TO-1 MESSAGING SYSTEM ENDPOINTS
+  // =========================================================================
+  const conversationsFilePath = path.join(dataDir, "conversations.json");
+  const messagesFilePath = path.join(dataDir, "messages.json");
+
+  const readConversations = (): any[] => {
+    try {
+      if (fs.existsSync(conversationsFilePath)) {
+        const raw = fs.readFileSync(conversationsFilePath, "utf-8");
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed)) return parsed;
+      }
+    } catch (e) {
+      console.warn("[Messaging] Error reading conversations.json:", e);
+    }
+    return [];
+  };
+
+  const writeConversations = (convs: any[]): void => {
+    try {
+      fs.writeFileSync(conversationsFilePath, JSON.stringify(convs, null, 2), "utf-8");
+    } catch (e) {
+      console.error("[Messaging] Error writing conversations.json:", e);
+    }
+  };
+
+  const readMessages = (): any[] => {
+    try {
+      if (fs.existsSync(messagesFilePath)) {
+        const raw = fs.readFileSync(messagesFilePath, "utf-8");
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed)) return parsed;
+      }
+    } catch (e) {
+      console.warn("[Messaging] Error reading messages.json:", e);
+    }
+    return [];
+  };
+
+  const writeMessages = (msgs: any[]): void => {
+    try {
+      fs.writeFileSync(messagesFilePath, JSON.stringify(msgs, null, 2), "utf-8");
+    } catch (e) {
+      console.error("[Messaging] Error writing messages.json:", e);
+    }
+  };
+
+  // 1. Get or create direct 1-to-1 conversation
+  app.post("/api/conversations/direct", (req, res) => {
+    try {
+      const { currentUserId, partnerId, partnerProfile } = req.body;
+      if (!currentUserId || !partnerId) {
+        return res.status(400).json({ error: "currentUserId and partnerId are required" });
+      }
+
+      if (currentUserId === partnerId) {
+        return res.status(400).json({ error: "Cannot start conversation with yourself" });
+      }
+
+      const directPairKey = [String(currentUserId), String(partnerId)].sort().join(":");
+      const convs = readConversations();
+
+      // Check if direct conversation already exists between both participants
+      const existing = convs.find(
+        (c) =>
+          c.type === "direct" &&
+          (c.directPairKey === directPairKey ||
+            (Array.isArray(c.members) &&
+              c.members.some((m: any) => m.userId === currentUserId) &&
+              c.members.some((m: any) => m.userId === partnerId)))
+      );
+
+      if (existing) {
+        if (!existing.directPairKey) {
+          existing.directPairKey = directPairKey;
+          writeConversations(convs);
+        }
+        return res.json({ conversationId: existing.id });
+      }
+
+      // Create new conversation
+      const now = new Date().toISOString();
+      const newConvId = `conv_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+      const newConv = {
+        id: newConvId,
+        type: "direct",
+        directPairKey,
+        createdAt: now,
+        updatedAt: now,
+        lastMessageAt: now,
+        lastMessagePreview: "Conversation started",
+        members: [
+          {
+            conversationId: newConvId,
+            userId: currentUserId,
+            joinedAt: now,
+            lastReadAt: now,
+          },
+          {
+            conversationId: newConvId,
+            userId: partnerId,
+            joinedAt: now,
+            lastReadAt: now,
+            profile: partnerProfile || undefined,
+          },
+        ],
+      };
+
+      convs.unshift(newConv);
+      writeConversations(convs);
+
+      return res.json({ conversationId: newConvId });
+    } catch (err: any) {
+      console.error("[Messaging] Create direct error:", err);
+      return res.status(500).json({ error: err?.message || "Failed to create conversation" });
+    }
+  });
+
+  // 2. Fetch conversations for user
+  app.get("/api/conversations", (req, res) => {
+    try {
+      const userId = String(req.query.userId || "");
+      if (!userId) {
+        return res.json({ conversations: [] });
+      }
+
+      const convs = readConversations();
+      const userConvs = convs.filter(
+        (c) => Array.isArray(c.members) && c.members.some((m: any) => m.userId === userId)
+      );
+
+      const allMsgs = readMessages();
+
+      const populated = userConvs.map((c) => {
+        const partner = c.members.find((m: any) => m.userId !== userId);
+        const myMember = c.members.find((m: any) => m.userId === userId);
+        const myLastRead = myMember?.lastReadAt || c.createdAt;
+
+        // Calculate unread
+        const unreadCount = allMsgs.filter(
+          (m) =>
+            m.conversationId === c.id &&
+            m.senderId !== userId &&
+            new Date(m.createdAt) > new Date(myLastRead)
+        ).length;
+
+        return {
+          ...c,
+          partnerId: partner?.userId,
+          partnerProfile: partner?.profile,
+          unreadCount,
+        };
+      });
+
+      // Sort by lastMessageAt descending
+      populated.sort(
+        (a, b) => new Date(b.lastMessageAt || b.createdAt).getTime() - new Date(a.lastMessageAt || a.createdAt).getTime()
+      );
+
+      return res.json({ conversations: populated });
+    } catch (err: any) {
+      return res.status(500).json({ error: err?.message || "Failed to read conversations" });
+    }
+  });
+
+  // 3. Fetch conversation messages
+  app.get("/api/conversations/:id/messages", (req, res) => {
+    try {
+      const { id } = req.params;
+      const allMsgs = readMessages();
+      const msgs = allMsgs
+        .filter((m) => m.conversationId === id)
+        .sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
+
+      return res.json({ messages: msgs });
+    } catch (err: any) {
+      return res.status(500).json({ error: err?.message || "Failed to read messages" });
+    }
+  });
+
+  // 4. Send message
+  app.post("/api/conversations/:id/messages", (req, res) => {
+    try {
+      const { id } = req.params;
+      const { senderId, content, messageType, mediaUrl, mediaMetadata, senderProfile } = req.body;
+
+      if (!id || !senderId) {
+        return res.status(400).json({ error: "conversationId and senderId are required" });
+      }
+
+      const now = new Date().toISOString();
+      const newMsg = {
+        id: `msg_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+        conversationId: id,
+        senderId,
+        content: content || "",
+        messageType: messageType || "text",
+        mediaUrl: mediaUrl || null,
+        mediaMetadata: mediaMetadata || {},
+        createdAt: now,
+        updatedAt: now,
+        isRead: false,
+        senderProfile: senderProfile || undefined,
+      };
+
+      const msgs = readMessages();
+      msgs.push(newMsg);
+      writeMessages(msgs);
+
+      // Update conversation
+      const convs = readConversations();
+      const updatedConvs = convs.map((c) => {
+        if (c.id === id) {
+          return {
+            ...c,
+            lastMessageAt: now,
+            lastMessagePreview:
+              messageType === "image"
+                ? "📷 Photo"
+                : messageType === "video"
+                ? "🎥 Video"
+                : messageType === "voice"
+                ? "🎤 Voice message"
+                : (content || "Sent a message").substring(0, 80),
+            updatedAt: now,
+          };
+        }
+        return c;
+      });
+      writeConversations(updatedConvs);
+
+      return res.json({ message: newMsg });
+    } catch (err: any) {
+      console.error("[Messaging] Send message error:", err);
+      return res.status(500).json({ error: err?.message || "Failed to send message" });
+    }
+  });
+
+  // 5. Mark conversation as read
+  app.post("/api/conversations/:id/read", (req, res) => {
+    try {
+      const { id } = req.params;
+      const { currentUserId } = req.body;
+      const now = new Date().toISOString();
+
+      if (currentUserId) {
+        const convs = readConversations();
+        const updated = convs.map((c) => {
+          if (c.id === id && Array.isArray(c.members)) {
+            const updatedMembers = c.members.map((m: any) =>
+              m.userId === currentUserId ? { ...m, lastReadAt: now } : m
+            );
+            return { ...c, members: updatedMembers };
+          }
+          return c;
+        });
+        writeConversations(updated);
+      }
+
+      return res.json({ success: true });
+    } catch (err: any) {
+      return res.status(500).json({ error: err?.message || "Failed to mark read" });
+    }
   });
 
   // =========================================================================
@@ -1912,7 +2364,7 @@ ${METFA_AI_SAFETY_SYSTEM_INSTRUCTION}`;
 
       const ai = getAiClient(geminiApiKey || req.body.settings?.geminiApiKey, req);
       const result = await generateContentWithFallback(ai, {
-        models: ["gemini-3.7-flash", "gemini-3.1-flash-lite"],
+        models: ["gemini-3.8-flash", "gemini-3.1-flash-lite"],
         timeoutMs: 20000,
         contents: [
           {
@@ -1960,7 +2412,7 @@ ${prompt}
       const ai = getAiClient(geminiApiKey || req.body.settings?.geminiApiKey, req);
 
       const result = await generateContentWithFallback(ai, {
-        models: ["gemini-3.7-flash", "gemini-3.1-flash-lite"],
+        models: ["gemini-3.8-flash", "gemini-3.1-flash-lite"],
         timeoutMs: 20000,
         contents: [
           {
@@ -2053,7 +2505,7 @@ Output Format: Respond strictly with JSON format:
 }`;
 
       const result = await generateContentWithFallback(ai, {
-        models: ["gemini-3.7-flash", "gemini-3.1-flash-lite"],
+        models: ["gemini-3.8-flash", "gemini-3.1-flash-lite"],
         timeoutMs: 18000,
         contents: { parts },
         config: {
@@ -2117,7 +2569,7 @@ ${text}
 Instructions: Preserve the user's language (Bengali, English, etc.). Output ONLY the refined text directly without quotes, preamble, or commentary.`;
 
       const result = await generateContentWithFallback(ai, {
-        models: ["gemini-3.7-flash", "gemini-3.1-flash-lite"],
+        models: ["gemini-3.8-flash", "gemini-3.1-flash-lite"],
         timeoutMs: 18000,
         contents: [{ text: prompt }],
       });
@@ -2153,7 +2605,7 @@ Generate exactly 3 short, warm, creator-friendly quick reply options (1-2 senten
 Output strictly in JSON: {"replies": ["reply 1", "reply 2", "reply 3"]}`;
 
       const result = await generateContentWithFallback(ai, {
-        models: ["gemini-3.7-flash", "gemini-3.1-flash-lite"],
+        models: ["gemini-3.8-flash", "gemini-3.1-flash-lite"],
         timeoutMs: 12000,
         contents: [{ text: prompt }],
         config: {
@@ -2220,27 +2672,20 @@ Output strictly in JSON: {"replies": ["reply 1", "reply 2", "reply 3"]}`;
         console.warn("[Avatar Gen] Direct image model fallback to curated vector avatar:", imgErr);
       }
 
-      // Clean high-res professional portrait creator avatar fallback with deterministic seed
-      const fallbackAvatars = [
-        "https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=300&auto=format&fit=crop&q=80",
-        "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=300&auto=format&fit=crop&q=80",
-        "https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=300&auto=format&fit=crop&q=80",
-        "https://images.unsplash.com/photo-1500648767791-00dcc994a43e?w=300&auto=format&fit=crop&q=80",
-        "https://images.unsplash.com/photo-1539571696357-5a69c17a67c6?w=300&auto=format&fit=crop&q=80",
-        "https://images.unsplash.com/photo-1517841905240-472988babdf9?w=300&auto=format&fit=crop&q=80",
-        "https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=300&auto=format&fit=crop&q=80",
-        "https://images.unsplash.com/photo-1580489944761-15a19d654956?w=300&auto=format&fit=crop&q=80"
-      ];
-      const hash = String(seed || "").split("").reduce((acc, c) => (acc << 5) - acc + c.charCodeAt(0), 0);
-      const fallbackUrl = fallbackAvatars[Math.abs(hash) % fallbackAvatars.length];
+      // Clean vector avatar silhouettes with deterministic seed
+      const colors = ["%232563eb", "%237c3aed", "%23059669", "%23d97706", "%23dc2626", "%230891b2", "%234f46e5", "%23db2777"];
+      const hash = String(seed || "avatar").split("").reduce((acc, c) => (acc << 5) - acc + c.charCodeAt(0), 0);
+      const chosenColor = colors[Math.abs(hash) % colors.length];
+      const fallbackUrl = `data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><circle cx="50" cy="50" r="50" fill="${chosenColor}"/><circle cx="50" cy="40" r="18" fill="%23ffffff"/><path d="M22,86 C22,66 35,66 50,66 C65,66 78,66 78,86 Z" fill="%23ffffff"/></svg>`;
+
       return res.json({
         avatarUrl: fallbackUrl,
         promptUsed: avatarPrompt,
-        modelUsed: "Metfa Avatar Engine (Curated Portrait)",
+        modelUsed: "Metfa Avatar Engine (Vector Silhouette)",
       });
     } catch (err: any) {
       console.warn("[Avatar Gen] fallback:", err?.message || err);
-      const fallbackUrl = "https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=300&auto=format&fit=crop&q=80";
+      const fallbackUrl = `data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><circle cx="50" cy="50" r="50" fill="%232563eb"/><circle cx="50" cy="40" r="18" fill="%23ffffff"/><path d="M22,86 C22,66 35,66 50,66 C65,66 78,66 78,86 Z" fill="%23ffffff"/></svg>`;
       return res.json({
         avatarUrl: fallbackUrl,
         promptUsed: "Avatar Profile",
@@ -2363,7 +2808,7 @@ Sitemap: ${baseUrl}/sitemap.xml
 
   app.listen(PORT, "0.0.0.0", () => {
     console.log(
-      `Metfa Social Server running on http://0.0.0.0:${PORT} (Primary model: gemini-3.7-flash)`
+      `Metfa Social Server running on http://0.0.0.0:${PORT} (Primary model: gemini-3.8-flash)`
     );
   });
 }

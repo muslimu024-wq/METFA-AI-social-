@@ -1,6 +1,7 @@
 import { supabase, isSupabaseConfigured } from './supabaseClient';
 import { CommunityPost, PostingIdentity, VoiceComment, PostComment } from '../types/community';
 import { AudioTrack } from '../types/audio';
+import { getDefaultAvatar } from './authService';
 
 export interface SupabasePostRow {
   id: string;
@@ -11,6 +12,8 @@ export interface SupabasePostRow {
   image_src?: string | null;
   image_gallery?: string[] | null;
   video_src?: string | null;
+  video_title?: string | null;
+  video_thumbnail?: string | null;
   original_image_src?: string | null;
   text_background_preset?: string | null;
   post_type?: 'text' | 'media' | 'ai_art' | null;
@@ -47,11 +50,11 @@ export interface SupabasePostRow {
  * Maps a database post row (with joined profiles author) to the client CommunityPost model
  */
 export function mapSupabaseRowToCommunityPost(row: SupabasePostRow): CommunityPost {
-  const authorName = row.author?.display_name || row.author?.username || 'Metfa Creator';
-  const authorUsername = row.author?.username || 'creator';
+  const authorName = row.author?.display_name || row.author?.username || 'Metfa User';
+  const authorUsername = row.author?.username || 'user';
   const authorAvatar =
     row.author?.avatar_url?.trim() ||
-    `https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=200&auto=format&fit=crop&q=80`;
+    getDefaultAvatar(authorUsername);
 
   // Compute a human-readable relative time or formatted date string
   let relativeTime = 'Just now';
@@ -100,6 +103,8 @@ export function mapSupabaseRowToCommunityPost(row: SupabasePostRow): CommunityPo
     imageSrc: row.image_src || undefined,
     imageGallery: Array.isArray(row.image_gallery) ? row.image_gallery : undefined,
     videoSrc: row.video_src || undefined,
+    videoTitle: row.video_title || undefined,
+    videoThumbnail: row.video_thumbnail || undefined,
     originalImageSrc: row.original_image_src || undefined,
     textBackgroundPreset: row.text_background_preset || undefined,
     postType: row.post_type || (row.image_src || row.video_src ? 'media' : 'text'),
@@ -138,6 +143,8 @@ export async function fetchSupabasePosts(): Promise<{ posts: CommunityPost[]; er
         image_src,
         image_gallery,
         video_src,
+        video_title,
+        video_thumbnail,
         original_image_src,
         text_background_preset,
         post_type,
@@ -215,6 +222,8 @@ export async function createSupabasePost(
       image_src: post.imageSrc || null,
       image_gallery: post.imageGallery || [],
       video_src: post.videoSrc || null,
+      video_title: post.videoTitle || null,
+      video_thumbnail: post.videoThumbnail || null,
       original_image_src: post.originalImageSrc || null,
       text_background_preset: post.textBackgroundPreset || null,
       post_type: post.postType || 'text',
@@ -296,6 +305,9 @@ export async function updateSupabasePost(
     if (updates.stylePreset !== undefined) updatePayload.style_preset = updates.stylePreset;
     if (updates.textBackgroundPreset !== undefined) updatePayload.text_background_preset = updates.textBackgroundPreset;
     if (updates.imageSrc !== undefined) updatePayload.image_src = updates.imageSrc;
+    if (updates.videoSrc !== undefined) updatePayload.video_src = updates.videoSrc;
+    if (updates.videoTitle !== undefined) updatePayload.video_title = updates.videoTitle;
+    if (updates.videoThumbnail !== undefined) updatePayload.video_thumbnail = updates.videoThumbnail;
 
     const { error } = await supabase
       .from('posts')
@@ -345,3 +357,116 @@ export async function deleteSupabasePost(
     return { success: false, error: err?.message || 'Failed to delete post' };
   }
 }
+
+/**
+ * Fetches a single post by ID directly from Supabase.
+ * Supports query variants for exact id or post-{id} strings.
+ */
+export async function fetchSupabasePostById(
+  postId: string
+): Promise<{ post: CommunityPost | null; error?: string }> {
+  if (!isSupabaseConfigured()) {
+    return { post: null, error: 'Supabase is not configured' };
+  }
+
+  if (!postId || typeof postId !== 'string') {
+    return { post: null, error: 'Invalid post ID' };
+  }
+
+  const cleanId = postId.trim();
+
+  try {
+    const postSelect = `
+      id,
+      author_id,
+      prompt,
+      caption,
+      style_preset,
+      image_src,
+      image_gallery,
+      video_src,
+      video_title,
+      video_thumbnail,
+      original_image_src,
+      text_background_preset,
+      post_type,
+      likes_count,
+      remix_count,
+      comments_count,
+      shares_count,
+      tags,
+      feed_type,
+      page_id,
+      page_name,
+      page_category,
+      group_id,
+      group_name,
+      posting_identity,
+      audio_track,
+      visibility,
+      is_pinned,
+      is_edited,
+      is_ai_generated,
+      prompt_used,
+      created_at,
+      updated_at,
+      author:profiles (
+        id,
+        display_name,
+        username,
+        avatar_url,
+        is_verified
+      )
+    `;
+
+    // 1. Attempt primary exact ID lookup
+    let { data, error } = await supabase
+      .from('posts')
+      .select(postSelect)
+      .eq('id', cleanId)
+      .maybeSingle();
+
+    // 2. If not found and cleanId starts with "post-", try without prefix
+    if (!data && cleanId.startsWith('post-')) {
+      const strippedId = cleanId.substring(5);
+      const res = await supabase
+        .from('posts')
+        .select(postSelect)
+        .eq('id', strippedId)
+        .maybeSingle();
+      if (res.data) {
+        data = res.data;
+        error = res.error;
+      }
+    }
+
+    // 3. If not found and cleanId does NOT start with "post-", try with "post-" prefix
+    if (!data && !cleanId.startsWith('post-')) {
+      const prefixedId = `post-${cleanId}`;
+      const res = await supabase
+        .from('posts')
+        .select(postSelect)
+        .eq('id', prefixedId)
+        .maybeSingle();
+      if (res.data) {
+        data = res.data;
+        error = res.error;
+      }
+    }
+
+    if (error) {
+      console.warn('[PostService] Error fetching post by id:', error.message);
+      return { post: null, error: error.message };
+    }
+
+    if (!data) {
+      return { post: null };
+    }
+
+    return { post: mapSupabaseRowToCommunityPost(data as any) };
+  } catch (err: any) {
+    console.warn('[PostService] Exception fetching post by id:', err);
+    return { post: null, error: err?.message || 'Error fetching post' };
+  }
+}
+

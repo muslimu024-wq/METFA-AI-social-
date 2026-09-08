@@ -1,0 +1,15 @@
+# METFA Social
+
+> Next-generation Multimodal AI Assistant, Scene Transformation, and Creative Social Ecosystem.
+
+## Overview
+METFA Social is a modern, social-first web application and PWA combining community feeds, reels, live streaming, pages, groups, and an AI Studio powered by multimodal Gemini intelligence.
+
+## Core Features
+- **Community Feed**: Discover and share posts, AI-generated artworks, recipes, and multimedia with real-time reactions and threaded discussions.
+- **AI Studio**: Interactive multimodal canvas for scene transformations, prompt iterations, style presets, and local downloads.
+- **Short-form Reels**: Creative video clips with licensed audio tracks and interactive remixing.
+- **Live Streaming**: Real-time broadcasts with interactive chat and live audience feedback.
+- **Pages & Groups**: Communities, collaborative creator spaces, and interest-based directories.
+- **Marketplace**: Dedicated creative and digital marketplace integrations.
+- **Universal Profiles & Authentication**: Secure user profiles, customized avatars, bookmark collections, and daily AI credits.

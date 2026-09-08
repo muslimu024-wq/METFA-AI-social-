@@ -21,6 +21,7 @@ import {
   markNotificationAsRead,
   saveNotifications
 } from '../utils/notificationStore';
+import { GUEST_AVATAR, sanitizeAvatarUrl } from '../services/authService';
 
 interface NotificationsViewProps {
   onNavigateTab: (tabId: string) => void;
@@ -191,11 +192,13 @@ export const NotificationsView: React.FC<NotificationsViewProps> = ({
                 {/* Icon avatar */}
                 <div className="relative shrink-0 mt-0.5">
                   <img
-                    src={notif.actor?.avatar || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=100'}
+                    src={sanitizeAvatarUrl(notif.actor?.avatar) || GUEST_AVATAR}
                     alt="Actor"
+                    loading="lazy"
+                    decoding="async"
                     className="w-10 h-10 rounded-2xl object-cover border border-gray-700 shadow-sm"
                     onError={(e) => {
-                      (e.currentTarget as HTMLImageElement).src = 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=100';
+                      (e.currentTarget as HTMLImageElement).src = GUEST_AVATAR;
                     }}
                   />
                   <div className="absolute -bottom-1 -right-1 p-1 rounded-full bg-gray-900 border border-gray-800 shadow-md">

@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, Suspense, lazy } from 'react';
 import {
   Heart,
   MessageCircle,
@@ -34,6 +34,8 @@ import {
   Copy,
   Flag,
   CheckCircle2,
+  UserPlus,
+  Users,
 } from 'lucide-react';
 import { CommunityPost, UserProfile, VoiceComment, PostComment } from '../types/community';
 import {
@@ -48,16 +50,20 @@ import {
   updateComment,
   deleteComment,
   deleteVoiceComment,
+  matchesPostId,
 } from '../utils/communityStore';
+import { isUserFollowed, toggleFollowUser } from '../utils/followStore';
 import { toggleSavePost, isPostSaved } from '../utils/bookmarkStore';
 import { executeNativeShare, SharePayload } from '../utils/shareUtils';
 import { generateQuickAIReply } from '../services/aiAssistantService';
-import SocialShareModal from './SocialShareModal';
-import ConfirmActionModal from './ConfirmActionModal';
-import EditPostModal from './EditPostModal';
 import { AiRecipeBox } from './AiRecipeBox';
 import { PostContent } from './PostContent';
 import { useAuth } from '../context/AuthContext';
+
+// Lazy-load non-initial action modals
+const SocialShareModal = lazy(() => import('./SocialShareModal'));
+const ConfirmActionModal = lazy(() => import('./ConfirmActionModal'));
+const EditPostModal = lazy(() => import('./EditPostModal'));
 
 interface CommunityFeedProps {
   posts: CommunityPost[];
@@ -65,6 +71,9 @@ interface CommunityFeedProps {
   userProfile: UserProfile;
   onRemixPrompt: (prompt: string, stylePreset?: string) => void;
   onCreatePostClick: () => void;
+  targetSharedPostId?: string | null;
+  isLoadingPosts?: boolean;
+  onClearSharedPost?: () => void;
 }
 
 const REACTION_EMOJIS: { [k: string]: { emoji: string; label: string; color: string } } = {
@@ -90,9 +99,13 @@ export const CommunityFeed: React.FC<CommunityFeedProps> = ({
   userProfile,
   onRemixPrompt,
   onCreatePostClick,
+  targetSharedPostId,
+  isLoadingPosts = false,
+  onClearSharedPost,
 }) => {
   const { user: authUser, activeIdentity } = useAuth();
-  const [activeFilter, setActiveFilter] = useState<'all' | 'trending' | 'for_you'>('all');
+  const [activeFilter, setActiveFilter] = useState<'all' | 'trending' | 'for_you' | 'following'>('all');
+  const [, setFollowingTick] = useState(0);
   const [commentInputs, setCommentInputs] = useState<{ [postId: string]: string }>({});
   const [activeCommentsPostId, setActiveCommentsPostId] = useState<string | null>(null);
 
@@ -113,6 +126,45 @@ export const CommunityFeed: React.FC<CommunityFeedProps> = ({
   const showToast = (msg: string) => {
     setToastMessage(msg);
     setTimeout(() => setToastMessage(null), 3000);
+  };
+
+  // Targeted shared post from URL deep-link (#post-{postId})
+  const targetedPost = targetSharedPostId
+    ? posts.find((p) => matchesPostId(p, targetSharedPostId))
+    : null;
+
+  // Auto-scroll and highlight when targeted shared post is located
+  useEffect(() => {
+    if (targetedPost && !isLoadingPosts) {
+      setActiveFilter('all');
+      setHighlightedPostId(targetedPost.id);
+      const timer = setTimeout(() => {
+        const el = document.getElementById(`post-${targetedPost.id}`);
+        if (el) {
+          el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        }
+      }, 150);
+      return () => clearTimeout(timer);
+    }
+  }, [targetedPost?.id, isLoadingPosts]);
+
+  // Listen to follow updates across the application
+  useEffect(() => {
+    const handleFollowUpdate = () => {
+      setFollowingTick((prev) => prev + 1);
+    };
+    window.addEventListener('metfa_following_updated', handleFollowUpdate);
+    return () => window.removeEventListener('metfa_following_updated', handleFollowUpdate);
+  }, []);
+
+  const handleToggleFollow = (author: { id?: string; name?: string; username?: string; avatar?: string }) => {
+    const res = toggleFollowUser(author);
+    const authorName = author.name || `@${author.username || 'user'}`;
+    if (res.isFollowing) {
+      showToast(`You are now following ${authorName}`);
+    } else {
+      showToast(`Unfollowed ${authorName}`);
+    }
   };
 
   // Close menus on outside click
@@ -268,10 +320,23 @@ export const CommunityFeed: React.FC<CommunityFeedProps> = ({
   }, []);
 
   const filteredPosts = posts.filter((p) => {
+    // If this is the specific shared post, always make sure it passes the filter
+    if (targetedPost && p.id === targetedPost.id) return true;
     if (activeFilter === 'trending') return (p.likesCount || 0) > 500;
     if (activeFilter === 'for_you') return p.feedType === 'for_you' || !p.feedType;
+    if (activeFilter === 'following') {
+      return (
+        isUserFollowed(p.author?.id) ||
+        isUserFollowed(p.author?.username) ||
+        (p.postingIdentity && (isUserFollowed(p.postingIdentity.id) || isUserFollowed(p.postingIdentity.username)))
+      );
+    }
     return true;
   });
+
+  const displayPosts = targetedPost
+    ? [targetedPost, ...filteredPosts.filter((p) => p.id !== targetedPost.id)]
+    : filteredPosts;
 
   const handleLike = (postId: string) => {
     const updated = toggleLikePost(postId);
@@ -631,6 +696,7 @@ export const CommunityFeed: React.FC<CommunityFeedProps> = ({
           <img
             src={userProfile.avatar}
             alt={userProfile.name}
+            decoding="async"
             className="w-10 h-10 rounded-2xl object-cover border border-purple-500/40 shrink-0"
           />
           <button
@@ -713,6 +779,20 @@ export const CommunityFeed: React.FC<CommunityFeedProps> = ({
             <TrendingUp className="w-3.5 h-3.5 text-teal-600" />
             <span>Trending</span>
           </button>
+
+          <button
+            type="button"
+            id="feed-filter-following-tab"
+            onClick={() => setActiveFilter('following')}
+            className={`px-3 py-1.5 rounded-xl text-xs font-bold transition flex items-center gap-1 cursor-pointer ${
+              activeFilter === 'following'
+                ? 'bg-purple-600 text-white shadow-xs'
+                : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
+            }`}
+          >
+            <Users className="w-3.5 h-3.5 text-purple-500" />
+            <span>Following</span>
+          </button>
         </div>
 
         <button
@@ -727,7 +807,85 @@ export const CommunityFeed: React.FC<CommunityFeedProps> = ({
 
       {/* 3. Posts Stream */}
       <div className="space-y-5">
-        {filteredPosts.map((post) => {
+        {/* Deep link: Loading State */}
+        {targetSharedPostId && isLoadingPosts && (
+          <div className="bg-white border border-purple-100 rounded-3xl p-10 text-center space-y-3 shadow-xs animate-fadeIn">
+            <div className="w-10 h-10 border-3 border-purple-600 border-t-transparent rounded-full animate-spin mx-auto" />
+            <h4 className="text-sm font-bold text-slate-800">Loading shared post...</h4>
+            <p className="text-xs text-slate-400">Fetching latest post data from Metfa database</p>
+          </div>
+        )}
+
+        {/* Deep link: Post Not Found State */}
+        {targetSharedPostId && !isLoadingPosts && !targetedPost && (
+          <div className="bg-white border border-rose-200 rounded-3xl p-8 sm:p-12 text-center space-y-4 shadow-sm animate-fadeIn">
+            <div className="w-14 h-14 rounded-2xl bg-rose-50 text-rose-500 border border-rose-100 flex items-center justify-center mx-auto shadow-inner">
+              <Flag className="w-7 h-7" />
+            </div>
+            <div className="space-y-1">
+              <h3 className="text-lg font-bold text-slate-800">Post Not Found</h3>
+              <p className="text-sm text-slate-500 max-w-md mx-auto">
+                The shared post <span className="font-mono text-xs bg-slate-100 px-2 py-0.5 rounded text-slate-700">#{targetSharedPostId}</span> could not be found. It may have been removed, or the link may be incorrect.
+              </p>
+            </div>
+            {onClearSharedPost && (
+              <button
+                type="button"
+                onClick={onClearSharedPost}
+                className="px-5 py-2.5 bg-slate-900 hover:bg-slate-800 text-white text-xs font-bold rounded-xl shadow-xs transition cursor-pointer"
+              >
+                Return to Community Feed
+              </button>
+            )}
+          </div>
+        )}
+
+        {/* Clean Empty State when no posts exist in feed */}
+        {!targetSharedPostId && displayPosts.length === 0 && activeFilter !== 'following' && (
+          <div className="bg-white border border-slate-200 rounded-3xl p-12 text-center space-y-4 shadow-xs animate-fadeIn">
+            <div className="w-16 h-16 rounded-3xl bg-purple-50 text-purple-600 border border-purple-100 flex items-center justify-center mx-auto shadow-inner">
+              <Sparkles className="w-8 h-8 text-purple-600" />
+            </div>
+            <div className="space-y-1">
+              <h3 className="text-lg font-bold text-slate-800">No posts yet</h3>
+              <p className="text-sm text-slate-500 max-w-sm mx-auto">
+                Be the first to share something with the Metfa community!
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={onCreatePostClick}
+              className="px-5 py-2.5 bg-gradient-to-r from-purple-600 to-teal-500 hover:from-purple-500 hover:to-teal-400 text-white text-sm font-bold rounded-2xl shadow-md transition transform active:scale-95 cursor-pointer inline-flex items-center gap-2"
+            >
+              <Plus className="w-4 h-4" />
+              <span>Create First Post</span>
+            </button>
+          </div>
+        )}
+
+        {/* Empty state for Following filter */}
+        {displayPosts.length === 0 && activeFilter === 'following' && (
+          <div className="bg-white border border-slate-200 rounded-3xl p-8 text-center space-y-3 shadow-xs animate-fadeIn">
+            <div className="w-12 h-12 rounded-2xl bg-purple-50 text-purple-600 border border-purple-100 flex items-center justify-center mx-auto">
+              <Users className="w-6 h-6" />
+            </div>
+            <h3 className="text-base font-bold text-slate-800">You're not following any creators yet</h3>
+            <p className="text-xs text-slate-500 max-w-sm mx-auto">
+              Explore the feed and tap the <span className="font-semibold text-purple-600">+ Follow</span> button on creators to see their latest posts and artworks here!
+            </p>
+            <button
+              type="button"
+              onClick={() => setActiveFilter('all')}
+              className="px-4 py-2 bg-purple-600 hover:bg-purple-700 text-white text-xs font-bold rounded-xl shadow-xs transition cursor-pointer"
+            >
+              Explore Feed
+            </button>
+          </div>
+        )}
+
+        {displayPosts.map((post, postIdx) => {
+          const isOwner = isContentOwner(post.author, userProfile, authUser, post.postingIdentity, post.id);
+          const isFollowed = isUserFollowed(post.author?.id) || isUserFollowed(post.author?.username);
           const isCommentsOpen = activeCommentsPostId === post.id;
           const isThisRecordingVoice = isRecordingVoiceClip === post.id;
           const isThisDictating = dictatingPostId === post.id;
@@ -739,26 +897,50 @@ export const CommunityFeed: React.FC<CommunityFeedProps> = ({
           const hasGradient = post.textBackgroundPreset && GRADIENT_PRESETS[post.textBackgroundPreset];
           const isPureTextPost = (!post.imageSrc && (!post.imageGallery || post.imageGallery.length === 0) && !post.videoSrc) || hasGradient;
 
+          const isTargetedCard = Boolean(targetedPost && post.id === targetedPost.id);
+
           return (
             <div
               key={post.id}
               id={`post-${post.id}`}
               className={`bg-white border rounded-3xl overflow-hidden shadow-sm transition-all duration-500 animate-fadeIn ${
-                highlightedPostId === post.id
-                  ? 'border-purple-500 ring-4 ring-purple-500/20 scale-[1.01] shadow-purple-500/20'
+                highlightedPostId === post.id || isTargetedCard
+                  ? 'border-purple-500 ring-4 ring-purple-500/20 scale-[1.005] shadow-purple-500/20'
                   : 'border-slate-200 hover:border-purple-300'
               }`}
             >
+              {/* Linked Shared Post Header Banner */}
+              {isTargetedCard && (
+                <div className="bg-gradient-to-r from-purple-50 to-indigo-50 border-b border-purple-100 px-4 py-2 flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <span className="w-2 h-2 rounded-full bg-purple-600 animate-pulse" />
+                    <span className="text-xs font-bold text-purple-800">Shared Post</span>
+                  </div>
+                  {onClearSharedPost && (
+                    <button
+                      type="button"
+                      onClick={onClearSharedPost}
+                      className="text-[11px] font-semibold text-purple-600 hover:text-purple-800 transition cursor-pointer flex items-center gap-1"
+                    >
+                      <span>View all posts</span>
+                      <X className="w-3.5 h-3.5" />
+                    </button>
+                  )}
+                </div>
+              )}
+
               {/* Post Author Header */}
               <div className="p-4 flex items-center justify-between border-b border-slate-100">
                 <div className="flex items-center gap-3">
                   <img
                     src={post.postingIdentity?.avatar || post.author.avatar}
                     alt={post.author.name}
+                    loading={postIdx === 0 ? undefined : 'lazy'}
+                    decoding="async"
                     className="w-10 h-10 rounded-2xl object-cover border border-slate-200 shadow-xs"
                   />
                   <div>
-                    <div className="flex items-center gap-1.5">
+                    <div className="flex items-center gap-1.5 flex-wrap">
                       <h4 className="text-sm font-bold text-slate-900 leading-tight">
                         {post.postingIdentity?.name || post.author.name}
                       </h4>
@@ -767,8 +949,38 @@ export const CommunityFeed: React.FC<CommunityFeedProps> = ({
                           {post.postingIdentity.badge}
                         </span>
                       )}
+
+                      {/* Follow / Unfollow Button for Non-owners */}
+                      {!isOwner && (
+                        <button
+                          type="button"
+                          id={`follow-author-btn-${post.id}`}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleToggleFollow(post.author);
+                          }}
+                          className={`text-[11px] px-2.5 py-0.5 rounded-full font-bold transition flex items-center gap-1 cursor-pointer shrink-0 ml-1 ${
+                            isFollowed
+                              ? 'bg-slate-100 hover:bg-rose-50 text-slate-700 hover:text-rose-600 border border-slate-200 hover:border-rose-200'
+                              : 'bg-purple-600 hover:bg-purple-700 text-white shadow-xs'
+                          }`}
+                          title={isFollowed ? 'Following (Click to Unfollow)' : 'Follow Creator'}
+                        >
+                          {isFollowed ? (
+                            <>
+                              <Check className="w-3 h-3 text-emerald-600" />
+                              <span>Following</span>
+                            </>
+                          ) : (
+                            <>
+                              <UserPlus className="w-3 h-3" />
+                              <span>Follow</span>
+                            </>
+                          )}
+                        </button>
+                      )}
                     </div>
-                    <div className="flex items-center gap-2 text-xs text-slate-500 font-medium">
+                    <div className="flex items-center gap-2 text-xs text-slate-500 font-medium mt-0.5">
                       <span>@{post.postingIdentity?.username || post.author.username}</span>
                       <span>•</span>
                       <span>{post.createdAt}</span>
@@ -781,6 +993,20 @@ export const CommunityFeed: React.FC<CommunityFeedProps> = ({
                     <span className="text-[11px] font-semibold px-2.5 py-1 bg-purple-50 border border-purple-200 text-purple-700 rounded-full">
                       {post.stylePreset}
                     </span>
+                  )}
+
+                  {/* Quick Direct Edit Button for Content Owner */}
+                  {isOwner && (
+                    <button
+                      type="button"
+                      id={`quick-edit-post-btn-${post.id}`}
+                      onClick={() => setEditingPost(post)}
+                      className="px-2.5 py-1 text-xs font-semibold rounded-xl bg-purple-50 hover:bg-purple-100 text-purple-700 hover:text-purple-900 border border-purple-200 transition flex items-center gap-1 cursor-pointer shadow-2xs"
+                      title="Edit Post content, recipe and tags"
+                    >
+                      <Edit3 className="w-3.5 h-3.5 text-purple-600" />
+                      <span>Edit</span>
+                    </button>
                   )}
 
                   {/* Post Context Action Menu */}
@@ -835,7 +1061,7 @@ export const CommunityFeed: React.FC<CommunityFeedProps> = ({
                         </button>
 
                         {/* 3. Author actions (Edit / Delete) vs Non-author (Report) */}
-                        {isContentOwner(post.author.id, userProfile.id) || (post.postingIdentity && isContentOwner(post.postingIdentity.id, userProfile.id)) ? (
+                        {isOwner ? (
                           <>
                             <div className="h-px bg-slate-100 my-1" />
                             <button
@@ -930,7 +1156,13 @@ export const CommunityFeed: React.FC<CommunityFeedProps> = ({
                     >
                       {post.imageGallery.map((img, i) => (
                         <div key={i} className="aspect-square bg-slate-950 overflow-hidden">
-                          <img src={img} alt={`Gallery ${i}`} className="w-full h-full object-cover hover:scale-105 transition" />
+                          <img
+                            src={img}
+                            alt={`Gallery ${i}`}
+                            loading={postIdx === 0 && i === 0 ? undefined : 'lazy'}
+                            decoding="async"
+                            className="w-full h-full object-cover hover:scale-105 transition"
+                          />
                         </div>
                       ))}
                     </div>
@@ -938,6 +1170,8 @@ export const CommunityFeed: React.FC<CommunityFeedProps> = ({
                     <img
                       src={post.imageSrc || post.imageGallery?.[0]}
                       alt={post.prompt}
+                      loading={postIdx === 0 ? 'eager' : 'lazy'}
+                      decoding="async"
                       className="w-full h-auto max-h-[520px] object-cover"
                     />
                   )}
@@ -1098,6 +1332,8 @@ export const CommunityFeed: React.FC<CommunityFeedProps> = ({
                       <img
                         src={userProfile.avatar}
                         alt={userProfile.name}
+                        loading="lazy"
+                        decoding="async"
                         className="w-7 h-7 rounded-xl object-cover border border-slate-200"
                       />
                       <div className="flex-1 relative flex items-center">
@@ -1173,6 +1409,8 @@ export const CommunityFeed: React.FC<CommunityFeedProps> = ({
                             <img
                               src={vc.author.avatar}
                               alt={vc.author.name}
+                              loading="lazy"
+                              decoding="async"
                               className="w-7 h-7 rounded-xl object-cover mt-0.5 border border-purple-200"
                             />
                             <div className="flex-1 min-w-0">
@@ -1248,6 +1486,8 @@ export const CommunityFeed: React.FC<CommunityFeedProps> = ({
                               <img
                                 src={c.author.avatar}
                                 alt={c.author.name}
+                                loading="lazy"
+                                decoding="async"
                                 className="w-7 h-7 rounded-xl object-cover mt-0.5 border border-slate-200"
                               />
                               <div className="bg-slate-50 p-2.5 rounded-2xl flex-1 border border-slate-200">
@@ -1425,43 +1665,51 @@ export const CommunityFeed: React.FC<CommunityFeedProps> = ({
         })}
       </div>
 
-      <SocialShareModal
-        isOpen={isShareModalOpen}
-        onClose={() => {
-          setIsShareModalOpen(false);
-          setActiveSharePayload(null);
-          setSharingPostId(null);
-        }}
-        payload={activeSharePayload}
-        onSharePerformed={() => {
-          if (sharingPostId) {
-            const updated = incrementPostShares(sharingPostId);
-            onUpdatePosts(updated);
-          }
-        }}
-      />
+      {isShareModalOpen && (
+        <Suspense fallback={null}>
+          <SocialShareModal
+            isOpen={isShareModalOpen}
+            onClose={() => {
+              setIsShareModalOpen(false);
+              setActiveSharePayload(null);
+              setSharingPostId(null);
+            }}
+            payload={activeSharePayload}
+            onSharePerformed={() => {
+              if (sharingPostId) {
+                const updated = incrementPostShares(sharingPostId);
+                onUpdatePosts(updated);
+              }
+            }}
+          />
+        </Suspense>
+      )}
 
       {/* Edit Post Modal */}
       {editingPost && (
-        <EditPostModal
-          isOpen={!!editingPost}
-          post={editingPost}
-          onClose={() => setEditingPost(null)}
-          onSave={handleSavePostEdit}
-        />
+        <Suspense fallback={null}>
+          <EditPostModal
+            isOpen={!!editingPost}
+            post={editingPost}
+            onClose={() => setEditingPost(null)}
+            onSave={handleSavePostEdit}
+          />
+        </Suspense>
       )}
 
       {/* Confirmation Dialog for Delete Post/Comment */}
       {confirmModal && (
-        <ConfirmActionModal
-          isOpen={confirmModal.isOpen}
-          title={confirmModal.title}
-          message={confirmModal.message}
-          confirmLabel="Delete Permanently"
-          isDestructive={true}
-          onConfirm={confirmModal.onConfirm}
-          onClose={() => setConfirmModal(null)}
-        />
+        <Suspense fallback={null}>
+          <ConfirmActionModal
+            isOpen={confirmModal.isOpen}
+            title={confirmModal.title}
+            message={confirmModal.message}
+            confirmLabel="Delete Permanently"
+            isDestructive={true}
+            onConfirm={confirmModal.onConfirm}
+            onClose={() => setConfirmModal(null)}
+          />
+        </Suspense>
       )}
 
       {/* Floating Action Toast Notification */}

@@ -1,4 +1,5 @@
 import { AppNotification, NotificationType } from '../types/notification';
+import { GUEST_AVATAR, sanitizeAvatarUrl } from '../services/authService';
 
 const STORAGE_KEY = 'metfa_notifications_v2';
 
@@ -7,15 +8,15 @@ const INITIAL_NOTIFICATIONS: AppNotification[] = [
     id: 'notif_welcome',
     type: 'system',
     title: 'Welcome to Metfa Social ✨',
-    message: 'Explore next-generation multimodal vision intelligence, creative inpainting, 90s Reels, Pages, and Live Broadcasting.',
+    message: 'Explore next-generation multimodal vision intelligence, creative inpainting, Reels, Pages, and Live Broadcasting.',
     timestamp: 'Just now',
     isRead: false,
     actor: {
-      name: 'Metfa Social System',
+      name: 'Metfa Social',
       username: 'metfa.system',
-      avatar: 'https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?w=150&auto=format&fit=crop&q=80',
+      avatar: GUEST_AVATAR,
     },
-    linkTab: 'chat',
+    linkTab: 'feed',
   },
   {
     id: 'notif_credits',
@@ -27,23 +28,9 @@ const INITIAL_NOTIFICATIONS: AppNotification[] = [
     actor: {
       name: 'Credit Manager',
       username: 'credits',
-      avatar: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80',
+      avatar: GUEST_AVATAR,
     },
     linkTab: 'chat',
-  },
-  {
-    id: 'notif_trending_reel',
-    type: 'remix',
-    title: 'Trending AI Reel Highlight',
-    message: 'Check out the new Neon Cyberpunk scene generation highlight created in Metfa Studio.',
-    timestamp: '3h ago',
-    isRead: true,
-    actor: {
-      name: 'Elena Rostova',
-      username: 'elena_ai',
-      avatar: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80',
-    },
-    linkTab: 'reels',
   },
 ];
 
@@ -52,7 +39,9 @@ export const getNotifications = (): AppNotification[] => {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (raw) {
       const data = JSON.parse(raw);
-      if (Array.isArray(data)) return data;
+      if (Array.isArray(data)) {
+        return data.filter((n) => n.actor?.name !== 'Elena Rostova' && n.actor?.name !== 'Marcus Vance');
+      }
     }
   } catch (err) {
     console.error('Error reading notifications:', err);

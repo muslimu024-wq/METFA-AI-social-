@@ -32,6 +32,7 @@ import SocialShareModal from './SocialShareModal';
 import ExportPresetModal from './ExportPresetModal';
 import CreditsBadge from './CreditsBadge';
 import ConfirmActionModal from './ConfirmActionModal';
+import { TransformationProgressSkeleton } from '../features/ai-studio/components/TransformationProgressSkeleton';
 
 interface GeminiChatViewProps {
   messages: ChatMessage[];
@@ -50,6 +51,12 @@ interface GeminiChatViewProps {
   creditsData?: DailyCreditsData;
   onWatchAdClick?: () => void;
   onRetryMessage?: (payload?: { text: string; attachments: ChatAttachment[] }) => void;
+  canUndo?: boolean;
+  canRedo?: boolean;
+  onUndo?: () => void;
+  onRedo?: () => void;
+  canDownload?: boolean;
+  onDownload?: () => void;
 }
 
 export const GeminiChatView: React.FC<GeminiChatViewProps> = ({
@@ -69,6 +76,12 @@ export const GeminiChatView: React.FC<GeminiChatViewProps> = ({
   creditsData,
   onWatchAdClick,
   onRetryMessage,
+  canUndo = false,
+  canRedo = false,
+  onUndo,
+  onRedo,
+  canDownload = false,
+  onDownload,
 }) => {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const [copiedId, setCopiedId] = React.useState<string | null>(null);
@@ -200,7 +213,7 @@ export const GeminiChatView: React.FC<GeminiChatViewProps> = ({
   const handleSwitchEngine = (engine: 'gemini' | 'openai' | 'grok') => {
     if (!onUpdateSettings) return;
     if (engine === 'gemini') {
-      onUpdateSettings({ engine: 'gemini', model: 'gemini-3.7-flash' });
+      onUpdateSettings({ engine: 'gemini', model: 'gemini-3.8-flash' });
     } else if (engine === 'openai') {
       onUpdateSettings({ engine: 'openai', model: 'gpt-4o' });
     } else if (engine === 'grok') {
@@ -517,22 +530,37 @@ export const GeminiChatView: React.FC<GeminiChatViewProps> = ({
             );
           })}
 
-          {/* Loading Indicator */}
-          {isLoading && (
-            <div className="flex gap-2.5 sm:gap-4 items-start w-full animate-pulse">
-              <div className="w-8 h-8 sm:w-9 sm:h-9 rounded-2xl bg-gradient-to-tr from-purple-600 to-teal-500 flex items-center justify-center shrink-0 shadow-sm">
-                <Bot className="w-4 sm:w-5 h-4 sm:h-5 text-white" />
-              </div>
-              <div className="p-4 sm:p-5 rounded-2xl sm:rounded-3xl bg-white border border-gray-200 shadow-sm rounded-bl-sm flex-1 min-w-0">
-                <div className="flex items-center gap-2 text-xs sm:text-sm font-semibold text-purple-700">
-                  <Wand2 className="w-4 h-4 animate-spin text-teal-600 shrink-0" />
-                  <span>
-                    Metfa Social is processing with {activeEngine === 'openai' ? 'ChatGPT' : activeEngine === 'grok' ? 'xAI Grok' : 'Gemini 3.7 Flash'}...
-                  </span>
-                </div>
-              </div>
-            </div>
-          )}
+          {/* AI Transformation Skeleton Loading State with Progress Bar */}
+          {isLoading && (() => {
+            const lastUserMessage = [...messages].reverse().find((m) => m.role === 'user');
+            const referenceImageAttachment = lastUserMessage?.attachments?.find(
+              (att) =>
+                att.type === 'image' ||
+                att.mimeType?.startsWith('image/') ||
+                Boolean(att.previewUrl) ||
+                Boolean(att.base64)
+            );
+            let referenceImageSrc: string | undefined = undefined;
+            if (referenceImageAttachment) {
+              if (referenceImageAttachment.previewUrl) {
+                referenceImageSrc = referenceImageAttachment.previewUrl;
+              } else if (referenceImageAttachment.base64) {
+                referenceImageSrc = referenceImageAttachment.base64.startsWith('data:')
+                  ? referenceImageAttachment.base64
+                  : `data:${referenceImageAttachment.mimeType || 'image/png'};base64,${referenceImageAttachment.base64}`;
+              }
+            }
+
+            return (
+              <TransformationProgressSkeleton
+                prompt={lastUserMessage?.content}
+                stylePreset={settings?.stylePreset}
+                referenceImageSrc={referenceImageSrc}
+                activeEngine={activeEngine}
+                activeModel={settings?.model}
+              />
+            );
+          })()}
 
           <div ref={messagesEndRef} />
         </div>
@@ -549,6 +577,12 @@ export const GeminiChatView: React.FC<GeminiChatViewProps> = ({
           onEnhancePrompt={onEnhancePrompt}
           creditsCount={creditsCount}
           onWatchAdClick={onWatchAdClick}
+          canUndo={canUndo}
+          canRedo={canRedo}
+          onUndo={onUndo}
+          onRedo={onRedo}
+          canDownload={canDownload}
+          onDownload={onDownload}
         />
       </div>
 

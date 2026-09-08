@@ -12,10 +12,15 @@ import {
   Wand2,
   AlertCircle,
   Radio,
+  Undo2,
+  RotateCcw,
+  Download,
 } from 'lucide-react';
 import { ChatAttachment, StudioSettings } from '../types/chat';
 import { fileToAttachment } from '../utils/fileUtils';
 import AttachmentModal from './AttachmentModal';
+import { RecentPromptHistoryList } from '../features/ai-studio/components/RecentPromptHistoryList';
+import { addRecentPrompt } from '../features/ai-studio/utils/promptHistoryStore';
 
 export interface MultimodalInputBarProps {
   onSendMessage: (text: string, attachments: ChatAttachment[]) => void;
@@ -26,6 +31,12 @@ export interface MultimodalInputBarProps {
   onEnhancePrompt?: (prompt: string) => Promise<string>;
   creditsCount: number;
   onWatchAdClick?: () => void;
+  canUndo?: boolean;
+  canRedo?: boolean;
+  onUndo?: () => void;
+  onRedo?: () => void;
+  canDownload?: boolean;
+  onDownload?: () => void;
 }
 
 const STYLE_PRESETS = [
@@ -46,6 +57,12 @@ export const MultimodalInputBar: React.FC<MultimodalInputBarProps> = ({
   onUpdateSettings,
   onEnhancePrompt,
   onWatchAdClick,
+  canUndo = false,
+  canRedo = false,
+  onUndo,
+  onRedo,
+  canDownload = false,
+  onDownload,
 }) => {
   const [inputText, setInputText] = useState('');
   const [attachments, setAttachments] = useState<ChatAttachment[]>([]);
@@ -75,6 +92,35 @@ export const MultimodalInputBar: React.FC<MultimodalInputBarProps> = ({
       textareaRef.current.style.height = `${targetHeight}px`;
     }
   }, [inputText]);
+
+  // Listen to prompt restoration events (e.g., when Undo is triggered to restore previous prompt/state)
+  useEffect(() => {
+    const handleRestorePrompt = (
+      e: CustomEvent<{
+        prompt: string;
+        stylePreset?: string;
+        attachments?: ChatAttachment[];
+      }>
+    ) => {
+      if (e.detail?.prompt !== undefined) {
+        setInputText(e.detail.prompt);
+        if (e.detail.stylePreset && onUpdateSettings) {
+          onUpdateSettings({ stylePreset: e.detail.stylePreset });
+        }
+        if (e.detail.attachments && Array.isArray(e.detail.attachments)) {
+          setAttachments(e.detail.attachments);
+        }
+        setTimeout(() => {
+          if (textareaRef.current) {
+            textareaRef.current.focus();
+            textareaRef.current.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+          }
+        }, 50);
+      }
+    };
+    window.addEventListener('metfa_ai_restore_prompt', handleRestorePrompt as EventListener);
+    return () => window.removeEventListener('metfa_ai_restore_prompt', handleRestorePrompt as EventListener);
+  }, [onUpdateSettings]);
 
   // Clean up recognition on unmount
   useEffect(() => {
@@ -134,6 +180,10 @@ export const MultimodalInputBar: React.FC<MultimodalInputBarProps> = ({
 
     const trimmed = inputText.trim();
     if (!trimmed && attachments.length === 0) return;
+
+    if (trimmed) {
+      addRecentPrompt(trimmed, settings?.stylePreset, attachments.length > 0);
+    }
 
     isSubmittingRef.current = true;
     const currentAttachments = [...attachments];
@@ -540,6 +590,51 @@ export const MultimodalInputBar: React.FC<MultimodalInputBarProps> = ({
                 <span>{isEnhancing ? 'Enhancing...' : 'Enhance'}</span>
               </button>
             )}
+
+            {/* Quick Undo Transformation Button */}
+            {canUndo && onUndo && (
+              <button
+                type="button"
+                id="chat-undo-toolbar-btn"
+                onClick={onUndo}
+                disabled={isLoading}
+                className="px-2 sm:px-2.5 py-1.5 rounded-xl transition flex items-center gap-1 text-xs font-semibold bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-300 active:scale-95 disabled:opacity-50 cursor-pointer shadow-xs"
+                title="Undo last transformation: Revert to previous visual & prompt (Ctrl+Z)"
+              >
+                <Undo2 className="w-3.5 h-3.5 text-amber-700" />
+                <span className="hidden sm:inline">Undo</span>
+              </button>
+            )}
+
+            {/* Optional Redo Button */}
+            {canRedo && onRedo && (
+              <button
+                type="button"
+                id="chat-redo-toolbar-btn"
+                onClick={onRedo}
+                disabled={isLoading}
+                className="px-2 sm:px-2.5 py-1.5 rounded-xl transition flex items-center gap-1 text-xs font-semibold bg-gray-50 hover:bg-gray-100 text-gray-700 border border-gray-200 active:scale-95 disabled:opacity-50 cursor-pointer"
+                title="Redo transformation (Ctrl+Shift+Z)"
+              >
+                <RotateCcw className="w-3.5 h-3.5 text-gray-600 scale-x-[-1]" />
+                <span className="hidden sm:inline">Redo</span>
+              </button>
+            )}
+
+            {/* Quick Download Button for Current Transformed Visual */}
+            {canDownload && onDownload && (
+              <button
+                type="button"
+                id="chat-download-toolbar-btn"
+                onClick={onDownload}
+                disabled={isLoading}
+                className="px-2 sm:px-2.5 py-1.5 rounded-xl transition flex items-center gap-1 text-xs font-semibold bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-300 active:scale-95 disabled:opacity-50 cursor-pointer shadow-xs"
+                title="Download: Save current transformed image to your device"
+              >
+                <Download className="w-3.5 h-3.5 text-emerald-700" />
+                <span className="hidden sm:inline">Download</span>
+              </button>
+            )}
           </div>
 
           {/* Right Action Buttons */}
@@ -577,6 +672,24 @@ export const MultimodalInputBar: React.FC<MultimodalInputBarProps> = ({
           </div>
         </div>
       </div>
+
+      {/* Recent Transformation Prompt History List below the input field */}
+      <RecentPromptHistoryList
+        currentInput={inputText}
+        onSelectPrompt={(promptText, stylePreset) => {
+          setInputText(promptText);
+          if (stylePreset && onUpdateSettings) {
+            onUpdateSettings({ stylePreset });
+          }
+          // Focus input textarea and ensure it resizes
+          setTimeout(() => {
+            if (textareaRef.current) {
+              textareaRef.current.focus();
+              textareaRef.current.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+            }
+          }, 50);
+        }}
+      />
     </div>
   );
 };

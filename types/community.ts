@@ -83,6 +83,8 @@ export interface CommunityPost {
   imageSrc?: string;
   imageGallery?: string[];
   videoSrc?: string;
+  videoTitle?: string;
+  videoThumbnail?: string;
   originalImageSrc?: string;
   textBackgroundPreset?: string; // e.g. 'sunset', 'cyberpunk', 'emerald', 'midnight', 'fire'
   postType?: 'text' | 'media' | 'ai_art';

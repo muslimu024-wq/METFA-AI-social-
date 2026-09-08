@@ -5,9 +5,8 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
     <title>Metfa Social - Multimodal AI Studio & Creative Community</title>
     <meta name="description" content="Metfa Social - Next-gen Multimodal AI Assistant, Scene Transformation, Reels, Groups, Creator Pages, and Live Streaming." />
-    <!-- Standard & Favicon Icons -->
+    <!-- Standard & Favicon Icons (derived directly from official master logo) -->
     <link rel="icon" type="image/x-icon" href="/favicon.ico" />
-    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16.png" />
     <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png" />
     <link rel="icon" type="image/png" sizes="48x48" href="/favicon-48.png" />
@@ -17,19 +16,18 @@
 
     <!-- Apple Touch Icons for iOS Safari Home Screen -->
     <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
-    <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
+    <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon-180x180.png" />
     <link rel="apple-touch-icon" sizes="152x152" href="/apple-touch-icon-152x152.png" />
-    <link rel="apple-touch-icon-precomposed" href="/apple-touch-icon.png" />
-    <link rel="mask-icon" href="/favicon.svg" color="#1877F2" />
+    <link rel="apple-touch-icon-precomposed" href="/apple-touch-icon-precomposed.png" />
 
     <!-- Web App Manifest -->
     <link rel="manifest" href="/manifest.json" />
     <link rel="alternate" type="application/manifest+json" href="/manifest.webmanifest" />
 
     <!-- Theme & Status Bar Colors -->
-    <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#ffffff" />
-    <meta name="theme-color" media="(prefers-color-scheme: light)" content="#ffffff" />
-    <meta name="theme-color" content="#ffffff" />
+    <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#0056FD" />
+    <meta name="theme-color" media="(prefers-color-scheme: light)" content="#0056FD" />
+    <meta name="theme-color" content="#0056FD" />
 
     <!-- Apple iOS Capabilities -->
     <meta name="apple-mobile-web-app-capable" content="yes" />
@@ -39,9 +37,9 @@
     <!-- Android & Windows Capabilities -->
     <meta name="mobile-web-app-capable" content="yes" />
     <meta name="application-name" content="Metfa Social" />
-    <meta name="msapplication-TileColor" content="#ffffff" />
+    <meta name="msapplication-TileColor" content="#0056FD" />
     <meta name="msapplication-TileImage" content="/icon-192.png" />
-    <meta name="msapplication-navbutton-color" content="#1877F2" />
+    <meta name="msapplication-navbutton-color" content="#0056FD" />
 
     <!-- Open Graph & Social Sharing Rich Previews -->
     <meta property="og:type" content="website" />
@@ -125,6 +123,15 @@
         -webkit-line-clamp: 3;
         -webkit-box-orient: vertical;
         overflow: hidden;
+      }
+
+      /* AI Transformation Shimmer & Scanning Animations */
+      @keyframes shimmer-sweep {
+        0% { transform: translateX(-100%); }
+        100% { transform: translateX(200%); }
+      }
+      .animate-shimmer-sweep {
+        animation: shimmer-sweep 2s infinite linear;
       }
     </style>
   </head>

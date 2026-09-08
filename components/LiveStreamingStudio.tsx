@@ -24,27 +24,9 @@ export const LiveStreamingStudio: React.FC<LiveStreamingStudioProps> = ({ userPr
   const [isLive, setIsLive] = useState(false);
   const [isVideoEnabled, setIsVideoEnabled] = useState(true);
   const [isAudioEnabled, setIsAudioEnabled] = useState(true);
-  const [viewerCount, setViewerCount] = useState(142);
-  const [likesCount, setLikesCount] = useState(620);
-  const [messages, setMessages] = useState<LiveStreamMessage[]>([
-    {
-      id: 'lm_1',
-      userId: 'user_marcus',
-      userName: 'Marcus Vance',
-      userAvatar: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=100',
-      text: 'Great stream! Can you show how to blend atmospheric volumetric fog?',
-      timestamp: '1m ago',
-    },
-    {
-      id: 'lm_2',
-      userId: 'user_ai',
-      userName: 'Metfa Social Copilot',
-      userAvatar: 'https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?w=100',
-      text: '🤖 Live Tip: Try including "god rays, morning haze, 50mm f/1.4" in your lighting parameter prompt.',
-      timestamp: 'Just now',
-      isAI: true,
-    },
-  ]);
+  const [viewerCount, setViewerCount] = useState(0);
+  const [likesCount, setLikesCount] = useState(0);
+  const [messages, setMessages] = useState<LiveStreamMessage[]>([]);
   const [chatInput, setChatInput] = useState('');
 
   const videoRef = useRef<HTMLVideoElement>(null);

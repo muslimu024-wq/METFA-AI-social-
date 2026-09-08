@@ -4,15 +4,20 @@ import {
   getActiveSSOUser,
   persistSSOSession,
   saveProfileAndEnterMetfa,
+  signInExistingUser,
   signInWithGoogleOAuth,
   supabaseSignOut,
   fetchSupabaseProfile,
   upsertSupabaseProfile,
   mapSupabaseUserToAuthUser,
-  INITIAL_GUEST_USER,
+  GUEST_USER,
+  GUEST_PROFILE,
+  GUEST_AVATAR,
+  clearStaleAuthCache,
   getDefaultAvatar,
   sanitizeAvatarUrl,
 } from '../services/authService';
+import type { Session } from '@supabase/supabase-js';
 import { supabase, isSupabaseConfigured } from '../services/supabaseClient';
 import { UserProfile, PostingIdentity } from '../types/community';
 import { getUserProfile, saveUserProfile as doSaveUserProfile } from '../utils/communityStore';
@@ -36,6 +41,11 @@ interface AuthContextType {
     avatar: string;
     password?: string;
   }) => Promise<{ user: AuthUser; profile: UserProfile; error?: string }>;
+  signInUser: (params: {
+    authMethod: 'gmail' | 'phone';
+    identifier: string;
+    password?: string;
+  }) => Promise<{ user: AuthUser; profile: UserProfile; error?: string }>;
   signInWithGoogle: (params?: { email?: string; fullName?: string; avatar?: string }) => Promise<{ url?: string; error?: string; user?: AuthUser; profile?: UserProfile }>;
   logout: () => Promise<void>;
   updateProfile: (profile: Partial<UserProfile>) => Promise<void>;
@@ -46,63 +56,201 @@ interface AuthContextType {
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
 export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
-  const [user, setUser] = useState<AuthUser>(() => getActiveSSOUser());
-  const [userProfile, setUserProfile] = useState<UserProfile>(() => getUserProfile());
-  const [activeIdentity, setActiveIdentityState] = useState<PostingIdentity>(() => getActiveIdentity());
   const isSupabaseConnected = isSupabaseConfigured();
 
+  // App Startup — Single Source of Truth:
+  // When Supabase is configured, do NOT initialize the active authenticated user from localStorage as authority!
+  // Start strictly in guest state until supabase.auth.getSession() resolves the authoritative session.
+  const [user, setUser] = useState<AuthUser>(() => {
+    if (isSupabaseConnected) {
+      return GUEST_USER;
+    }
+    return getActiveSSOUser();
+  });
+
+  const [userProfile, setUserProfile] = useState<UserProfile>(() => {
+    if (isSupabaseConnected) {
+      return GUEST_PROFILE;
+    }
+    return getUserProfile();
+  });
+
+  const [activeIdentity, setActiveIdentityState] = useState<PostingIdentity>(() => {
+    if (isSupabaseConnected) {
+      return {
+        type: 'personal',
+        id: GUEST_USER.id,
+        name: GUEST_USER.name,
+        username: GUEST_USER.username,
+        avatar: GUEST_USER.avatar,
+        badge: 'Guest',
+      };
+    }
+    return getActiveIdentity();
+  });
+
   const refreshAuth = useCallback(() => {
+    if (isSupabaseConnected) {
+      // Re-verify from Supabase session
+      supabase.auth.getSession().then(({ data: { session } }) => {
+        if (session?.user) {
+          mapSupabaseUserToAuthUser(session.user, session).then(({ authUser, userProfile: syncedProfile }) => {
+            setUser(authUser);
+            setUserProfile(syncedProfile);
+            const iden: PostingIdentity = {
+              type: 'personal',
+              id: authUser.id,
+              name: syncedProfile.name || authUser.name,
+              username: syncedProfile.username || authUser.username,
+              avatar: syncedProfile.avatar || authUser.avatar,
+              badge: syncedProfile.isVerified ? 'Verified Creator' : 'Creator',
+            };
+            setActiveIdentityState(iden);
+            doSetActiveIdentity(iden);
+          });
+        } else {
+          setUser(GUEST_USER);
+          setUserProfile(GUEST_PROFILE);
+          const guestIden: PostingIdentity = {
+            type: 'personal',
+            id: GUEST_USER.id,
+            name: GUEST_USER.name,
+            username: GUEST_USER.username,
+            avatar: GUEST_USER.avatar,
+            badge: 'Guest',
+          };
+          setActiveIdentityState(guestIden);
+          doSetActiveIdentity(guestIden);
+        }
+      });
+      return;
+    }
+
     const currentAuth = getActiveSSOUser();
     const currentProf = getUserProfile();
     const currentId = getActiveIdentity();
     setUser(currentAuth);
     setUserProfile(currentProf);
     setActiveIdentityState(currentId);
+  }, [isSupabaseConnected]);
+
+  // Helper to resolve Supabase session and enforce Supabase-first single source of truth
+  const resolveSupabaseSession = useCallback(async (session: Session | null) => {
+    console.log(`[METFA AUTH] Supabase session: ${session ? 'Active' : 'None'}`);
+
+    if (session?.user) {
+      const supabaseUser = session.user;
+      const realUserId = supabaseUser.id;
+      console.log(`[METFA AUTH] Supabase user ID: ${realUserId}`);
+
+      // Profile cache verification: cachedProfile.id === currentSupabaseUser.id
+      let resolvedProfile: UserProfile | null = null;
+      try {
+        const cachedRaw = localStorage.getItem('metfa_user_profile_v2');
+        if (cachedRaw) {
+          const parsed = JSON.parse(cachedRaw);
+          if (parsed && parsed.id === realUserId) {
+            console.log(`[METFA AUTH] Cached profile ID: ${parsed.id}`);
+            resolvedProfile = parsed;
+          } else if (parsed) {
+            console.log(`[METFA AUTH] Cache rejected because IDs differ: cached=${parsed?.id}, current=${realUserId}`);
+            localStorage.removeItem('metfa_user_profile_v2');
+          }
+        }
+      } catch {}
+
+      // Fetch profile from Supabase Database
+      console.log(`[METFA AUTH] Loading profile for: ${realUserId}`);
+      const dbProfile = await fetchSupabaseProfile(realUserId);
+      if (dbProfile) {
+        console.log(`[METFA AUTH] Profile ID: ${dbProfile.id}`);
+        resolvedProfile = dbProfile;
+      }
+
+      // Map Supabase User & create profile if needed
+      const { authUser, userProfile: mappedProfile } = await mapSupabaseUserToAuthUser(supabaseUser, session);
+      const finalProfile = resolvedProfile || mappedProfile;
+
+      console.log(`[METFA AUTH] Authenticated user: ${authUser.id}`);
+
+      setUser(authUser);
+      setUserProfile(finalProfile);
+      const activeId: PostingIdentity = {
+        type: 'personal',
+        id: authUser.id,
+        name: finalProfile.name || authUser.name,
+        username: finalProfile.username || authUser.username,
+        avatar: finalProfile.avatar || authUser.avatar,
+        badge: finalProfile.isVerified ? 'Verified Creator' : 'Creator',
+      };
+      setActiveIdentityState(activeId);
+      doSetActiveIdentity(activeId);
+
+      // Only after successful Supabase resolution, update LocalStorage cache
+      persistSSOSession(authUser, finalProfile);
+    } else {
+      // If there is NO Supabase session: clear stale cache and set clean guest state
+      console.log('[METFA AUTH] Guest mode: no Supabase session');
+      clearStaleAuthCache();
+      setUser(GUEST_USER);
+      setUserProfile(GUEST_PROFILE);
+      const guestIdentity: PostingIdentity = {
+        type: 'personal',
+        id: GUEST_USER.id,
+        name: GUEST_USER.name,
+        username: GUEST_USER.username,
+        avatar: GUEST_USER.avatar,
+        badge: 'Guest',
+      };
+      setActiveIdentityState(guestIdentity);
+      doSetActiveIdentity(guestIdentity);
+    }
   }, []);
 
   // 1. Initialize Supabase Session on App Startup & Listen to Auth State Changes
   useEffect(() => {
+    console.log(`[METFA AUTH] Supabase configured: ${isSupabaseConnected}`);
+
     if (!isSupabaseConnected) {
-      console.info('[Metfa Auth] Supabase not yet configured. Running in local session mode.');
+      console.log('[METFA AUTH] Guest mode: Supabase not configured');
       return;
     }
 
     let isMounted = true;
 
-    // Check initial session
-    supabase.auth.getSession().then(async ({ data: { session }, error }) => {
+    // A. Start with authentication unresolved / guest state (initialized in useState)
+    // B. Call supabase.auth.getSession()
+    supabase.auth.getSession().then(({ data: { session }, error }) => {
       if (!isMounted) return;
       if (error) {
-        console.warn('[Supabase] Get session error:', error.message);
-        return;
+        console.warn('[METFA AUTH] Get session error:', error.message);
       }
-      if (session?.user) {
-        const { authUser, userProfile: syncedProfile } = await mapSupabaseUserToAuthUser(session.user, session);
-        if (isMounted) {
-          setUser(authUser);
-          setUserProfile(syncedProfile);
-          persistSSOSession(authUser, syncedProfile);
-        }
-      }
+      resolveSupabaseSession(session);
     });
 
-    // Subscribe to auth state changes (OAuth callbacks, token refresh, sign-in, sign-out)
+    // Subscribe to auth state changes
     const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
       if (!isMounted) return;
       console.log(`[Supabase Auth Event]: ${event}`);
 
-      if (session?.user && (event === 'SIGNED_IN' || event === 'INITIAL_SESSION' || event === 'USER_UPDATED' || event === 'TOKEN_REFRESHED')) {
-        const { authUser, userProfile: syncedProfile } = await mapSupabaseUserToAuthUser(session.user, session);
+      if (event === 'SIGNED_IN' || event === 'INITIAL_SESSION' || event === 'USER_UPDATED' || event === 'TOKEN_REFRESHED') {
+        await resolveSupabaseSession(session);
+      } else if (event === 'SIGNED_OUT' || !session) {
+        console.log('[METFA AUTH] Guest mode: signed out');
+        clearStaleAuthCache();
         if (isMounted) {
-          setUser(authUser);
-          setUserProfile(syncedProfile);
-          persistSSOSession(authUser, syncedProfile);
-        }
-      } else if (event === 'SIGNED_OUT') {
-        if (isMounted) {
-          const guestUser = INITIAL_GUEST_USER;
-          setUser(guestUser);
-          persistSSOSession(guestUser);
+          setUser(GUEST_USER);
+          setUserProfile(GUEST_PROFILE);
+          const guestIdentity: PostingIdentity = {
+            type: 'personal',
+            id: GUEST_USER.id,
+            name: GUEST_USER.name,
+            username: GUEST_USER.username,
+            avatar: GUEST_USER.avatar,
+            badge: 'Guest',
+          };
+          setActiveIdentityState(guestIdentity);
+          doSetActiveIdentity(guestIdentity);
         }
       }
     });
@@ -111,7 +259,7 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       isMounted = false;
       subscription?.unsubscribe();
     };
-  }, [isSupabaseConnected]);
+  }, [isSupabaseConnected, resolveSupabaseSession]);
 
   // 2. Window Custom Event Listeners for UI state sync
   useEffect(() => {
@@ -158,7 +306,7 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       password?: string;
     }) => {
       const result = await saveProfileAndEnterMetfa(params);
-      if (!result.error && result.user) {
+      if (!result.error && result.user && result.user.authType !== 'guest' && result.user.id) {
         setUser(result.user);
         setUserProfile(result.profile);
         const activeId: PostingIdentity = {
@@ -203,41 +351,134 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     [saveProfileAndEnter]
   );
 
+  const signInUser = useCallback(
+    async (params: {
+      authMethod: 'gmail' | 'phone';
+      identifier: string;
+      password?: string;
+    }) => {
+      const result = await signInExistingUser(params);
+      if (result.user && result.profile && result.user.authType !== 'guest') {
+        setUser(result.user);
+        setUserProfile(result.profile);
+        const activeId: PostingIdentity = {
+          type: 'personal',
+          id: result.user.id,
+          name: result.user.name,
+          username: result.user.username,
+          avatar: result.user.avatar,
+          badge: result.user.isVerified ? 'Verified Creator' : 'Creator',
+        };
+        doSetActiveIdentity(activeId);
+        setActiveIdentityState(activeId);
+      }
+      return result;
+    },
+    []
+  );
+
   const signInWithGoogle = useCallback(async (params?: { email?: string; fullName?: string; avatar?: string }) => {
     const res = await signInWithGoogleOAuth(params);
-    if (res.user && res.profile) {
+    if (res.user && res.profile && res.user.authType !== 'guest') {
       setUser(res.user);
       setUserProfile(res.profile);
-      refreshAuth();
+      const activeId: PostingIdentity = {
+        type: 'personal',
+        id: res.user.id,
+        name: res.user.name,
+        username: res.user.username,
+        avatar: res.user.avatar,
+        badge: res.user.isVerified ? 'Verified Creator' : 'Creator',
+      };
+      doSetActiveIdentity(activeId);
+      setActiveIdentityState(activeId);
     }
     return res;
-  }, [refreshAuth]);
+  }, []);
 
   const logout = useCallback(async () => {
+    console.log('[METFA AUTH] Logging out...');
     const guestUser = await supabaseSignOut();
     setUser(guestUser);
-    refreshAuth();
-  }, [refreshAuth]);
+    setUserProfile(GUEST_PROFILE);
+    const guestIdentity: PostingIdentity = {
+      type: 'personal',
+      id: guestUser.id,
+      name: guestUser.name,
+      username: guestUser.username,
+      avatar: guestUser.avatar,
+      badge: 'Guest',
+    };
+    setActiveIdentityState(guestIdentity);
+    doSetActiveIdentity(guestIdentity);
+  }, []);
 
   const updateProfile = useCallback(async (updates: Partial<UserProfile>) => {
+    if (isSupabaseConfigured()) {
+      // Obtain the authoritative Supabase session user directly from auth.getUser()
+      const {
+        data: { user: currentSupabaseUser },
+      } = await supabase.auth.getUser();
+
+      if (!currentSupabaseUser || !currentSupabaseUser.id) {
+        console.warn('[METFA AUTH] Cannot update profile: no authenticated Supabase user');
+        return;
+      }
+
+      const realUserId = currentSupabaseUser.id;
+      console.log(`[METFA AUTH] Updating profile for user: ${realUserId}`);
+
+      const sanitizedUpdates = {
+        ...updates,
+        id: realUserId,
+      };
+
+      // 1. Sync to Supabase public.profiles FIRST
+      const dbProfile = await upsertSupabaseProfile(realUserId, sanitizedUpdates);
+
+      const finalProfile: UserProfile = dbProfile || {
+        ...userProfile,
+        ...sanitizedUpdates,
+        id: realUserId,
+      };
+
+      // 2. UI and local cache synchronization AFTER database synchronization
+      doSaveUserProfile(finalProfile);
+      setUserProfile(finalProfile);
+
+      const updatedAuth: AuthUser = {
+        ...user,
+        id: realUserId,
+        name: finalProfile.name || user.name,
+        username: finalProfile.username || user.username,
+        avatar: finalProfile.avatar || user.avatar,
+      };
+      persistSSOSession(updatedAuth, finalProfile);
+      setUser(updatedAuth);
+
+      const activeId: PostingIdentity = {
+        type: 'personal',
+        id: realUserId,
+        name: finalProfile.name,
+        username: finalProfile.username,
+        avatar: finalProfile.avatar,
+        badge: finalProfile.isVerified ? 'Verified Creator' : 'Creator',
+      };
+      doSetActiveIdentity(activeId);
+      setActiveIdentityState(activeId);
+      return;
+    }
+
+    // Local dev mode fallback when Supabase is not configured
     const current = getUserProfile();
     const updated: UserProfile = {
       ...current,
       ...updates,
+      id: user.id || current.id,
     };
     doSaveUserProfile(updated);
     setUserProfile(updated);
 
-    // If Supabase is connected and user is authenticated, persist to profiles table
-    if (isSupabaseConfigured() && user.id && !user.id.startsWith('guest_')) {
-      try {
-        await upsertSupabaseProfile(user.id, updated);
-      } catch (err) {
-        console.warn('[Supabase] Failed to sync profile updates to database:', err);
-      }
-    }
-
-    // Also sync with AuthUser & ActiveIdentity
     const currentAuth = getActiveSSOUser();
     const updatedAuth: AuthUser = {
       ...currentAuth,
@@ -258,14 +499,16 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     };
     doSetActiveIdentity(activeId);
     setActiveIdentityState(activeId);
-  }, [user.id]);
+  }, [user, userProfile]);
 
   const switchIdentity = useCallback((identity: PostingIdentity) => {
     doSetActiveIdentity(identity);
     setActiveIdentityState(identity);
   }, []);
 
-  const isAuthenticated = user.authType !== 'guest' && Boolean(user.id);
+  const isAuthenticated =
+    user.authType !== 'guest' &&
+    Boolean(user.id);
 
   return (
     <AuthContext.Provider
@@ -276,10 +519,11 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         isAuthenticated,
         isSupabaseConnected,
         sessionToken: user.sessionToken || null,
-        metfaId: user.metfaId || 'MID-GUEST',
+        metfaId: user.metfaId || '',
         loginPhone,
         loginGmail,
         saveProfileAndEnter,
+        signInUser,
         signInWithGoogle,
         logout,
         updateProfile,

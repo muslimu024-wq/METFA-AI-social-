@@ -1,232 +1,50 @@
 <svg width="1024" height="1024" viewBox="0 0 1024 1024" fill="none" xmlns="http://www.w3.org/2000/svg">
   <defs>
-    <!-- Master Royal Blue Canvas Gradient -->
-    <linearGradient id="metfaBgGrad" x1="512" y1="0" x2="512" y2="1024" gradientUnits="userSpaceOnUse">
-      <stop offset="0%" stop-color="#1442E8" />
-      <stop offset="25%" stop-color="#0B30D2" />
-      <stop offset="60%" stop-color="#0620AA" />
-      <stop offset="85%" stop-color="#031378" />
-      <stop offset="100%" stop-color="#010A4E" />
+    <linearGradient id="metfaBlueBg" x1="512" y1="0" x2="512" y2="1024" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#0066FF" />
+      <stop offset="100%" stop-color="#0055FF" />
     </linearGradient>
-
-    <!-- Top Ambient Radial Illumination -->
-    <radialGradient id="metfaTopGlow" cx="512" cy="120" r="700" gradientUnits="userSpaceOnUse">
-      <stop offset="0%" stop-color="#5586FF" stop-opacity="0.45" />
-      <stop offset="45%" stop-color="#1C4BEE" stop-opacity="0.15" />
-      <stop offset="100%" stop-color="#0825B8" stop-opacity="0" />
-    </radialGradient>
-
-    <!-- Bottom Vignette / Shadow -->
-    <linearGradient id="metfaBottomVignette" x1="512" y1="700" x2="512" y2="1024" gradientUnits="userSpaceOnUse">
-      <stop offset="0%" stop-color="#000000" stop-opacity="0" />
-      <stop offset="100%" stop-color="#000528" stop-opacity="0.6" />
-    </linearGradient>
-
-    <!-- 3D Pearl White Lighting Gradient for Emblem Surface -->
-    <linearGradient id="emblemBodyGrad" x1="512" y1="120" x2="512" y2="760" gradientUnits="userSpaceOnUse">
-      <stop offset="0%" stop-color="#FFFFFF" />
-      <stop offset="40%" stop-color="#FAFBFD" />
-      <stop offset="75%" stop-color="#EEF2F8" />
-      <stop offset="92%" stop-color="#DEE5F0" />
-      <stop offset="100%" stop-color="#CAD5E4" />
-    </linearGradient>
-
-    <!-- Top Specular Bevel Highlight -->
-    <linearGradient id="bevelSpecular" x1="512" y1="100" x2="512" y2="500" gradientUnits="userSpaceOnUse">
-      <stop offset="0%" stop-color="#FFFFFF" stop-opacity="1" />
-      <stop offset="60%" stop-color="#FFFFFF" stop-opacity="0.7" />
-      <stop offset="100%" stop-color="#E2E8F0" stop-opacity="0.2" />
-    </linearGradient>
-
-    <!-- Realistic Deep 3D Drop Shadows Underneath Ribbon Structure -->
-    <filter id="masterDropShadow" x="-30%" y="-30%" width="160%" height="160%" filterUnits="userSpaceOnUse">
-      <!-- Ambient occlusion soft shadow -->
-      <feDropShadow dx="0" dy="24" stdDeviation="22" flood-color="#010626" flood-opacity="0.75" />
-      <!-- Contact crisp shadow -->
-      <feDropShadow dx="0" dy="8" stdDeviation="8" flood-color="#000214" flood-opacity="0.45" />
-      <feDropShadow dx="0" dy="2" stdDeviation="3" flood-color="#000000" flood-opacity="0.3" />
-    </filter>
-
-    <!-- Soft Inner Crevice Lighting -->
-    <filter id="softEmboss" x="-10%" y="-10%" width="120%" height="120%">
-      <feGaussianBlur stdDeviation="2" result="blur" />
-      <feComposite in="SourceGraphic" in2="blur" operator="over" />
+    <filter id="officialShadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="16" stdDeviation="16" flood-color="#001866" flood-opacity="0.4" />
+      <feDropShadow dx="0" dy="6" stdDeviation="6" flood-color="#001044" flood-opacity="0.25" />
     </filter>
   </defs>
-
-  
-
-  <!-- Master Emblem Symmetrical Group with Smooth 3D Cast Shadow -->
-  <g transform="translate(30.72, 30.72) scale(0.94)" filter="url(#masterDropShadow)">
-    
-    <!-- UNIFIED 3D WHITE SCULPTED EMBLEM (Smooth Even-Odd Compound Path) -->
+  <!-- Squircle Blue Canvas -->
+  <rect width="1024" height="1024" rx="228" fill="url(#metfaBlueBg)" />
+  <!-- Official Center White Emblem -->
+  <g filter="url(#officialShadow)">
     <path
       fill-rule="evenodd"
       clip-rule="evenodd"
-      d="
-        /* ==================== 1. OUTER CONTOUR ==================== */
-        M 512 584
-        /* Inner V edge rising to Left Leaf Pointed Tip */
-        L 412 152
-        C 404 132 376 132 368 152
-        C 336 224 308 336 372 424
-        /* Left Leaf outer curve transition to Left Wing Shoulder */
-        C 332 408 276 392 228 416
-        C 156 452 92 548 92 664
-        C 92 748 156 788 236 788
-        C 324 788 412 712 480 608
-        /* Lower Central Cradle Arch */
-        C 496 588 528 588 544 608
-        C 612 712 700 788 788 788
-        C 868 788 932 748 932 664
-        C 932 548 868 452 796 416
-        C 748 392 692 408 652 424
-        C 716 336 688 224 656 152
-        C 648 132 620 132 612 152
-        /* Right Leaf inner edge descending to Central V Notch */
-        L 512 584 Z
-
-        /* ==================== 2. LEFT TOP LEAF HOLE ==================== */
-        M 390 224
-        C 414 284 414 344 386 376
-        C 362 348 354 292 378 232
-        C 382 220 386 220 390 224 Z
-
-        /* ==================== 3. RIGHT TOP LEAF HOLE ==================== */
-        M 634 224
-        C 638 220 642 220 646 232
-        C 670 292 662 348 638 376
-        C 610 344 610 284 634 224 Z
-
-        /* ==================== 4. LEFT WING DIAGONAL OVAL HOLE ==================== */
-        M 216 488
-        C 272 488 312 532 344 584
-        C 288 648 240 688 196 688
-        C 156 688 140 652 140 604
-        C 140 544 172 488 216 488 Z
-
-        /* ==================== 5. RIGHT WING DIAGONAL OVAL HOLE ==================== */
-        M 808 488
-        C 852 488 884 544 884 604
-        C 884 652 868 688 828 688
-        C 784 688 736 648 680 584
-        C 712 532 752 488 808 488 Z
-
-        /* ==================== 6. CENTRAL CRADLE SHIELD VIEWPORT ==================== */
-        M 512 632
-        C 492 632 464 664 432 704
-        C 460 732 488 744 512 744
-        C 536 744 564 732 592 704
-        C 560 664 532 632 512 632 Z
-      "
-      fill="url(#emblemBodyGrad)"
+      d="M 512 606
+  C 492 550 454 445 432 328
+  C 424 286 376 290 366 336
+  C 342 418 362 504 394 544
+  C 338 538 274 564 228 624
+  C 192 670 202 706 242 712
+  C 302 720 390 696 480 676
+  C 498 672 526 672 544 676
+  C 634 696 722 720 782 712
+  C 822 706 832 670 796 624
+  C 750 564 686 538 630 544
+  C 662 504 682 418 658 336
+  C 648 290 600 286 592 328
+  C 570 445 532 550 512 606 Z M 436 352
+  C 450 436 480 510 488 542
+  C 442 506 412 448 404 378
+  C 402 350 424 340 436 352 Z M 588 352
+  C 600 340 622 350 620 378
+  C 612 448 582 506 536 542
+  C 544 510 574 436 588 352 Z M 374 576
+  C 316 580 260 624 242 670
+  C 246 682 264 686 288 680
+  C 344 666 410 650 460 644
+  C 426 608 398 578 374 576 Z M 650 576
+  C 626 578 598 608 564 644
+  C 614 650 680 666 736 680
+  C 760 686 778 682 782 670
+  C 764 624 708 580 650 576 Z"
+      fill="#FFFFFF"
     />
-
-    <!-- CONTINUOUS 3D TUBULAR RIBBON VOLUME OVERLAYS (Precise Smooth Curvature) -->
-    <!-- A. Crown Leaves & Central V Convergence -->
-    <path
-      d="M 512 580 L 390 144 C 378 124 354 132 346 156 C 310 252 314 372 394 432 L 512 580 L 630 432 C 710 372 714 252 678 156 C 670 132 646 124 634 144 L 512 580 Z"
-      fill="url(#emblemBodyGrad)"
-      stroke="url(#emblemBodyGrad)"
-      stroke-width="24"
-      stroke-linejoin="round"
-      stroke-linecap="round"
-    />
-
-    <!-- B. Left M-Wing Sculpture -->
-    <path
-      d="M 382 432 C 318 396 254 396 206 428 C 138 476 106 568 106 668 C 106 732 150 768 210 768 C 290 768 374 700 450 596"
-      fill="none"
-      stroke="url(#emblemBodyGrad)"
-      stroke-width="52"
-      stroke-linecap="round"
-      stroke-linejoin="round"
-    />
-
-    <!-- C. Right M-Wing Sculpture -->
-    <path
-      d="M 642 432 C 706 396 770 396 818 428 C 886 476 918 568 918 668 C 918 732 874 768 814 768 C 734 768 650 700 574 596"
-      fill="none"
-      stroke="url(#emblemBodyGrad)"
-      stroke-width="52"
-      stroke-linecap="round"
-      stroke-linejoin="round"
-    />
-
-    <!-- D. Lower Central Smiling Cradle Arch -->
-    <path
-      d="M 210 768 C 310 768 414 696 512 696 C 610 696 714 768 814 768"
-      fill="none"
-      stroke="url(#emblemBodyGrad)"
-      stroke-width="48"
-      stroke-linecap="round"
-      stroke-linejoin="round"
-    />
-
-    <!-- ==================== EXACT CUTOUT HOLE DEFINITIONS ==================== -->
-    <!-- Left Leaf Teardrop Hole -->
-    <path
-      d="M 390 184 C 366 260 358 328 382 368 C 398 328 398 260 390 184 Z"
-      fill="url(#metfaBgGrad)"
-    />
-
-    <!-- Right Leaf Teardrop Hole -->
-    <path
-      d="M 634 184 C 658 260 666 328 642 368 C 626 328 626 260 634 184 Z"
-      fill="url(#metfaBgGrad)"
-    />
-
-    <!-- Left Wing Cutout Oval -->
-    <path
-      d="M 210 492 C 154 540 154 624 194 668 C 254 668 314 596 330 548 C 294 504 250 484 210 492 Z"
-      fill="url(#metfaBgGrad)"
-    />
-
-    <!-- Right Wing Cutout Oval -->
-    <path
-      d="M 814 492 C 870 540 870 624 830 668 C 770 668 710 596 694 548 C 730 504 774 484 814 492 Z"
-      fill="url(#metfaBgGrad)"
-    />
-
-    <!-- Center Cradle Blue Viewport -->
-    <path
-      d="M 460 636 C 484 688 500 708 512 708 C 524 708 540 688 564 636 C 536 672 488 672 460 636 Z"
-      fill="url(#metfaBgGrad)"
-    />
-
-    <!-- ==================== SPECULAR EMBOSS LIGHTING HIGHLIGHTS ==================== -->
-    <!-- Left Leaf Tip Highlight -->
-    <path
-      d="M 390 144 L 372 152 C 346 216 330 300 368 380"
-      fill="none"
-      stroke="url(#bevelSpecular)"
-      stroke-width="8"
-      stroke-linecap="round"
-    />
-    <!-- Right Leaf Tip Highlight -->
-    <path
-      d="M 634 144 L 652 152 C 678 216 694 300 656 380"
-      fill="none"
-      stroke="url(#bevelSpecular)"
-      stroke-width="8"
-      stroke-linecap="round"
-    />
-    <!-- Left Wing Shoulder Top Arc Highlight -->
-    <path
-      d="M 216 428 C 152 476 116 560 116 652"
-      fill="none"
-      stroke="url(#bevelSpecular)"
-      stroke-width="10"
-      stroke-linecap="round"
-    />
-    <!-- Right Wing Shoulder Top Arc Highlight -->
-    <path
-      d="M 808 428 C 872 476 908 560 908 652"
-      fill="none"
-      stroke="url(#bevelSpecular)"
-      stroke-width="10"
-      stroke-linecap="round"
-    />
-
   </g>
 </svg>

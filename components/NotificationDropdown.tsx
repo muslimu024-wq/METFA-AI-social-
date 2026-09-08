@@ -18,6 +18,7 @@ import {
   markAllNotificationsAsRead,
   markNotificationAsRead
 } from '../utils/notificationStore';
+import { GUEST_AVATAR, sanitizeAvatarUrl } from '../services/authService';
 
 interface NotificationDropdownProps {
   onNavigateTab: (tabId: string) => void;
@@ -147,9 +148,12 @@ export const NotificationDropdown: React.FC<NotificationDropdownProps> = ({ onNa
                 >
                   <div className="relative shrink-0">
                     <img
-                      src={notif.actor?.avatar || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=100'}
+                      src={sanitizeAvatarUrl(notif.actor?.avatar) || GUEST_AVATAR}
                       alt="Actor"
                       className="w-9 h-9 rounded-xl object-cover border border-gray-700"
+                      onError={(e) => {
+                        (e.currentTarget as HTMLImageElement).src = GUEST_AVATAR;
+                      }}
                     />
                     <div className="absolute -bottom-1 -right-1 p-0.5 rounded-full bg-gray-900 border border-gray-800">
                       {renderIcon(notif.type)}

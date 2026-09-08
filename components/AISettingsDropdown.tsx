@@ -60,7 +60,7 @@ export const AISettingsDropdown: React.FC<AISettingsDropdownProps> = ({
     setActiveEngine(engine);
     try {
       const current = getStudioSettings();
-      const model = engine === 'gemini' ? 'gemini-3.7-flash' : engine === 'openai' ? 'gpt-4o' : 'grok-2';
+      const model = engine === 'gemini' ? 'gemini-3.8-flash' : engine === 'openai' ? 'gpt-4o' : 'grok-2';
       saveStudioSettings({ ...current, engine, model });
     } catch (err) {
       console.error(err);

@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { Users, Plus, Check, Search, Shield, Lock, Globe } from 'lucide-react';
 import { SocialGroup, UserProfile } from '../types/community';
 import { getGroups, toggleJoinGroup } from '../utils/socialStore';
+import { GUEST_AVATAR, sanitizeAvatarUrl } from '../services/authService';
 
 interface GroupsDirectoryProps {
   userProfile: UserProfile;
@@ -72,76 +73,113 @@ export const GroupsDirectory: React.FC<GroupsDirectoryProps> = ({
         </div>
       </div>
 
-      {/* Groups Grid */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        {filteredGroups.map((group) => (
-          <div
-            key={group.id}
-            className="bg-gray-900 border border-gray-800 hover:border-teal-500/40 rounded-3xl overflow-hidden shadow-xl transition flex flex-col justify-between"
-          >
-            {/* Cover Image */}
-            <div className="h-24 bg-gray-950 relative overflow-hidden">
-              {group.coverImage && (
-                <img src={group.coverImage} alt="Cover" className="w-full h-full object-cover opacity-75" />
-              )}
-              <div className="absolute inset-0 bg-gradient-to-t from-gray-900 to-transparent" />
-            </div>
-
-            {/* Info */}
-            <div className="p-4 pt-0 relative flex-1 flex flex-col justify-between">
-              <div className="flex items-end justify-between -mt-7 mb-3">
-                <img
-                  src={group.avatar}
-                  alt={group.name}
-                  className="w-14 h-14 rounded-2xl border-4 border-gray-900 object-cover shadow-lg"
-                />
-
-                <button
-                  type="button"
-                  onClick={() => handleJoin(group.id)}
-                  className={`px-3.5 py-1.5 rounded-xl text-xs font-bold transition flex items-center gap-1 shadow-sm ${
-                    group.isJoined
-                      ? 'bg-gray-800 text-teal-300 border border-gray-700'
-                      : 'bg-teal-600 hover:bg-teal-500 text-white'
-                  }`}
-                >
-                  {group.isJoined ? (
-                    <>
-                      <Check className="w-3 h-3" />
-                      <span>Joined</span>
-                    </>
-                  ) : (
-                    <>
-                      <Plus className="w-3 h-3" />
-                      <span>Join Group</span>
-                    </>
-                  )}
-                </button>
-              </div>
-
-              <div className="space-y-1.5 mb-4">
-                <div className="flex items-center gap-1.5">
-                  <h4 className="text-sm font-bold text-white">{group.name}</h4>
-                </div>
-                <div className="flex items-center gap-2 text-[11px] text-gray-400">
-                  <span className="flex items-center gap-1">
-                    {group.privacy === 'public' ? <Globe className="w-3 h-3" /> : <Lock className="w-3 h-3" />}
-                    {group.privacy === 'public' ? 'Public Group' : 'Private Group'}
-                  </span>
-                  <span>•</span>
-                  <span>{group.category}</span>
-                </div>
-                <p className="text-xs text-gray-300 line-clamp-2 leading-relaxed">{group.description}</p>
-              </div>
-
-              <div className="pt-2 border-t border-gray-800 flex items-center justify-between text-xs text-gray-400">
-                <span className="font-semibold text-teal-300">{group.membersCount} members</span>
-                <span>{group.postsCount} creations shared</span>
-              </div>
-            </div>
+      {/* Groups Grid or Empty State */}
+      {filteredGroups.length === 0 ? (
+        <div className="flex flex-col items-center justify-center py-16 px-4 text-center bg-gray-900/40 rounded-3xl border border-dashed border-gray-800">
+          <div className="w-14 h-14 rounded-2xl bg-teal-500/10 border border-teal-500/20 flex items-center justify-center text-teal-400 mb-4">
+            <Users className="w-7 h-7" />
           </div>
-        ))}
-      </div>
+          <h4 className="text-base font-semibold text-white mb-1">
+            {searchQuery ? 'No matching groups found' : 'No Groups Created Yet'}
+          </h4>
+          <p className="text-xs text-gray-400 max-w-sm mb-5">
+            {searchQuery
+              ? 'Try a different search term or start your own community group.'
+              : 'Community groups bring together creators around shared workflows, prompt recipes, and styles.'}
+          </p>
+          <button
+            type="button"
+            onClick={onCreateGroupClick}
+            className="px-4 py-2 bg-gradient-to-r from-teal-600 to-indigo-600 text-white text-xs font-semibold rounded-xl shadow hover:opacity-95 transition flex items-center gap-2"
+          >
+            <Plus className="w-4 h-4" />
+            <span>Create the First Group</span>
+          </button>
+        </div>
+      ) : (
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          {filteredGroups.map((group) => (
+            <div
+              key={group.id}
+              className="bg-gray-900 border border-gray-800 hover:border-teal-500/40 rounded-3xl overflow-hidden shadow-xl transition flex flex-col justify-between"
+            >
+              {/* Cover Image */}
+              <div className="h-24 bg-gray-950 relative overflow-hidden">
+                {group.coverImage ? (
+                  <img
+                    src={group.coverImage}
+                    alt="Cover"
+                    loading="lazy"
+                    decoding="async"
+                    className="w-full h-full object-cover opacity-75"
+                  />
+                ) : (
+                  <div className="w-full h-full bg-gradient-to-r from-teal-950/40 to-indigo-950/30" />
+                )}
+                <div className="absolute inset-0 bg-gradient-to-t from-gray-900 to-transparent" />
+              </div>
+
+              {/* Info */}
+              <div className="p-4 pt-0 relative flex-1 flex flex-col justify-between">
+                <div className="flex items-end justify-between -mt-7 mb-3">
+                  <img
+                    src={sanitizeAvatarUrl(group.avatar) || GUEST_AVATAR}
+                    alt={group.name}
+                    loading="lazy"
+                    decoding="async"
+                    className="w-14 h-14 rounded-2xl border-4 border-gray-900 object-cover shadow-lg bg-gray-800"
+                    onError={(e) => {
+                      (e.currentTarget as HTMLImageElement).src = GUEST_AVATAR;
+                    }}
+                  />
+
+                  <button
+                    type="button"
+                    onClick={() => handleJoin(group.id)}
+                    className={`px-3.5 py-1.5 rounded-xl text-xs font-bold transition flex items-center gap-1 shadow-sm ${
+                      group.isJoined
+                        ? 'bg-gray-800 text-teal-300 border border-gray-700'
+                        : 'bg-teal-600 hover:bg-teal-500 text-white'
+                    }`}
+                  >
+                    {group.isJoined ? (
+                      <>
+                        <Check className="w-3 h-3" />
+                        <span>Joined</span>
+                      </>
+                    ) : (
+                      <>
+                        <Plus className="w-3 h-3" />
+                        <span>Join Group</span>
+                      </>
+                    )}
+                  </button>
+                </div>
+
+                <div className="space-y-1.5 mb-4">
+                  <div className="flex items-center gap-1.5">
+                    <h4 className="text-sm font-bold text-white">{group.name}</h4>
+                  </div>
+                  <div className="flex items-center gap-2 text-[11px] text-gray-400">
+                    <span className="flex items-center gap-1">
+                      {group.privacy === 'public' ? <Globe className="w-3 h-3" /> : <Lock className="w-3 h-3" />}
+                      {group.privacy === 'public' ? 'Public Group' : 'Private Group'}
+                    </span>
+                    <span>•</span>
+                    <span>{group.category}</span>
+                  </div>
+                  <p className="text-xs text-gray-300 line-clamp-2 leading-relaxed">{group.description}</p>
+                </div>
+
+                <div className="pt-2 border-t border-gray-800 flex items-center justify-between text-xs text-gray-400">
+                  <span className="font-semibold text-teal-300">{group.membersCount} members</span>
+                  <span>{group.postsCount} creations shared</span>
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 };

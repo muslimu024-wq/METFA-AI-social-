@@ -1,8 +1,7 @@
-import React, { useState } from 'react';
+import React, { useState, Suspense, lazy } from 'react';
 import {
   Sparkles,
   Key,
-  Zap,
   Users,
   Compass,
   Film,
@@ -17,21 +16,21 @@ import {
   ShieldCheck,
   ChevronRight,
   Settings,
-  HelpCircle,
-  Sliders,
   Search,
   CheckCircle2,
   ExternalLink,
-  Crown,
   Download,
   ShoppingBag,
+  MessageSquare,
 } from 'lucide-react';
 import { DailyCreditsData } from '../utils/creditManager';
 import { getPages, getGroups } from '../utils/socialStore';
 import { useAuth } from '../context/AuthContext';
-import NotificationDropdown from './NotificationDropdown';
+import { getSellmeShopUrl } from '../services/marketplaceService';
 import GlobalSearchBar from './GlobalSearchBar';
-import AISettingsDropdown from './AISettingsDropdown';
+
+// Lazy-load dropdown only needed when on AI tools tab
+const AISettingsDropdown = lazy(() => import('./AISettingsDropdown'));
 
 interface HeaderProps {
   activeTab: string;
@@ -102,6 +101,7 @@ export const Header: React.FC<HeaderProps> = ({
               <img
                 src="/logo.png"
                 alt="Metfa Social Official Logo"
+                decoding="async"
                 className="w-9 h-9 min-w-[36px] max-w-[36px] min-h-[36px] max-h-[36px] rounded-2xl shadow-xs group-hover:scale-105 transition-transform shrink-0 object-cover block pointer-events-none"
                 onError={(e) => {
                   (e.currentTarget as HTMLImageElement).src = '/metfa-emblem.png';
@@ -119,25 +119,47 @@ export const Header: React.FC<HeaderProps> = ({
             {/* [Search Icon] (Opens Global Search Dialog with speech dictation, tags & group filters) */}
             <GlobalSearchBar onNavigateTab={onNavigateTab} />
 
-            {/* [Sellme Marketplace Navigation Button - Direct 1-Click to shop.metfaai.com] */}
+            {/* [METFA Marketplace Navigation Button - Direct to SellMe App Home Page shop.metfaai.com] */}
             <button
               type="button"
               id="header-sellme-marketplace-btn"
               onClick={() => {
-                window.open('https://shop.metfaai.com', '_blank', 'noopener,noreferrer');
+                const sellmeHomeUrl = getSellmeShopUrl();
+                window.open(sellmeHomeUrl, '_blank', 'noopener,noreferrer');
               }}
-              className="w-9 h-9 sm:w-10 sm:h-10 rounded-2xl flex items-center justify-center transition shrink-0 active:scale-95 shadow-xs group cursor-pointer bg-slate-100 hover:bg-slate-200 border border-slate-200 text-slate-700 hover:text-purple-600"
-              title="Sellme App Store (shop.metfaai.com)"
+              className="w-9 h-9 sm:w-10 sm:h-10 rounded-2xl flex items-center justify-center transition shrink-0 active:scale-95 shadow-xs group cursor-pointer border bg-slate-100 hover:bg-slate-200 border-slate-200 text-slate-700 hover:text-purple-600"
+              title="Sellme App (shop.metfaai.com)"
+              aria-label="Sellme App Store"
             >
               <ShoppingBag className="w-4 h-4 sm:w-4.5 sm:h-4.5 group-hover:scale-110 transition-transform text-purple-600 group-hover:text-teal-600" />
             </button>
 
+            {/* [Direct Messages Navigation Button] - Hidden on METFA AI tab since METFA AI has its own complete AI conversation system */}
+            {activeTab !== 'chat' && (
+              <button
+                type="button"
+                id="header-messages-btn"
+                onClick={() => handleNavigate('messages')}
+                className={`w-9 h-9 sm:w-10 sm:h-10 rounded-2xl flex items-center justify-center transition shrink-0 active:scale-95 shadow-xs group cursor-pointer border ${
+                  activeTab === 'messages'
+                    ? 'bg-teal-50 border-teal-300 text-teal-700'
+                    : 'bg-slate-100 hover:bg-slate-200 border-slate-200 text-slate-700 hover:text-teal-600'
+                }`}
+                title="Direct Messages"
+                aria-label="Messages"
+              >
+                <MessageSquare className="w-4 h-4 sm:w-4.5 sm:h-4.5 group-hover:scale-110 transition-transform text-teal-600" />
+              </button>
+            )}
+
             {/* [AI Settings Dropdown Menu] - Rendered ONLY on "AI Tools" (chat) tab */}
             {activeTab === 'chat' && (
-              <AISettingsDropdown
-                onOpenSettings={onOpenSettings}
-                onNavigateTab={onNavigateTab}
-              />
+              <Suspense fallback={null}>
+                <AISettingsDropdown
+                  onOpenSettings={onOpenSettings}
+                  onNavigateTab={onNavigateTab}
+                />
+              </Suspense>
             )}
 
             {/* [User Profile Avatar] */}
@@ -155,6 +177,7 @@ export const Header: React.FC<HeaderProps> = ({
               <img
                 src={activeIdentity.avatar || authUser.avatar}
                 alt="User Avatar"
+                decoding="async"
                 className="w-full h-full object-cover"
               />
             </button>
@@ -179,6 +202,8 @@ export const Header: React.FC<HeaderProps> = ({
                   <img
                     src="/logo.png"
                     alt="Metfa Social"
+                    loading="lazy"
+                    decoding="async"
                     className="w-8 h-8 min-w-[32px] max-w-[32px] min-h-[32px] max-h-[32px] rounded-xl shadow-xs shrink-0 object-cover block pointer-events-none"
                     onError={(e) => {
                       (e.currentTarget as HTMLImageElement).src = '/metfa-emblem.png';
@@ -207,6 +232,8 @@ export const Header: React.FC<HeaderProps> = ({
                   <img
                     src={authUser.avatar || activeIdentity.avatar}
                     alt={authUser.name}
+                    loading="lazy"
+                    decoding="async"
                     className="w-12 h-12 rounded-2xl object-cover border-2 border-purple-500 shadow-xs"
                   />
                   {authUser.isVerified && (
@@ -277,6 +304,19 @@ export const Header: React.FC<HeaderProps> = ({
 
                 <button
                   type="button"
+                  onClick={() => handleNavigate('messages')}
+                  className={`w-full p-2.5 rounded-xl flex items-center gap-3 text-xs font-bold transition ${
+                    activeTab === 'messages'
+                      ? 'bg-teal-600 text-white'
+                      : 'text-slate-700 hover:bg-slate-100'
+                  }`}
+                >
+                  <MessageSquare className="w-4 h-4 text-teal-600" />
+                  <span>Direct Messages</span>
+                </button>
+
+                <button
+                  type="button"
                   onClick={() => handleNavigate('groups')}
                   className={`w-full p-2.5 rounded-xl flex items-center justify-between text-xs font-bold transition ${
                     activeTab === 'groups'
@@ -327,11 +367,12 @@ export const Header: React.FC<HeaderProps> = ({
                 <button
                   type="button"
                   onClick={() => {
-                    window.open('https://shop.metfaai.com', '_blank', 'noopener,noreferrer');
+                    const sellmeHomeUrl = getSellmeShopUrl();
+                    window.open(sellmeHomeUrl, '_blank', 'noopener,noreferrer');
                     setIsSideDrawerOpen(false);
                   }}
                   className="w-full p-2.5 rounded-xl flex items-center justify-between text-xs font-bold transition cursor-pointer text-slate-700 hover:bg-slate-100 hover:text-teal-600"
-                  title="Sellme App Home (shop.metfaai.com)"
+                  title="Sellme App (shop.metfaai.com)"
                 >
                   <div className="flex items-center gap-3">
                     <ShoppingBag className="w-4 h-4 text-teal-600" />
@@ -369,6 +410,8 @@ export const Header: React.FC<HeaderProps> = ({
                         <img
                           src={page.avatar}
                           alt={page.name}
+                          loading="lazy"
+                          decoding="async"
                           className="w-7 h-7 rounded-lg object-cover shrink-0 border border-slate-200"
                         />
                         <div className="min-w-0">
@@ -432,7 +475,7 @@ export const Header: React.FC<HeaderProps> = ({
                       className="w-full py-2 px-3 bg-gradient-to-r from-purple-600 to-teal-500 text-white rounded-xl text-xs font-bold flex items-center gap-2 shadow-xs transition"
                     >
                       <LogIn className="w-3.5 h-3.5" />
-                      <span>Phone / Gmail Login</span>
+                      <span>Sign In / Sign Up</span>
                     </button>
                   )
                 ) : (

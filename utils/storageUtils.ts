@@ -125,18 +125,7 @@ export function pruneStorageToFreeQuota(): void {
       if (postsRaw && postsRaw.length > 800000) {
         const posts = JSON.parse(postsRaw);
         if (Array.isArray(posts)) {
-          const trimmed = posts.slice(0, 15).map((p, idx) => {
-            // Keep image on top 5 posts, replace large base64 on older ones with fallback image
-            if (idx >= 5 && p.imageSrc && p.imageSrc.startsWith('data:')) {
-              return {
-                ...p,
-                imageSrc: 'https://images.unsplash.com/photo-1508739773434-c26b3d09e071?w=600&auto=format&fit=crop&q=80',
-                originalImageSrc: undefined,
-                imageGallery: undefined,
-              };
-            }
-            return p;
-          });
+          const trimmed = posts.slice(0, 15);
           localStorage.setItem('metfa_community_posts_v2', JSON.stringify(trimmed));
         }
       }

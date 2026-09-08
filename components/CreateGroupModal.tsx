@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { Users, X, Check, Lock, Globe } from 'lucide-react';
 import { SocialGroup, UserProfile } from '../types/community';
 import { createSocialGroup } from '../utils/socialStore';
+import { GUEST_AVATAR } from '../services/authService';
 
 interface CreateGroupModalProps {
   isOpen: boolean;
@@ -20,7 +21,7 @@ export const CreateGroupModal: React.FC<CreateGroupModalProps> = ({
   const [category, setCategory] = useState('AI Vision & Restoration');
   const [privacy, setPrivacy] = useState<'public' | 'private'>('public');
   const [description, setDescription] = useState('');
-  const [avatar, setAvatar] = useState('https://images.unsplash.com/photo-1522071820081-009f0129c71c?w=200');
+  const [avatar, setAvatar] = useState(userProfile.avatar || GUEST_AVATAR);
 
   if (!isOpen) return null;
 
@@ -37,7 +38,7 @@ export const CreateGroupModal: React.FC<CreateGroupModalProps> = ({
       category,
       privacy,
       avatar,
-      coverImage: 'https://images.unsplash.com/photo-1518770660439-4636190af475?w=1000',
+      coverImage: '',
       rules: ['Respect fellow creators', 'Credit original prompt authors', 'No spam'],
     });
 

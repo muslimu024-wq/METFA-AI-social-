@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, Suspense, lazy } from 'react';
 import {
   Film,
   Heart,
@@ -33,9 +33,11 @@ import { getAudioTracks } from '../utils/audioStore';
 import { isContentOwner } from '../utils/communityStore';
 import { toggleSaveReel, isReelSaved } from '../utils/bookmarkStore';
 import { executeNativeShare, SharePayload } from '../utils/shareUtils';
-import SocialShareModal from './SocialShareModal';
-import ConfirmActionModal from './ConfirmActionModal';
-import AudioLicenseInfoModal from './AudioLicenseInfoModal';
+
+// Lazy-load action modals
+const SocialShareModal = lazy(() => import('./SocialShareModal'));
+const ConfirmActionModal = lazy(() => import('./ConfirmActionModal'));
+const AudioLicenseInfoModal = lazy(() => import('./AudioLicenseInfoModal'));
 
 interface ReelsFeedViewProps {
   reels: ReelHighlight[];
@@ -191,11 +193,32 @@ export const ReelsFeedView: React.FC<ReelsFeedViewProps> = ({
 
       {/* Vertical Reels Stack */}
       <div className="space-y-6">
-        {reels.map((reel) => (
-          <div
-            key={reel.id}
-            className="relative rounded-3xl overflow-hidden bg-black border border-gray-800 shadow-2xl aspect-[9/16] flex flex-col justify-between p-4"
-          >
+        {reels.length === 0 ? (
+          <div className="text-center py-16 px-6 bg-gray-900/60 rounded-3xl border border-gray-800 backdrop-blur-md flex flex-col items-center justify-center space-y-4 animate-fadeIn">
+            <div className="w-16 h-16 rounded-3xl bg-purple-950/60 text-purple-400 border border-purple-800/50 flex items-center justify-center shadow-inner">
+              <Film className="w-8 h-8 text-purple-400" />
+            </div>
+            <div className="space-y-1">
+              <h3 className="text-base font-bold text-white">No Reels yet</h3>
+              <p className="text-xs text-slate-400 max-w-xs mx-auto">
+                Be the first creator to share a 90-second AI reel with the Metfa community!
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={onCreateReelClick}
+              className="px-5 py-2.5 bg-gradient-to-r from-purple-600 to-teal-500 hover:from-purple-500 hover:to-teal-400 text-white text-xs font-bold rounded-2xl shadow-md transition transform active:scale-95 cursor-pointer inline-flex items-center gap-2"
+            >
+              <Plus className="w-4 h-4" />
+              <span>Create First Reel</span>
+            </button>
+          </div>
+        ) : (
+          reels.map((reel, idx) => (
+            <div
+              key={reel.id}
+              className="relative rounded-3xl overflow-hidden bg-black border border-gray-800 shadow-2xl aspect-[9/16] flex flex-col justify-between p-4"
+            >
             {/* Video Background */}
             <video
               src={reel.videoSrc}
@@ -321,6 +344,8 @@ export const ReelsFeedView: React.FC<ReelsFeedViewProps> = ({
                   <img
                     src={reel.author.avatar}
                     alt={reel.author.name}
+                    loading={idx === 0 ? undefined : 'lazy'}
+                    decoding="async"
                     className="w-8 h-8 rounded-full border border-white/20 object-cover"
                   />
                   <span className="font-bold text-white text-xs">@{reel.author.username}</span>
@@ -446,30 +471,32 @@ export const ReelsFeedView: React.FC<ReelsFeedViewProps> = ({
                     <Bookmark className={`w-5 h-5 ${reel.isSaved ? 'fill-current text-white' : 'text-amber-400'}`} />
                   </div>
                   <span className="text-[10px] font-bold text-gray-200">
-                    {reel.savesCount ?? (reel.id === 'reel_2' ? 245 : 128)}
+                    {reel.savesCount ?? 0}
                   </span>
                 </button>
               </div>
             </div>
           </div>
-        ))}
+        )))}
       </div>
 
-      <SocialShareModal
-        isOpen={isShareModalOpen}
-        onClose={() => {
-          setIsShareModalOpen(false);
-          setActiveSharePayload(null);
-          setSharingReelId(null);
-        }}
-        payload={activeSharePayload}
-        onSharePerformed={() => {
-          if (sharingReelId) {
-            const updated = incrementReelShares(sharingReelId);
-            onUpdateReels(updated);
-          }
-        }}
-      />
+      <Suspense fallback={null}>
+        <SocialShareModal
+          isOpen={isShareModalOpen}
+          onClose={() => {
+            setIsShareModalOpen(false);
+            setActiveSharePayload(null);
+            setSharingReelId(null);
+          }}
+          payload={activeSharePayload}
+          onSharePerformed={() => {
+            if (sharingReelId) {
+              const updated = incrementReelShares(sharingReelId);
+              onUpdateReels(updated);
+            }
+          }}
+        />
+      </Suspense>
 
       {/* Edit Reel Modal */}
       {editingReel && (
@@ -546,24 +573,28 @@ export const ReelsFeedView: React.FC<ReelsFeedViewProps> = ({
 
       {/* Confirmation Dialog for Reel Deletion */}
       {confirmModal && (
-        <ConfirmActionModal
-          isOpen={confirmModal.isOpen}
-          title={confirmModal.title}
-          message={confirmModal.message}
-          confirmLabel="Delete Reel"
-          isDestructive={true}
-          onConfirm={confirmModal.onConfirm}
-          onClose={() => setConfirmModal(null)}
-        />
+        <Suspense fallback={null}>
+          <ConfirmActionModal
+            isOpen={confirmModal.isOpen}
+            title={confirmModal.title}
+            message={confirmModal.message}
+            confirmLabel="Delete Reel"
+            isDestructive={true}
+            onConfirm={confirmModal.onConfirm}
+            onClose={() => setConfirmModal(null)}
+          />
+        </Suspense>
       )}
 
       {/* Audio License Certificate Modal */}
       {inspectingAudioTrack && (
-        <AudioLicenseInfoModal
-          isOpen={!!inspectingAudioTrack}
-          track={inspectingAudioTrack}
-          onClose={() => setInspectingAudioTrack(null)}
-        />
+        <Suspense fallback={null}>
+          <AudioLicenseInfoModal
+            isOpen={!!inspectingAudioTrack}
+            track={inspectingAudioTrack}
+            onClose={() => setInspectingAudioTrack(null)}
+          />
+        </Suspense>
       )}
 
       {/* Floating Action Toast Notification */}
