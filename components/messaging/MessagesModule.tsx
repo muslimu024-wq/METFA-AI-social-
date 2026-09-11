@@ -9,6 +9,7 @@ import {
 import { useAuth } from '../../context/AuthContext';
 import ConversationsListView from './ConversationsListView';
 import ChatScreen from './ChatScreen';
+import BrandTitle from '../BrandTitle';
 
 interface MessagesModuleProps {
   initialPartnerId?: string;
@@ -60,10 +61,56 @@ export const MessagesModule: React.FC<MessagesModuleProps> = ({
     loadConversations();
   }, [currentUserId]);
 
-  // 2. Handle direct jump from profile / external trigger (initialPartnerId)
+  // 2. Handle direct jump from profile / external trigger (initialConversationId or initialPartnerId)
   useEffect(() => {
     const handleInitialJump = async () => {
-      if (!initialPartnerId || !currentUserId || initialPartnerId === currentUserId) return;
+      if (!currentUserId) return;
+
+      // If initialConversationId is provided directly from Profile RPC, jump to it
+      if (initialConversationId) {
+        setIsLoading(true);
+        try {
+          const { conversations: updatedList } = await fetchUserConversations(currentUserId);
+          setConversations(updatedList);
+          const target = updatedList.find((c) => c.id === initialConversationId);
+          if (target) {
+            setSelectedConversation(target);
+          } else {
+            // Synthesize minimal conversation object if not yet in list
+            setSelectedConversation({
+              id: initialConversationId,
+              type: 'direct',
+              createdAt: new Date().toISOString(),
+              updatedAt: new Date().toISOString(),
+              lastMessageAt: new Date().toISOString(),
+              lastMessagePreview: 'Conversation started',
+              members: [
+                { conversationId: initialConversationId, userId: currentUserId, joinedAt: new Date().toISOString() },
+                ...(initialPartnerId
+                  ? [
+                      {
+                        conversationId: initialConversationId,
+                        userId: initialPartnerId,
+                        joinedAt: new Date().toISOString(),
+                        profile: initialPartnerProfile,
+                      },
+                    ]
+                  : []),
+              ],
+              unreadCount: 0,
+              partnerProfile: initialPartnerProfile,
+              partnerId: initialPartnerId,
+            });
+          }
+        } catch (err) {
+          console.warn('[MessagesModule] Error jumping to direct conversation:', err);
+        } finally {
+          setIsLoading(false);
+        }
+        return;
+      }
+
+      if (!initialPartnerId || initialPartnerId === currentUserId) return;
 
       setIsLoading(true);
       try {
@@ -110,10 +157,10 @@ export const MessagesModule: React.FC<MessagesModuleProps> = ({
       }
     };
 
-    if (initialPartnerId) {
+    if (initialConversationId || initialPartnerId) {
       handleInitialJump();
     }
-  }, [initialPartnerId, currentUserId]);
+  }, [initialConversationId, initialPartnerId, currentUserId]);
 
   // If user is guest/unauthenticated, present clear login invitation
   if (!isAuthenticated || !currentUserId) {
@@ -122,7 +169,7 @@ export const MessagesModule: React.FC<MessagesModuleProps> = ({
         <div className="w-16 h-16 rounded-2xl bg-teal-50 text-teal-600 flex items-center justify-center mb-4">
           <MessageSquare className="w-8 h-8" />
         </div>
-        <h3 className="text-xl font-bold text-slate-900">1-to-1 Direct Messaging</h3>
+        <BrandTitle service="Chat" size="lg" asHeading={true} className="mb-1" />
         <p className="text-sm text-slate-500 max-w-sm mt-1.5 leading-relaxed">
           Sign in to your METFA Social account to start instant real-time conversations, send voice
           notes, and share media directly with creators and friends.
@@ -133,7 +180,7 @@ export const MessagesModule: React.FC<MessagesModuleProps> = ({
           className="mt-5 px-6 py-2.5 rounded-xl bg-gradient-to-r from-teal-600 to-emerald-600 hover:from-teal-500 hover:to-emerald-500 text-white font-bold text-sm flex items-center gap-2 shadow-md active:scale-95 transition"
         >
           <LogIn className="w-4 h-4" />
-          <span>Sign In to Chat</span>
+          <span>Sign In to METFA Chat</span>
         </button>
       </div>
     );
@@ -182,7 +229,7 @@ export const MessagesModule: React.FC<MessagesModuleProps> = ({
             <div className="w-16 h-16 rounded-3xl bg-teal-100/60 text-teal-700 flex items-center justify-center mb-4 shadow-xs">
               <MessageSquare className="w-8 h-8" />
             </div>
-            <h3 className="text-lg font-bold text-slate-800">Your Messages</h3>
+            <BrandTitle service="Chat" size="base" asHeading={true} className="mb-1" />
             <p className="text-xs text-slate-500 max-w-sm mt-1 leading-relaxed">
               Select a conversation from the left to read and send direct messages, voice notes,
               photos, and videos.

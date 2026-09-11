@@ -479,6 +479,18 @@ export async function signInWithGoogleOAuth(params?: {
 
       if (error) {
         console.warn('[METFA AUTH] Google OAuth error:', error.message);
+        const lower = error.message.toLowerCase();
+        if (
+          lower.includes('unsupported provider') ||
+          lower.includes('provider is disabled') ||
+          lower.includes('provider not found') ||
+          lower.includes('not enabled')
+        ) {
+          return {
+            error:
+              'Google Sign-In is not enabled in your Supabase project. Please enable Google under Authentication → Providers in your Supabase dashboard, or sign in using Email.',
+          };
+        }
         return { error: error.message };
       }
       if (data?.url) {
@@ -494,7 +506,10 @@ export async function signInWithGoogleOAuth(params?: {
     }
   }
 
-  return { error: 'Supabase authentication is not configured.' };
+  return {
+    error:
+      'Supabase authentication is not configured. Please provide VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY in project settings.',
+  };
 }
 
 /**
@@ -557,12 +572,16 @@ export async function saveProfileAndEnterMetfa(params: {
           currentSbUser = phoneSignInData?.user;
           session = phoneSignInData?.session;
         } else if (phoneSignUpError) {
+          const lowerPhoneErr = phoneSignUpError.message.toLowerCase();
           return {
             user: GUEST_USER,
             profile: GUEST_PROFILE,
-            error: phoneSignUpError.message.includes('provider is disabled') || phoneSignUpError.message.includes('SMS')
-              ? 'Phone authentication requires SMS provider setup in Supabase. Please sign in with Email or Google.'
-              : phoneSignUpError.message,
+            error:
+              lowerPhoneErr.includes('provider is disabled') ||
+              lowerPhoneErr.includes('sms') ||
+              lowerPhoneErr.includes('unsupported provider')
+                ? 'Phone authentication requires an SMS provider configured in Supabase. Please sign in with Email or Google.'
+                : phoneSignUpError.message,
           };
         }
 
@@ -651,10 +670,21 @@ export async function saveProfileAndEnterMetfa(params: {
         session = signInData?.session;
       } else if (signUpError) {
         console.warn('[METFA AUTH] Sign-up failed:', signUpError.message);
+        const lower = signUpError.message.toLowerCase();
+        let formattedMsg = signUpError.message;
+        if (
+          lower.includes('email logins are disabled') ||
+          lower.includes('signups not allowed') ||
+          lower.includes('provider is disabled')
+        ) {
+          formattedMsg = 'Email sign-ups are currently disabled in your Supabase project settings.';
+        } else if (lower.includes('password should be at least')) {
+          formattedMsg = 'Password must be at least 6 characters.';
+        }
         return {
           user: GUEST_USER,
           profile: GUEST_PROFILE,
-          error: signUpError.message,
+          error: formattedMsg,
         };
       }
 
@@ -673,7 +703,7 @@ export async function saveProfileAndEnterMetfa(params: {
         return {
           user: GUEST_USER,
           profile: GUEST_PROFILE,
-          error: 'Account created! Please check your email to confirm your registration before signing in.',
+          error: 'Account created! Please check your email to confirm registration before signing in, or disable "Confirm email" in Supabase Auth settings.',
         };
       }
 
@@ -767,12 +797,18 @@ export async function signInExistingUser(params: {
         }
 
         if (signInError) {
+          const lowerPhoneErr = signInError.message.toLowerCase();
           return {
             user: GUEST_USER,
             profile: GUEST_PROFILE,
-            error: signInError.message.includes('Invalid login credentials')
-              ? 'Invalid phone number or password. If you are new to METFA Social, please switch to Sign Up.'
-              : signInError.message,
+            error:
+              lowerPhoneErr.includes('provider is disabled') ||
+              lowerPhoneErr.includes('sms') ||
+              lowerPhoneErr.includes('unsupported provider')
+                ? 'Phone authentication is not enabled in your Supabase project. Please configure an SMS provider in Supabase Authentication → Providers, or sign in using Email or Google.'
+                : lowerPhoneErr.includes('invalid login credentials')
+                ? 'Invalid phone number or password. If you are new to METFA Social, please switch to Sign Up.'
+                : signInError.message,
           };
         }
 
@@ -802,12 +838,19 @@ export async function signInExistingUser(params: {
         }
 
         if (signInError) {
+          const lowerEmailErr = signInError.message.toLowerCase();
+          let formattedErr = signInError.message;
+          if (lowerEmailErr.includes('email not confirmed')) {
+            formattedErr = 'Please confirm your email address before signing in, or disable "Confirm email" in Supabase Auth settings.';
+          } else if (lowerEmailErr.includes('provider is disabled') || lowerEmailErr.includes('email logins are disabled')) {
+            formattedErr = 'Email sign-in is disabled in your Supabase project settings.';
+          } else if (lowerEmailErr.includes('invalid login credentials')) {
+            formattedErr = 'Invalid email or password. If you are new to METFA Social, please switch to Sign Up.';
+          }
           return {
             user: GUEST_USER,
             profile: GUEST_PROFILE,
-            error: signInError.message.includes('Invalid login credentials')
-              ? 'Invalid email or password. If you are new to METFA Social, please switch to Sign Up.'
-              : signInError.message,
+            error: formattedErr,
           };
         }
 

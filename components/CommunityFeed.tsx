@@ -849,7 +849,7 @@ export const CommunityFeed: React.FC<CommunityFeedProps> = ({
             <div className="space-y-1">
               <h3 className="text-lg font-bold text-slate-800">No posts yet</h3>
               <p className="text-sm text-slate-500 max-w-sm mx-auto">
-                Be the first to share something with the Metfa community!
+                Be the first to share something with the METFA Social community!
               </p>
             </div>
             <button

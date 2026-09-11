@@ -12,6 +12,7 @@ import {
 } from 'lucide-react';
 import { Conversation } from '../../types/messaging';
 import { isSupabaseConfigured } from '../../services/supabaseClient';
+import BrandTitle from '../BrandTitle';
 
 interface ConversationsListViewProps {
   conversations: Conversation[];
@@ -69,7 +70,7 @@ export const ConversationsListView: React.FC<ConversationsListViewProps> = ({
             <div className="w-8 h-8 rounded-xl bg-teal-50 text-teal-600 flex items-center justify-center font-bold">
               <MessageSquare className="w-4 h-4" />
             </div>
-            <h3 className="font-bold text-slate-900 text-lg">Messages</h3>
+            <BrandTitle service="Chat" size="base" asHeading={true} />
           </div>
 
           {/* Realtime connection indicator */}

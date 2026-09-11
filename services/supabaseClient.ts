@@ -1,19 +1,39 @@
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import { UserProfile } from '../types/community';
 
-// Retrieve Supabase credentials safely from client environment variables
-const env = typeof import.meta !== 'undefined' ? ((import.meta as any).env || {}) : {};
-
-function validateSupabaseConfig(): { url: string; key: string } | null {
+// Retrieve Supabase credentials safely from client environment variables or runtime configuration
+export function validateSupabaseConfig(): { url: string; key: string } | null {
   try {
-    const rawUrl = typeof env.VITE_SUPABASE_URL === 'string' ? env.VITE_SUPABASE_URL.trim() : '';
-    const rawKey = typeof env.VITE_SUPABASE_ANON_KEY === 'string' ? env.VITE_SUPABASE_ANON_KEY.trim() : '';
+    const win = typeof window !== 'undefined' ? (window as any) : null;
+    const metaEnv = typeof import.meta !== 'undefined' ? ((import.meta as any).env || {}) : {};
+    const procEnv = typeof process !== 'undefined' ? ((process as any).env || {}) : {};
 
-    if (!rawUrl || !rawKey || rawKey.length < 10) {
+    const rawUrl =
+      (metaEnv && metaEnv.VITE_SUPABASE_URL) ||
+      (win && win.__ENV__ && win.__ENV__.VITE_SUPABASE_URL) ||
+      (win && win.__ENV__ && win.__ENV__.SUPABASE_URL) ||
+      (win && win.VITE_SUPABASE_URL) ||
+      (win && win.SUPABASE_URL) ||
+      (procEnv && (procEnv.VITE_SUPABASE_URL || procEnv.SUPABASE_URL)) ||
+      '';
+
+    const rawKey =
+      (metaEnv && metaEnv.VITE_SUPABASE_ANON_KEY) ||
+      (win && win.__ENV__ && win.__ENV__.VITE_SUPABASE_ANON_KEY) ||
+      (win && win.__ENV__ && win.__ENV__.SUPABASE_ANON_KEY) ||
+      (win && win.VITE_SUPABASE_ANON_KEY) ||
+      (win && win.SUPABASE_ANON_KEY) ||
+      (procEnv && (procEnv.VITE_SUPABASE_ANON_KEY || procEnv.SUPABASE_ANON_KEY)) ||
+      '';
+
+    const cleanUrl = typeof rawUrl === 'string' ? rawUrl.trim() : '';
+    const cleanKey = typeof rawKey === 'string' ? rawKey.trim() : '';
+
+    if (!cleanUrl || !cleanKey || cleanKey.length < 10) {
       return null;
     }
 
-    let normalizedUrl = rawUrl;
+    let normalizedUrl = cleanUrl;
     if (!/^https?:\/\//i.test(normalizedUrl)) {
       normalizedUrl = `https://${normalizedUrl}`;
     }
@@ -23,26 +43,25 @@ function validateSupabaseConfig(): { url: string; key: string } | null {
       return null;
     }
 
-    return { url: normalizedUrl, key: rawKey };
+    return { url: normalizedUrl, key: cleanKey };
   } catch {
     return null;
   }
 }
 
-const activeConfig = validateSupabaseConfig();
-
 export const isSupabaseConfigured = (): boolean => {
-  return activeConfig !== null;
+  return validateSupabaseConfig() !== null;
 };
 
 // Safe dummy fallback client to avoid unhandled crashes when Supabase is not configured
 const createFallbackClient = (): SupabaseClient => {
   const dummyAuth = {
     getSession: async () => ({ data: { session: null }, error: null }),
+    getUser: async () => ({ data: { user: null }, error: null }),
     onAuthStateChange: () => ({ data: { subscription: { unsubscribe: () => {} } } }),
-    signInWithOAuth: async () => ({ data: { url: null }, error: { message: 'Supabase not configured' } }),
-    signUp: async () => ({ data: { user: null, session: null }, error: { message: 'Supabase not configured' } }),
-    signInWithPassword: async () => ({ data: { user: null, session: null }, error: { message: 'Supabase not configured' } }),
+    signInWithOAuth: async () => ({ data: { url: null }, error: { message: 'Supabase authentication is not configured.' } }),
+    signUp: async () => ({ data: { user: null, session: null }, error: { message: 'Supabase authentication is not configured.' } }),
+    signInWithPassword: async () => ({ data: { user: null, session: null }, error: { message: 'Supabase authentication is not configured.' } }),
     signOut: async () => ({ error: null }),
   };
 
@@ -55,6 +74,8 @@ const createFallbackClient = (): SupabaseClient => {
       upsert: () => queryObj,
       eq: () => queryObj,
       neq: () => queryObj,
+      order: () => queryObj,
+      limit: () => queryObj,
       single: async () => ({ data: null, error: null }),
       maybeSingle: async () => ({ data: null, error: null }),
       then: (resolve: any) => Promise.resolve({ data: null, error: null }).then(resolve),
@@ -62,18 +83,44 @@ const createFallbackClient = (): SupabaseClient => {
     return queryObj;
   };
 
+  const dummyStorage = {
+    from: () => ({
+      upload: async () => ({ data: null, error: new Error('Supabase storage not configured') }),
+      createSignedUrl: async () => ({ data: null, error: new Error('Supabase storage not configured') }),
+      getPublicUrl: () => ({ data: { publicUrl: '' } }),
+    }),
+  };
+
   return {
     auth: dummyAuth as any,
     from: () => createDummyQuery() as any,
+    rpc: async () => ({ data: null, error: new Error('Supabase RPC not configured') }),
+    storage: dummyStorage as any,
   } as unknown as SupabaseClient;
 };
 
-// Singleton Supabase Client with persistent session handling
-let clientInstance: SupabaseClient;
+// Cached client instances
+let clientInstance: SupabaseClient | null = null;
+let lastUsedConfig: { url: string; key: string } | null = null;
+const fallbackClient = createFallbackClient();
 
-if (activeConfig) {
+export function getActiveSupabaseClient(): SupabaseClient {
+  const config = validateSupabaseConfig();
+  if (!config) {
+    return fallbackClient;
+  }
+
+  if (
+    clientInstance &&
+    lastUsedConfig &&
+    lastUsedConfig.url === config.url &&
+    lastUsedConfig.key === config.key
+  ) {
+    return clientInstance;
+  }
+
   try {
-    clientInstance = createClient(activeConfig.url, activeConfig.key, {
+    clientInstance = createClient(config.url, config.key, {
       auth: {
         persistSession: true,
         autoRefreshToken: true,
@@ -81,15 +128,25 @@ if (activeConfig) {
         storage: typeof window !== 'undefined' ? window.localStorage : undefined,
       },
     });
+    lastUsedConfig = config;
+    return clientInstance;
   } catch (e) {
     console.warn('[Supabase] Initialization failed, using fallback client:', e);
-    clientInstance = createFallbackClient();
+    return fallbackClient;
   }
-} else {
-  clientInstance = createFallbackClient();
 }
 
-export const supabase: SupabaseClient = clientInstance;
+// Proxied singleton Supabase Client allowing transparent dynamic upgrade
+export const supabase: SupabaseClient = new Proxy({} as SupabaseClient, {
+  get(_target, prop) {
+    const active = getActiveSupabaseClient();
+    const val = (active as any)[prop];
+    if (typeof val === 'function') {
+      return val.bind(active);
+    }
+    return val;
+  },
+});
 
 export interface SupabaseProfileRow {
   id: string; // auth.users.id

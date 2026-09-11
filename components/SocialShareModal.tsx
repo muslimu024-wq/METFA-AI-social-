@@ -67,8 +67,8 @@ export const SocialShareModal: React.FC<SocialShareModalProps> = ({
     if (typeof navigator !== 'undefined' && navigator.share) {
       try {
         await navigator.share({
-          title: payload.title || 'Metfa Social',
-          text: payload.text || 'Check this out on Metfa Social!',
+          title: payload.title || 'METFA Social',
+          text: payload.text || 'Check this out on METFA Social!',
           url: currentUrl,
         });
         onSharePerformed?.();
@@ -205,7 +205,7 @@ export const SocialShareModal: React.FC<SocialShareModalProps> = ({
               {payload.title}
             </h4>
             <p className="text-[11px] text-gray-400 line-clamp-2 mt-0.5">
-              {payload.text || 'Created with Metfa Social'}
+              {payload.text || 'Created with METFA Social'}
             </p>
             {payload.authorUsername && (
               <span className="inline-block text-[10px] text-teal-400 font-semibold mt-1">

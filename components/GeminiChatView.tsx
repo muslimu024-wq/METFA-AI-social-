@@ -33,6 +33,7 @@ import ExportPresetModal from './ExportPresetModal';
 import CreditsBadge from './CreditsBadge';
 import ConfirmActionModal from './ConfirmActionModal';
 import { TransformationProgressSkeleton } from '../features/ai-studio/components/TransformationProgressSkeleton';
+import BrandTitle from './BrandTitle';
 
 interface GeminiChatViewProps {
   messages: ChatMessage[];
@@ -226,6 +227,18 @@ export const GeminiChatView: React.FC<GeminiChatViewProps> = ({
       {/* Messages Scroll Area - Clean, Full Width & Spacious Readability (Book Reading Theme) */}
       <div className="flex-1 overflow-y-auto px-1.5 sm:px-3 md:px-4 py-2.5 sm:py-4 space-y-3 sm:space-y-4 scrollbar-thin">
         <div className="w-[98%] sm:w-[96%] max-w-6xl xl:max-w-7xl mx-auto space-y-3 sm:space-y-4">
+          {messages.length === 0 && (
+            <div className="flex flex-col items-center justify-center py-16 sm:py-24 px-4 text-center select-none animate-fadeIn my-auto">
+              <div className="w-14 h-14 rounded-2xl bg-gradient-to-tr from-purple-600 to-teal-500 flex items-center justify-center text-white shadow-lg shadow-purple-500/20 mb-4">
+                <Bot className="w-7 h-7" />
+              </div>
+              <BrandTitle service="AI" size="xl" asHeading={true} className="mb-2" />
+              <p className="text-xs sm:text-sm text-slate-500 max-w-md leading-relaxed">
+                Next-generation multimodal intelligence, scene transformation, and creative visual studio.
+              </p>
+            </div>
+          )}
+
           {messages.map((msg, index) => {
             const isUser = msg.role === 'user';
             const isError = !!msg.isError;
@@ -343,8 +356,8 @@ export const GeminiChatView: React.FC<GeminiChatViewProps> = ({
                               handleShareContent({
                                 id: msg.id,
                                 type: 'artwork',
-                                title: 'AI Artwork created with Metfa Studio',
-                                text: msg.content ? `Check out this AI visual creation: ${msg.content.slice(0, 120)}...` : 'AI Visual Artwork rendered on Metfa Social',
+                                title: 'AI Artwork created with METFA AI',
+                                text: msg.content ? `Check out this AI visual creation: ${msg.content.slice(0, 120)}...` : 'AI Visual Artwork rendered on METFA AI',
                                 url: window.location.href,
                                 imageSrc: `data:image/png;base64,${msg.generatedImageB64}`,
                               })
@@ -362,7 +375,7 @@ export const GeminiChatView: React.FC<GeminiChatViewProps> = ({
                             onClick={() => {
                               setExportPresetData({
                                 imageSrc: `data:image/png;base64,${msg.generatedImageB64}`,
-                                prompt: msg.content || 'AI Visual creation from Metfa Social',
+                                prompt: msg.content || 'AI Visual creation from METFA AI',
                               });
                             }}
                             className="px-3 py-1.5 text-xs font-bold bg-pink-50 hover:bg-pink-100 border border-pink-200 text-pink-700 rounded-xl flex items-center gap-1.5 transition active:scale-95 shadow-xs"
@@ -378,12 +391,12 @@ export const GeminiChatView: React.FC<GeminiChatViewProps> = ({
                             id={`share-art-feed-${msg.id}`}
                             onClick={() => {
                               onShareToFeed({
-                                prompt: 'AI scene generated with Metfa Studio',
+                                prompt: 'AI scene generated with METFA AI',
                                 imageSrc: `data:image/png;base64,${msg.generatedImageB64}`,
                               });
                             }}
                             className="px-3 py-1.5 text-xs font-bold bg-teal-50 hover:bg-teal-100 border border-teal-200 text-teal-700 rounded-xl flex items-center gap-1.5 transition active:scale-95 shadow-xs"
-                            title="Share artwork to Metfa Community Feed"
+                            title="Share artwork to METFA Social Feed"
                           >
                             <Sparkles className="w-3.5 h-3.5 text-teal-600" />
                             <span>Post to Feed</span>
@@ -474,7 +487,7 @@ export const GeminiChatView: React.FC<GeminiChatViewProps> = ({
                               handleShareContent({
                                 id: msg.id,
                                 type: 'general',
-                                title: 'Metfa Social Insight',
+                                title: 'METFA Social Insight',
                                 text: msg.content.length > 250 ? `${msg.content.slice(0, 250)}...` : msg.content,
                                 url: window.location.href,
                               })

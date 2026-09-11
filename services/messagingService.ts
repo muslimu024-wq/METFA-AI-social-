@@ -130,10 +130,25 @@ export async function getOrCreateDirectConversation(
       // Use canonical SECURITY DEFINER stored procedure.
       // This enforces: caller = auth.uid(), caller != partner, exactly 2 members created,
       // and guarantees duplicate-prevention via pg_advisory_xact_lock & direct_pair_key unique index.
-      const { data: rpcConvId, error: rpcError } = await supabase.rpc(
+      let { data: rpcConvId, error: rpcError } = await supabase.rpc(
         'get_or_create_direct_conversation',
         { partner_id: partnerId }
       );
+
+      if (
+        rpcError &&
+        (rpcError.message?.includes('partner_id') ||
+          rpcError.message?.includes('target_user_id') ||
+          rpcError.code === '42883')
+      ) {
+        const altRes = await supabase.rpc('get_or_create_direct_conversation', {
+          target_user_id: partnerId,
+        });
+        if (!altRes.error && altRes.data) {
+          rpcConvId = altRes.data;
+          rpcError = null;
+        }
+      }
 
       if (!rpcError && rpcConvId) {
         return { conversationId: String(rpcConvId) };

@@ -315,10 +315,10 @@ export const GlobalSearchBar: React.FC<GlobalSearchBarProps> = ({
           setIsOpen(true);
           setTimeout(() => inputRef.current?.focus(), 50);
         }}
-        className="p-2 rounded-xl text-gray-300 hover:text-white bg-gray-900 border border-gray-800 hover:border-purple-500/50 transition cursor-pointer flex items-center justify-center shrink-0"
+        className="p-2 rounded-xl text-slate-700 bg-white hover:bg-slate-50 border border-slate-200 shadow-xs hover:border-purple-300 transition cursor-pointer flex items-center justify-center shrink-0"
         title="Search Posts, Prompts & Groups (Cmd+K)"
       >
-        <Search className="w-5 h-5 text-purple-300" />
+        <Search className="w-5 h-5 text-purple-600" />
       </button>
 
       {/* Full-featured Global Search Modal Dialog */}

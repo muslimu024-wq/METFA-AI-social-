@@ -28,6 +28,7 @@ import { getPages, getGroups } from '../utils/socialStore';
 import { useAuth } from '../context/AuthContext';
 import { getSellmeShopUrl } from '../services/marketplaceService';
 import GlobalSearchBar from './GlobalSearchBar';
+import BrandTitle, { BrandService } from './BrandTitle';
 
 // Lazy-load dropdown only needed when on AI tools tab
 const AISettingsDropdown = lazy(() => import('./AISettingsDropdown'));
@@ -92,26 +93,34 @@ export const Header: React.FC<HeaderProps> = ({
               <Menu className="w-5 h-5" />
             </button>
 
-            {/* [App Logo] and [Full Title: "metfa Social"] */}
-            <div
-              onClick={() => onNavigateTab('feed')}
-              className="flex items-center gap-2.5 cursor-pointer group select-none shrink-0"
-              title="Metfa Social - Home Feed"
-            >
-              <img
-                src="/logo.png"
-                alt="Metfa Social Official Logo"
-                decoding="async"
-                className="w-9 h-9 min-w-[36px] max-w-[36px] min-h-[36px] max-h-[36px] rounded-2xl shadow-xs group-hover:scale-105 transition-transform shrink-0 object-cover block pointer-events-none"
-                onError={(e) => {
-                  (e.currentTarget as HTMLImageElement).src = '/metfa-emblem.png';
-                }}
-              />
-              <h1 className="text-base sm:text-lg font-black tracking-tight text-slate-900 group-hover:text-blue-600 transition whitespace-nowrap flex items-baseline gap-1">
-                <span className="font-black text-slate-900 text-base sm:text-lg tracking-tight">metfa</span>
-                <span className="bg-gradient-to-r from-blue-600 via-indigo-600 to-teal-600 bg-clip-text text-transparent font-bold text-xs sm:text-sm">Social</span>
-              </h1>
-            </div>
+            {/* [App Logo] and [Master Brand Title: METFA Social / METFA AI / METFA Chat] */}
+            {(() => {
+              const activeService: BrandService =
+                activeTab === 'chat' ? 'AI' : activeTab === 'messages' ? 'Chat' : 'Social';
+              return (
+                <div
+                  onClick={() => onNavigateTab('feed')}
+                  className="flex items-center gap-1.5 cursor-pointer group select-none shrink-0"
+                  title={`METFA ${activeService} - Home Feed`}
+                >
+                  <img
+                    src="/logo.png"
+                    alt="METFA Official Logo"
+                    decoding="async"
+                    className="w-9 h-9 min-w-[36px] max-w-[36px] min-h-[36px] max-h-[36px] rounded-2xl shadow-xs group-hover:scale-105 transition-transform shrink-0 object-cover block pointer-events-none"
+                    onError={(e) => {
+                      (e.currentTarget as HTMLImageElement).src = '/metfa-emblem.png';
+                    }}
+                  />
+                  <BrandTitle
+                    service={activeService}
+                    size="base"
+                    asHeading={true}
+                    className="group-hover:opacity-90 transition-opacity"
+                  />
+                </div>
+              );
+            })()}
           </div>
 
           {/* Right: [Search Icon] -> [Sellme Marketplace] -> [AI Settings Menu (Conditional: AI Tools Only)] -> [User Profile Avatar] */}
@@ -127,7 +136,7 @@ export const Header: React.FC<HeaderProps> = ({
                 const sellmeHomeUrl = getSellmeShopUrl();
                 window.open(sellmeHomeUrl, '_blank', 'noopener,noreferrer');
               }}
-              className="w-9 h-9 sm:w-10 sm:h-10 rounded-2xl flex items-center justify-center transition shrink-0 active:scale-95 shadow-xs group cursor-pointer border bg-slate-100 hover:bg-slate-200 border-slate-200 text-slate-700 hover:text-purple-600"
+              className="w-9 h-9 sm:w-10 sm:h-10 rounded-2xl flex items-center justify-center transition shrink-0 active:scale-95 shadow-xs group cursor-pointer border bg-white hover:bg-slate-50 border-slate-200 text-slate-700 hover:text-purple-600"
               title="Sellme App (shop.metfaai.com)"
               aria-label="Sellme App Store"
             >
@@ -140,10 +149,10 @@ export const Header: React.FC<HeaderProps> = ({
                 type="button"
                 id="header-messages-btn"
                 onClick={() => handleNavigate('messages')}
-                className={`w-9 h-9 sm:w-10 sm:h-10 rounded-2xl flex items-center justify-center transition shrink-0 active:scale-95 shadow-xs group cursor-pointer border ${
+                className={`w-9 h-9 sm:w-10 sm:h-10 rounded-2xl flex items-center justify-center transition shrink-0 active:scale-95 shadow-xs group cursor-pointer border bg-white ${
                   activeTab === 'messages'
-                    ? 'bg-teal-50 border-teal-300 text-teal-700'
-                    : 'bg-slate-100 hover:bg-slate-200 border-slate-200 text-slate-700 hover:text-teal-600'
+                    ? 'border-teal-400 text-teal-700'
+                    : 'hover:bg-slate-50 border-slate-200 text-slate-700 hover:text-teal-600'
                 }`}
                 title="Direct Messages"
                 aria-label="Messages"
@@ -211,7 +220,7 @@ export const Header: React.FC<HeaderProps> = ({
                   />
                   <div>
                     <h3 className="text-sm font-black text-slate-900">Menu & Shortcuts</h3>
-                    <p className="text-[10px] text-slate-500">Metfa Social & AI Ecosystem</p>
+                    <p className="text-[10px] text-slate-500">METFA Social & AI Ecosystem</p>
                   </div>
                 </div>
                 <button
@@ -272,8 +281,10 @@ export const Header: React.FC<HeaderProps> = ({
                       : 'text-slate-700 hover:bg-slate-100'
                   }`}
                 >
-                  <Compass className="w-4 h-4 text-purple-600" />
-                  <span>Community Feed</span>
+                  <Compass className={`w-4 h-4 ${activeTab === 'feed' ? 'text-white' : 'text-purple-600'}`} />
+                  <span className="flex items-center">
+                    <BrandTitle service="Social" size="sm" theme={activeTab === 'feed' ? 'dark' : 'light'} />
+                  </span>
                 </button>
 
                 <button
@@ -285,8 +296,10 @@ export const Header: React.FC<HeaderProps> = ({
                       : 'text-slate-700 hover:bg-slate-100'
                   }`}
                 >
-                  <Sparkles className="w-4 h-4 text-teal-600" />
-                  <span>AI Tools & Studio</span>
+                  <Sparkles className={`w-4 h-4 ${activeTab === 'chat' ? 'text-white' : 'text-teal-600'}`} />
+                  <span className="flex items-center">
+                    <BrandTitle service="AI" size="sm" theme={activeTab === 'chat' ? 'dark' : 'light'} />
+                  </span>
                 </button>
 
                 <button
@@ -311,8 +324,10 @@ export const Header: React.FC<HeaderProps> = ({
                       : 'text-slate-700 hover:bg-slate-100'
                   }`}
                 >
-                  <MessageSquare className="w-4 h-4 text-teal-600" />
-                  <span>Direct Messages</span>
+                  <MessageSquare className={`w-4 h-4 ${activeTab === 'messages' ? 'text-white' : 'text-teal-600'}`} />
+                  <span className="flex items-center">
+                    <BrandTitle service="Chat" size="sm" theme={activeTab === 'messages' ? 'dark' : 'light'} />
+                  </span>
                 </button>
 
                 <button
@@ -540,7 +555,7 @@ export const Header: React.FC<HeaderProps> = ({
                 >
                   <div className="flex items-center gap-2">
                     <Download className="w-4 h-4 text-teal-600 group-hover:translate-y-0.5 transition-transform" />
-                    <span className="font-bold">Install Metfa App</span>
+                    <span className="font-bold">Install METFA Social App</span>
                   </div>
                   <span className="text-[10px] bg-teal-200 text-teal-900 px-1.5 py-0.5 rounded-full font-semibold">PWA</span>
                 </button>
@@ -550,12 +565,12 @@ export const Header: React.FC<HeaderProps> = ({
               {isStandalone && (
                 <div className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-slate-100 border border-slate-200 text-[11px] text-teal-800">
                   <CheckCircle2 className="w-3.5 h-3.5 text-teal-600 shrink-0" />
-                  <span>Metfa Social Desktop/Mobile App (Installed)</span>
+                  <span>METFA Social Desktop/Mobile App (Installed)</span>
                 </div>
               )}
 
               <div className="text-[10px] text-slate-400 px-3">
-                Metfa Social v2.6 • Unified Creator & AI Ecosystem
+                METFA Social v2.6 • Unified Creator & AI Ecosystem
               </div>
             </div>
           </div>

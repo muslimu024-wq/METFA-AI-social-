@@ -812,6 +812,17 @@ ${METFA_AI_SAFETY_SYSTEM_INSTRUCTION}`;
     });
   });
 
+  // Client runtime configuration endpoint (safely provides public non-sensitive Supabase client credentials)
+  app.get("/api/config", (_req, res) => {
+    const supabaseUrl = process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL || "";
+    const supabaseAnonKey = process.env.VITE_SUPABASE_ANON_KEY || process.env.SUPABASE_ANON_KEY || "";
+    res.json({
+      supabaseUrl,
+      supabaseAnonKey,
+      hasSupabase: !!(supabaseUrl && supabaseAnonKey && supabaseAnonKey.length > 10),
+    });
+  });
+
   // =========================================================================
   // PERSISTENT MEDIA STORAGE & COMMUNITY POSTS PERSISTENCE API
   // Ensures uploaded videos and images are permanently saved to disk
@@ -2791,6 +2802,10 @@ Sitemap: ${baseUrl}/sitemap.xml
       try {
         const indexPath = path.resolve(process.cwd(), "index.html");
         let template = fs.readFileSync(indexPath, "utf-8");
+        const supabaseUrl = process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL || "";
+        const supabaseAnonKey = process.env.VITE_SUPABASE_ANON_KEY || process.env.SUPABASE_ANON_KEY || "";
+        const envSnippet = `<script>window.__ENV__=Object.assign(window.__ENV__||{},{VITE_SUPABASE_URL:${JSON.stringify(supabaseUrl)},VITE_SUPABASE_ANON_KEY:${JSON.stringify(supabaseAnonKey)}});</script>`;
+        template = template.replace("<head>", `<head>${envSnippet}`);
         template = await vite.transformIndexHtml(url, template);
         res.status(200).set({ "Content-Type": "text/html" }).end(template);
       } catch (e) {
@@ -2802,7 +2817,17 @@ Sitemap: ${baseUrl}/sitemap.xml
     const distPath = path.join(process.cwd(), "dist");
     app.use(express.static(distPath));
     app.get("*", (_req, res) => {
-      res.sendFile(path.join(distPath, "index.html"));
+      const indexFile = path.join(distPath, "index.html");
+      if (fs.existsSync(indexFile)) {
+        let content = fs.readFileSync(indexFile, "utf-8");
+        const supabaseUrl = process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL || "";
+        const supabaseAnonKey = process.env.VITE_SUPABASE_ANON_KEY || process.env.SUPABASE_ANON_KEY || "";
+        const envSnippet = `<script>window.__ENV__=Object.assign(window.__ENV__||{},{VITE_SUPABASE_URL:${JSON.stringify(supabaseUrl)},VITE_SUPABASE_ANON_KEY:${JSON.stringify(supabaseAnonKey)}});</script>`;
+        content = content.replace("<head>", `<head>${envSnippet}`);
+        res.status(200).set({ "Content-Type": "text/html" }).send(content);
+      } else {
+        res.sendFile(indexFile);
+      }
     });
   }
 

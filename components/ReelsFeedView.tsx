@@ -201,7 +201,7 @@ export const ReelsFeedView: React.FC<ReelsFeedViewProps> = ({
             <div className="space-y-1">
               <h3 className="text-base font-bold text-white">No Reels yet</h3>
               <p className="text-xs text-slate-400 max-w-xs mx-auto">
-                Be the first creator to share a 90-second AI reel with the Metfa community!
+                Be the first creator to share a 90-second AI reel with the METFA Social community!
               </p>
             </div>
             <button

@@ -31,6 +31,7 @@ import {
 } from '../../services/geminiService';
 import { addNotification } from '../../utils/notificationStore';
 import { useAuth } from '../../context/AuthContext';
+import BrandTitle from '../../components/BrandTitle';
 
 export interface AIStudioProps {
   onShareToSocialFeed?: (payload: { prompt: string; imageSrc: string; stylePreset?: string }) => void;
@@ -436,10 +437,10 @@ export const AIStudioModule: React.FC<AIStudioProps> = ({
 
         addNotification({
           type: 'system',
-          title: 'Metfa AI Studio Creation',
+          title: 'METFA AI Creation',
           message: 'Generated your visual creation in high definition!',
           actor: {
-            name: 'Metfa AI Studio',
+            name: 'METFA AI',
             username: 'studio.ai',
             avatar: '/logo.png',
           },
@@ -795,6 +796,13 @@ export const AIStudioModule: React.FC<AIStudioProps> = ({
 
   return (
     <div className="w-full h-full flex flex-col relative overflow-hidden bg-[#04060C]">
+      {/* Top Left Floating Brand Identity: METFA AI */}
+      <div className="absolute top-3.5 left-3.5 sm:top-4 sm:left-4 z-20 hidden sm:flex items-center pointer-events-none">
+        <div className="flex items-center px-3 py-1.5 rounded-2xl bg-slate-900/90 border border-purple-500/30 backdrop-blur-md shadow-xl">
+          <BrandTitle service="AI" size="sm" theme="dark" asHeading={true} />
+        </div>
+      </div>
+
       {/* Top Floating Action Controls: Undo, Download & Recent Visuals */}
       <div className="absolute top-3.5 right-3.5 sm:top-4 sm:right-4 z-20 flex items-center gap-2">
         {/* Undo Transformation Button */}

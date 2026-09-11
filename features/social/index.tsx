@@ -1,4 +1,4 @@
-import React, { useState, useEffect, Suspense, lazy } from 'react';
+import React, { useState, useEffect, useMemo, Suspense, lazy } from 'react';
 import CommunityFeed from '../../components/CommunityFeed';
 import ReelsFeedView from '../../components/ReelsFeedView';
 import CreatePostModal from '../../components/CreatePostModal';
@@ -47,6 +47,9 @@ export interface SocialEcosystemProps {
   onCloseShareModal?: () => void;
   activeChatPartnerId?: string | null;
   activeChatPartnerProfile?: UserProfile | null;
+  activeConversationId?: string | null;
+  viewedProfileUserId?: string | null;
+  onViewProfile?: (targetUserId: string) => void;
 }
 
 export const SocialEcosystemModule: React.FC<SocialEcosystemProps> = ({
@@ -60,6 +63,9 @@ export const SocialEcosystemModule: React.FC<SocialEcosystemProps> = ({
   onCloseShareModal,
   activeChatPartnerId,
   activeChatPartnerProfile,
+  activeConversationId,
+  viewedProfileUserId,
+  onViewProfile,
 }) => {
   const { user, userProfile, updateProfile, isSupabaseConnected } = useAuth();
 
@@ -286,10 +292,19 @@ export const SocialEcosystemModule: React.FC<SocialEcosystemProps> = ({
         <Suspense fallback={<div className="flex-1 flex items-center justify-center p-8 text-slate-400 text-xs">Loading Profile...</div>}>
           <ProfileView
             userProfile={userProfile}
+            viewedProfileUserId={viewedProfileUserId}
             onUpdateProfile={updateProfile}
             creditsData={creditsData}
-            userPosts={posts.filter((p) => isContentOwner(p.author, userProfile, user, p.postingIdentity, p.id))}
-            userReels={reels.filter((r) => r.author.id === userProfile.id)}
+            userPosts={
+              viewedProfileUserId && viewedProfileUserId !== user?.id && viewedProfileUserId !== userProfile?.id
+                ? posts.filter((p) => p.author?.id === viewedProfileUserId)
+                : posts.filter((p) => isContentOwner(p.author, userProfile, user, p.postingIdentity, p.id))
+            }
+            userReels={
+              viewedProfileUserId && viewedProfileUserId !== user?.id && viewedProfileUserId !== userProfile?.id
+                ? reels.filter((r) => r.author?.id === viewedProfileUserId)
+                : reels.filter((r) => r.author.id === userProfile.id)
+            }
             allPosts={posts}
             allReels={reels}
             onUpdatePosts={(updated) => {
@@ -304,10 +319,10 @@ export const SocialEcosystemModule: React.FC<SocialEcosystemProps> = ({
             onOpenAuthModal={onOpenAuthModal}
             onCreatePageClick={() => setIsCreatePageOpen(true)}
             onCreateGroupClick={() => setIsCreateGroupOpen(true)}
-            onOpenChatWithUser={(targetId, targetProfile) => {
+            onOpenChatWithUser={(targetId, targetProfile, conversationId) => {
               window.dispatchEvent(
                 new CustomEvent('metfa_open_chat', {
-                  detail: { partnerId: targetId, partnerProfile: targetProfile },
+                  detail: { partnerId: targetId, partnerProfile: targetProfile, conversationId },
                 })
               );
             }}
@@ -321,8 +336,17 @@ export const SocialEcosystemModule: React.FC<SocialEcosystemProps> = ({
             <MessagesModule
               initialPartnerId={activeChatPartnerId || undefined}
               initialPartnerProfile={activeChatPartnerProfile || undefined}
+              initialConversationId={activeConversationId || undefined}
               onViewProfile={(targetId) => {
-                onNavigateTab('profile');
+                if (onViewProfile) {
+                  onViewProfile(targetId);
+                } else {
+                  window.dispatchEvent(
+                    new CustomEvent('metfa_view_profile', {
+                      detail: { userId: targetId },
+                    })
+                  );
+                }
               }}
               onExploreProfiles={() => onNavigateTab('feed')}
             />

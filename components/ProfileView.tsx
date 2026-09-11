@@ -32,14 +32,17 @@ import {
   MessageCircle,
   MessageSquare,
   Play,
+  Loader2,
 } from 'lucide-react';
 import { UserProfile, CommunityPost, ReelHighlight } from '../types/community';
 import { DailyCreditsData } from '../utils/creditManager';
 import { getPages, getGroups } from '../utils/socialStore';
 import { useAuth } from '../context/AuthContext';
+import { supabase } from '../services/supabaseClient';
 import { fileToBase64, saveMediaItem } from '../utils/mediaStorage';
 import { generateCustomAIAvatar } from '../services/aiAssistantService';
 import { compressImageDataUrl } from '../utils/storageUtils';
+import { fetchSupabaseProfile } from '../services/authService';
 import {
   getSavedPostsList,
   getSavedReelsList,
@@ -49,6 +52,7 @@ import {
 
 interface ProfileViewProps {
   userProfile: UserProfile;
+  viewedProfileUserId?: string | null;
   onUpdateProfile: (profile: UserProfile) => void;
   creditsData: DailyCreditsData;
   userPosts: CommunityPost[];
@@ -61,7 +65,7 @@ interface ProfileViewProps {
   onOpenAuthModal?: () => void;
   onCreatePageClick?: () => void;
   onCreateGroupClick?: () => void;
-  onOpenChatWithUser?: (userId: string, userProfile?: UserProfile) => void;
+  onOpenChatWithUser?: (userId: string, userProfile?: UserProfile, conversationId?: string) => void;
 }
 
 const AVATAR_STYLES = [
@@ -75,6 +79,7 @@ const AVATAR_STYLES = [
 
 export const ProfileView: React.FC<ProfileViewProps> = ({
   userProfile,
+  viewedProfileUserId,
   onUpdateProfile,
   creditsData,
   userPosts,
@@ -89,7 +94,45 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
   onCreateGroupClick,
   onOpenChatWithUser,
 }) => {
-  const { user: authUser, activeIdentity, updateProfile, switchIdentity } = useAuth();
+  const { user: authUser, activeIdentity, updateProfile, switchIdentity, isAuthenticated } = useAuth();
+  
+  // Distinguish between viewing authenticated user's own profile vs another user's profile
+  const isOwnProfile = !viewedProfileUserId || viewedProfileUserId === authUser?.id || viewedProfileUserId === userProfile.id;
+
+  // Real-time Supabase profile fetch for viewed profile user when targeting another member
+  const [fetchedProfile, setFetchedProfile] = useState<UserProfile | null>(null);
+  const [isStartingChat, setIsStartingChat] = useState(false);
+
+  useEffect(() => {
+    let isMounted = true;
+    if (!isOwnProfile && viewedProfileUserId) {
+      fetchSupabaseProfile(viewedProfileUserId).then((prof) => {
+        if (isMounted && prof) {
+          setFetchedProfile(prof);
+        }
+      });
+    } else {
+      setFetchedProfile(null);
+    }
+    return () => {
+      isMounted = false;
+    };
+  }, [isOwnProfile, viewedProfileUserId]);
+
+  const displayProfile: UserProfile = isOwnProfile
+    ? userProfile
+    : (fetchedProfile || {
+        ...userProfile,
+        id: viewedProfileUserId || userProfile.id,
+        stats: {
+          postsCount: userPosts.length,
+          followersCount: 0,
+          followingCount: 0,
+          totalLikes: 0,
+          reelsCount: userReels.length,
+        },
+      });
+
   const [isEditing, setIsEditing] = useState(false);
   const [isSwitcherOpen, setIsSwitcherOpen] = useState(false);
   const [name, setName] = useState(userProfile.name);
@@ -102,6 +145,17 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
   const [savedPosts, setSavedPosts] = useState<CommunityPost[]>(() => getSavedPostsList(allPosts));
   const [savedReels, setSavedReels] = useState<ReelHighlight[]>(() => getSavedReelsList(allReels));
   const [toastMessage, setToastMessage] = useState<string | null>(null);
+
+  // Safety: reset edit states if viewing another user's profile
+  useEffect(() => {
+    if (!isOwnProfile) {
+      setIsEditing(false);
+      setIsSwitcherOpen(false);
+      if (activeTab === 'saved') {
+        setActiveTab('creations');
+      }
+    }
+  }, [isOwnProfile, activeTab]);
 
   const showToast = (msg: string) => {
     setToastMessage(msg);
@@ -180,6 +234,7 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
   const groups = getGroups();
 
   const handleSave = () => {
+    if (!isOwnProfile) return;
     const cleanUsername = username.trim().replace(/^@/, '').replace(/[^a-zA-Z0-9._]/g, '') || userProfile.username;
     const updated: UserProfile = {
       ...userProfile,
@@ -195,6 +250,7 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
   };
 
   const handleSelectIdentity = (type: 'personal' | 'page' | 'group', item?: any) => {
+    if (!isOwnProfile) return;
     if (type === 'personal') {
       switchIdentity({
         type: 'personal',
@@ -228,6 +284,7 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
 
   // Direct File Avatar Upload with safe compression
   const handleAvatarFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (!isOwnProfile) return;
     const file = e.target.files?.[0];
     if (!file) return;
 
@@ -294,6 +351,24 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
         className="hidden"
       />
 
+      {/* Return to My Profile banner when viewing another member */}
+      {!isOwnProfile && (
+        <div className="flex items-center justify-between bg-purple-50 border border-purple-200 rounded-2xl px-4 py-2.5 text-xs">
+          <span className="text-purple-900 font-medium truncate">
+            Viewing <strong className="font-bold text-slate-900">{displayProfile.name}</strong> (@{displayProfile.username})
+          </span>
+          <button
+            type="button"
+            onClick={() => {
+              window.dispatchEvent(new CustomEvent('metfa_view_profile', { detail: { userId: null } }));
+            }}
+            className="text-purple-700 hover:text-purple-900 font-bold ml-3 text-xs underline underline-offset-2 shrink-0 cursor-pointer"
+          >
+            ← Back to My Profile
+          </button>
+        </div>
+      )}
+
       {/* UNIFIED SINGLE PROFILE HEADER CARD */}
       <div className="bg-white border border-slate-200 rounded-3xl overflow-hidden shadow-sm relative">
         {/* Cover Artwork Banner */}
@@ -308,14 +383,14 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
             {/* Avatar with Verified Badge Overlay */}
             <div className="relative inline-block group shrink-0">
               <img
-                src={activeIdentity.avatar || userProfile.avatar}
-                alt={activeIdentity.name || userProfile.name}
+                src={isOwnProfile ? (activeIdentity.avatar || userProfile.avatar) : displayProfile.avatar}
+                alt={isOwnProfile ? (activeIdentity.name || userProfile.name) : displayProfile.name}
                 decoding="async"
                 className="w-24 h-24 sm:w-32 sm:h-32 rounded-3xl object-cover border-4 border-white shadow-xl bg-slate-100 group-hover:opacity-90 transition"
               />
 
               {/* Verified Creator Badge overlay */}
-              {userProfile.isVerified && (
+              {(isOwnProfile ? userProfile.isVerified : displayProfile.isVerified) && (
                 <div
                   className="absolute -bottom-1 -right-1 p-1.5 rounded-xl bg-teal-500 text-white border-2 border-white shadow-md flex items-center justify-center"
                   title="Verified Creator"
@@ -324,31 +399,35 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
                 </div>
               )}
 
-              {/* Avatar Quick Upload / AI Trigger Overlay */}
-              <div
-                onClick={() => fileInputRef.current?.click()}
-                className="absolute inset-0 bg-black/50 rounded-3xl opacity-0 group-hover:opacity-100 flex flex-col items-center justify-center gap-1 transition cursor-pointer backdrop-blur-xs"
-                title="Click to upload custom profile photo"
-              >
-                <Camera className="w-6 h-6 text-white" />
-                <span className="text-[10px] text-white font-bold">Change</span>
-              </div>
+              {/* Avatar Quick Upload / AI Trigger Overlay - Only for own profile */}
+              {isOwnProfile && (
+                <div
+                  onClick={() => fileInputRef.current?.click()}
+                  className="absolute inset-0 bg-black/50 rounded-3xl opacity-0 group-hover:opacity-100 flex flex-col items-center justify-center gap-1 transition cursor-pointer backdrop-blur-xs"
+                  title="Click to upload custom profile photo"
+                >
+                  <Camera className="w-6 h-6 text-white" />
+                  <span className="text-[10px] text-white font-bold">Change</span>
+                </div>
+              )}
             </div>
 
             {/* SSO / Unified ID Badges */}
             <div className="flex items-center gap-2 flex-wrap sm:mb-2">
               <span className="text-[10px] px-2.5 py-1 rounded-full bg-purple-50 border border-purple-200 text-purple-700 font-mono font-semibold">
-                Unified ID: {authUser.metfaId || authUser.id}
+                Unified ID: {isOwnProfile ? (authUser.metfaId || authUser.id) : displayProfile.id}
               </span>
-              {authUser.authType !== 'guest' ? (
-                <span className="text-[10px] px-2.5 py-1 rounded-full bg-teal-50 border border-teal-200 text-teal-800 font-semibold flex items-center gap-1">
-                  <CheckCircle2 className="w-3 h-3 text-teal-600" />
-                  SSO Active
-                </span>
-              ) : (
-                <span className="text-[10px] px-2.5 py-1 rounded-full bg-slate-100 border border-slate-200 text-slate-600 font-medium">
-                  Guest Mode
-                </span>
+              {isOwnProfile && (
+                authUser.authType !== 'guest' ? (
+                  <span className="text-[10px] px-2.5 py-1 rounded-full bg-teal-50 border border-teal-200 text-teal-800 font-semibold flex items-center gap-1">
+                    <CheckCircle2 className="w-3 h-3 text-teal-600" />
+                    SSO Active
+                  </span>
+                ) : (
+                  <span className="text-[10px] px-2.5 py-1 rounded-full bg-slate-100 border border-slate-200 text-slate-600 font-medium">
+                    Guest Mode
+                  </span>
+                )
               )}
             </div>
           </div>
@@ -357,37 +436,39 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
           <div className="mt-3.5">
             <div className="flex items-center gap-2.5 flex-wrap">
               <h1 className="text-2xl sm:text-3xl font-black text-slate-900 tracking-tight">
-                {activeIdentity.name || userProfile.name}
+                {isOwnProfile ? (activeIdentity.name || userProfile.name) : displayProfile.name}
               </h1>
-              {userProfile.isVerified && (
+              {(isOwnProfile ? userProfile.isVerified : displayProfile.isVerified) && (
                 <span className="text-[10px] px-2.5 py-0.5 rounded-full bg-teal-50 border border-teal-200 text-teal-800 font-bold flex items-center gap-1 shadow-xs">
                   <ShieldCheck className="w-3 h-3 text-teal-600" />
                   Verified Creator
                 </span>
               )}
-              {/* Identity Type Pill */}
-              <span className="text-[10px] px-2.5 py-0.5 rounded-full bg-slate-100 border border-slate-200 text-slate-700 font-semibold flex items-center gap-1">
-                {activeIdentity.type === 'personal' ? (
-                  <>
-                    <User className="w-3 h-3 text-teal-600" />
-                    <span>Personal Profile</span>
-                  </>
-                ) : activeIdentity.type === 'page' ? (
-                  <>
-                    <Building2 className="w-3 h-3 text-purple-600" />
-                    <span>Page • {activeIdentity.badge || 'Creator Page'}</span>
-                  </>
-                ) : (
-                  <>
-                    <Users className="w-3 h-3 text-amber-600" />
-                    <span>Group • {activeIdentity.badge || 'Managed Group'}</span>
-                  </>
-                )}
-              </span>
+              {/* Identity Type Pill - Only for own profile */}
+              {isOwnProfile && (
+                <span className="text-[10px] px-2.5 py-0.5 rounded-full bg-slate-100 border border-slate-200 text-slate-700 font-semibold flex items-center gap-1">
+                  {activeIdentity.type === 'personal' ? (
+                    <>
+                      <User className="w-3 h-3 text-teal-600" />
+                      <span>Personal Profile</span>
+                    </>
+                  ) : activeIdentity.type === 'page' ? (
+                    <>
+                      <Building2 className="w-3 h-3 text-purple-600" />
+                      <span>Page • {activeIdentity.badge || 'Creator Page'}</span>
+                    </>
+                  ) : (
+                    <>
+                      <Users className="w-3 h-3 text-amber-600" />
+                      <span>Group • {activeIdentity.badge || 'Managed Group'}</span>
+                    </>
+                  )}
+                </span>
+              )}
             </div>
             <div className="flex items-center gap-2 mt-1">
               <span className="text-xs sm:text-sm text-teal-700 font-mono font-bold">
-                @{activeIdentity.username || userProfile.username}
+                @{isOwnProfile ? (activeIdentity.username || userProfile.username) : displayProfile.username}
               </span>
             </div>
           </div>
@@ -397,33 +478,33 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
             {!isEditing ? (
               <>
                 <p className="text-xs sm:text-sm text-slate-800 leading-relaxed max-w-3xl whitespace-pre-line">
-                  {userProfile.bio || 'Digital creator and AI enthusiast exploring generative media on Metfa Social.'}
+                  {displayProfile.bio || (isOwnProfile ? 'Digital creator and AI enthusiast exploring generative media on METFA Social.' : 'Digital creator on METFA Social.')}
                 </p>
 
                 {/* Metadata row: Location, Website, Join Date */}
                 <div className="flex items-center gap-3.5 text-xs text-slate-500 flex-wrap pt-0.5">
-                  {userProfile.location && (
+                  {displayProfile.location && (
                     <span className="flex items-center gap-1.5">
                       <MapPin className="w-3.5 h-3.5 text-rose-500 shrink-0" />
-                      <span className="text-slate-700">{userProfile.location}</span>
+                      <span className="text-slate-700">{displayProfile.location}</span>
                     </span>
                   )}
-                  {userProfile.website && (
+                  {displayProfile.website && (
                     <a
-                      href={userProfile.website.startsWith('http') ? userProfile.website : `https://${userProfile.website}`}
+                      href={displayProfile.website.startsWith('http') ? displayProfile.website : `https://${displayProfile.website}`}
                       target="_blank"
                       rel="noreferrer"
                       className="flex items-center gap-1.5 text-teal-700 hover:text-teal-900 transition underline-offset-2 hover:underline font-medium"
                     >
                       <Globe className="w-3.5 h-3.5 shrink-0" />
-                      <span className="truncate max-w-[220px]">{userProfile.website.replace(/^https?:\/\//, '')}</span>
+                      <span className="truncate max-w-[220px]">{displayProfile.website.replace(/^https?:\/\//, '')}</span>
                       <ExternalLink className="w-2.5 h-2.5 opacity-60" />
                     </a>
                   )}
-                  {userProfile.joinDate && (
+                  {displayProfile.joinDate && (
                     <span className="flex items-center gap-1.5 text-slate-500">
                       <Calendar className="w-3.5 h-3.5 shrink-0" />
-                      <span>Joined {userProfile.joinDate}</span>
+                      <span>Joined {displayProfile.joinDate}</span>
                     </span>
                   )}
                 </div>
@@ -487,266 +568,366 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
             )}
           </div>
 
-          {/* CLEAN ACTION BUTTONS ROW: [Edit Profile | Switch Account | AI Avatar | Upload Photo] */}
+          {/* CLEAN ACTION BUTTONS ROW: [Edit Profile | Switch Account | AI Avatar | Upload Photo | Message] */}
           <div className="flex items-center gap-2 sm:gap-2.5 mt-5 flex-wrap relative" ref={switcherRef}>
-            {/* 1. Edit Profile Button / Save Changes */}
-            {!isEditing ? (
-              <button
-                type="button"
-                id="edit-profile-btn"
-                onClick={() => setIsEditing(true)}
-                className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-800 text-xs font-bold rounded-xl border border-slate-200 flex items-center gap-1.5 shadow-xs transition active:scale-95 cursor-pointer"
-              >
-                <Edit3 className="w-3.5 h-3.5 text-purple-600" />
-                <span>Edit Profile</span>
-              </button>
-            ) : (
-              <div className="flex items-center gap-2">
+            {/* 1. Edit Profile Button / Save Changes - ONLY for authenticated user's own profile */}
+            {isOwnProfile && (
+              !isEditing ? (
                 <button
                   type="button"
-                  id="save-profile-btn"
-                  onClick={handleSave}
-                  className="px-4 py-2 bg-purple-600 hover:bg-purple-700 text-white text-xs font-bold rounded-xl flex items-center gap-1.5 shadow-xs transition active:scale-95 cursor-pointer"
+                  id="edit-profile-btn"
+                  onClick={() => setIsEditing(true)}
+                  className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-800 text-xs font-bold rounded-xl border border-slate-200 flex items-center gap-1.5 shadow-xs transition active:scale-95 cursor-pointer"
                 >
-                  <Check className="w-3.5 h-3.5" />
-                  <span>Save Changes</span>
+                  <Edit3 className="w-3.5 h-3.5 text-purple-600" />
+                  <span>Edit Profile</span>
                 </button>
-                <button
-                  type="button"
-                  id="cancel-edit-profile-btn"
-                  onClick={() => setIsEditing(false)}
-                  className="px-3.5 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold rounded-xl border border-slate-200 transition cursor-pointer"
-                >
-                  Cancel
-                </button>
-              </div>
+              ) : (
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    id="save-profile-btn"
+                    onClick={handleSave}
+                    className="px-4 py-2 bg-purple-600 hover:bg-purple-700 text-white text-xs font-bold rounded-xl flex items-center gap-1.5 shadow-xs transition active:scale-95 cursor-pointer"
+                  >
+                    <Check className="w-3.5 h-3.5" />
+                    <span>Save Changes</span>
+                  </button>
+                  <button
+                    type="button"
+                    id="cancel-edit-profile-btn"
+                    onClick={() => setIsEditing(false)}
+                    className="px-3.5 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold rounded-xl border border-slate-200 transition cursor-pointer"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              )
             )}
 
-            {/* Messages Quick Shortcut */}
+            {/* Messages Button: Opens conversation with target user via existing get_or_create_direct_conversation RPC */}
             <button
               type="button"
               id="profile-direct-messages-btn"
-              onClick={() => {
-                if (onOpenChatWithUser) {
-                  onOpenChatWithUser('', undefined);
-                } else {
-                  window.dispatchEvent(new CustomEvent('metfa_open_chat', { detail: {} }));
+              disabled={isStartingChat}
+              onClick={async () => {
+                // 1. If viewing own profile, open user's conversations list
+                if (isOwnProfile) {
+                  const ownId = authUser?.id || userProfile.id;
+                  if (onOpenChatWithUser) {
+                    onOpenChatWithUser(ownId, userProfile);
+                  } else {
+                    window.dispatchEvent(
+                      new CustomEvent('metfa_open_chat', {
+                        detail: { partnerId: ownId, partnerProfile: userProfile },
+                      })
+                    );
+                  }
+                  return;
+                }
+
+                // 2. Require authenticated Supabase user
+                if (!isAuthenticated || !authUser?.id || authUser.id === 'guest') {
+                  if (onOpenAuthModal) {
+                    onOpenAuthModal();
+                  } else {
+                    window.dispatchEvent(new CustomEvent('metfa_open_auth_modal'));
+                  }
+                  return;
+                }
+
+                // 3. Get target user's existing Supabase profile ID
+                const targetUserId = displayProfile.id || viewedProfileUserId;
+                if (!targetUserId) {
+                  showToast('Target profile could not be identified.');
+                  return;
+                }
+
+                if (targetUserId === authUser.id) {
+                  return;
+                }
+
+                // 4. Call existing Supabase RPC: public.get_or_create_direct_conversation
+                setIsStartingChat(true);
+                try {
+                  let rpcResponse = await supabase.rpc('get_or_create_direct_conversation', {
+                    partner_id: targetUserId,
+                  });
+
+                  // Handle parameter alias in case parameter in Postgres is named target_user_id
+                  if (
+                    rpcResponse.error &&
+                    (rpcResponse.error.message?.includes('partner_id') ||
+                      rpcResponse.error.message?.includes('target_user_id') ||
+                      rpcResponse.error.code === '42883')
+                  ) {
+                    const altResponse = await supabase.rpc('get_or_create_direct_conversation', {
+                      target_user_id: targetUserId,
+                    });
+                    if (!altResponse.error && altResponse.data) {
+                      rpcResponse = altResponse;
+                    }
+                  }
+
+                  if (rpcResponse.error) {
+                    console.warn('[ProfileView] Stored procedure notice:', rpcResponse.error.message);
+                    showToast('Unable to start conversation. Please try again later.');
+                    return;
+                  }
+
+                  const convId = rpcResponse.data ? String(rpcResponse.data) : null;
+                  if (!convId) {
+                    showToast('Unable to start conversation. Please try again later.');
+                    return;
+                  }
+
+                  // 5. Open existing chat screen for that conversation with returned conversation ID
+                  if (onOpenChatWithUser) {
+                    onOpenChatWithUser(targetUserId, displayProfile, convId);
+                  } else {
+                    window.dispatchEvent(
+                      new CustomEvent('metfa_open_chat', {
+                        detail: {
+                          partnerId: targetUserId,
+                          partnerProfile: displayProfile,
+                          conversationId: convId,
+                        },
+                      })
+                    );
+                  }
+                } catch (err: any) {
+                  console.warn('[ProfileView] Exception starting direct conversation:', err);
+                  showToast('Unable to start conversation. Please try again later.');
+                } finally {
+                  setIsStartingChat(false);
                 }
               }}
-              className="px-4 py-2 bg-teal-50 hover:bg-teal-100 text-teal-800 text-xs font-bold rounded-xl border border-teal-200 flex items-center gap-1.5 shadow-xs transition active:scale-95 cursor-pointer"
-              title="Direct Messages"
+              className={`px-4 py-2 bg-teal-50 hover:bg-teal-100 text-teal-800 text-xs font-bold rounded-xl border border-teal-200 flex items-center gap-1.5 shadow-xs transition active:scale-95 cursor-pointer ${
+                isStartingChat ? 'opacity-70 cursor-wait' : ''
+              }`}
+              title={isOwnProfile ? 'Direct Messages' : `Message ${displayProfile.name}`}
             >
-              <MessageSquare className="w-3.5 h-3.5 text-teal-600" />
-              <span>Messages</span>
+              {isStartingChat ? (
+                <Loader2 className="w-3.5 h-3.5 text-teal-600 animate-spin" />
+              ) : (
+                <MessageSquare className="w-3.5 h-3.5 text-teal-600" />
+              )}
+              <span>{isStartingChat ? 'Connecting...' : (isOwnProfile ? 'Messages' : 'Message')}</span>
             </button>
 
-            {/* 2. Sleek Account Switcher Dropdown Trigger */}
-            <div className="relative">
-              <button
-                type="button"
-                id="switch-account-dropdown-btn"
-                onClick={() => setIsSwitcherOpen(!isSwitcherOpen)}
-                className={`px-4 py-2 rounded-xl text-xs font-bold flex items-center gap-2 border transition shadow-xs active:scale-95 cursor-pointer ${
-                  isSwitcherOpen
-                    ? 'bg-purple-100 border-purple-300 text-purple-900'
-                    : 'bg-slate-100 hover:bg-slate-200 border-slate-200 text-slate-800 hover:text-slate-900'
-                }`}
-                title="Switch active posting account or page"
-              >
-                <ArrowRightLeft className="w-3.5 h-3.5 text-purple-600" />
-                <span>Switch Account</span>
-                <ChevronDown
-                  className={`w-3.5 h-3.5 text-slate-500 transition-transform ${
-                    isSwitcherOpen ? 'rotate-180 text-slate-900' : ''
+            {/* 2. Sleek Account Switcher Dropdown Trigger - ONLY for own profile */}
+            {isOwnProfile && (
+              <div className="relative">
+                <button
+                  type="button"
+                  id="switch-account-dropdown-btn"
+                  onClick={() => setIsSwitcherOpen(!isSwitcherOpen)}
+                  className={`px-4 py-2 rounded-xl text-xs font-bold flex items-center gap-2 border transition shadow-xs active:scale-95 cursor-pointer ${
+                    isSwitcherOpen
+                      ? 'bg-purple-100 border-purple-300 text-purple-900'
+                      : 'bg-slate-100 hover:bg-slate-200 border-slate-200 text-slate-800 hover:text-slate-900'
                   }`}
-                />
-              </button>
-
-              {/* Compact Switcher Dropdown Popover */}
-              {isSwitcherOpen && (
-                <div
-                  id="account-switcher-dropdown-menu"
-                  className="absolute left-0 top-full mt-2 w-72 sm:w-80 bg-white border border-slate-200 rounded-2xl shadow-xl p-2.5 z-40 animate-scaleUp"
-                  onClick={(e) => e.stopPropagation()}
+                  title="Switch active posting account or page"
                 >
-                  <div className="px-2.5 py-1.5 border-b border-slate-100 flex items-center justify-between mb-1.5">
-                    <span className="text-[11px] font-bold uppercase tracking-wider text-purple-700">
-                      Posting Identities
-                    </span>
-                    <span className="text-[10px] text-slate-500 font-mono">Select active profile</span>
-                  </div>
-
-                  {/* Personal Profile Option */}
-                  <button
-                    type="button"
-                    id="switch-to-personal-btn"
-                    onClick={() => handleSelectIdentity('personal')}
-                    className={`w-full p-2.5 rounded-xl text-left flex items-center justify-between transition cursor-pointer ${
-                      activeIdentity.type === 'personal'
-                        ? 'bg-purple-50 border border-purple-300 text-purple-900 shadow-xs'
-                        : 'hover:bg-slate-50 text-slate-800 hover:text-slate-900 border border-transparent'
+                  <ArrowRightLeft className="w-3.5 h-3.5 text-purple-600" />
+                  <span>Switch Account</span>
+                  <ChevronDown
+                    className={`w-3.5 h-3.5 text-slate-500 transition-transform ${
+                      isSwitcherOpen ? 'rotate-180 text-slate-900' : ''
                     }`}
+                  />
+                </button>
+
+                {/* Compact Switcher Dropdown Popover */}
+                {isSwitcherOpen && (
+                  <div
+                    id="account-switcher-dropdown-menu"
+                    className="absolute left-0 top-full mt-2 w-72 sm:w-80 bg-white border border-slate-200 rounded-2xl shadow-xl p-2.5 z-40 animate-scaleUp"
+                    onClick={(e) => e.stopPropagation()}
                   >
-                    <div className="flex items-center gap-2.5 min-w-0">
-                      <img
-                        src={authUser.avatar}
-                        alt="Personal"
-                        loading="lazy"
-                        decoding="async"
-                        className="w-8 h-8 rounded-lg object-cover shrink-0 border border-slate-200"
-                      />
-                      <div className="min-w-0">
-                        <div className="text-xs font-bold truncate text-slate-900">{authUser.name}</div>
-                        <div className="text-[10px] text-teal-700 font-mono">Personal • @{authUser.username}</div>
-                      </div>
+                    <div className="px-2.5 py-1.5 border-b border-slate-100 flex items-center justify-between mb-1.5">
+                      <span className="text-[11px] font-bold uppercase tracking-wider text-purple-700">
+                        Posting Identities
+                      </span>
+                      <span className="text-[10px] text-slate-500 font-mono">Select active profile</span>
                     </div>
-                    {activeIdentity.type === 'personal' && (
-                      <CheckCircle2 className="w-4 h-4 text-teal-600 shrink-0" />
-                    )}
-                  </button>
 
-                  {/* Pages Section */}
-                  {pages.length > 0 && (
-                    <div className="mt-2 pt-2 border-t border-slate-100">
-                      <div className="px-2.5 py-1 text-[10px] font-bold text-slate-500 uppercase tracking-wider">
-                        Creator Pages
+                    {/* Personal Profile Option */}
+                    <button
+                      type="button"
+                      id="switch-to-personal-btn"
+                      onClick={() => handleSelectIdentity('personal')}
+                      className={`w-full p-2.5 rounded-xl text-left flex items-center justify-between transition cursor-pointer ${
+                        activeIdentity.type === 'personal'
+                          ? 'bg-purple-50 border border-purple-300 text-purple-900 shadow-xs'
+                          : 'hover:bg-slate-50 text-slate-800 hover:text-slate-900 border border-transparent'
+                      }`}
+                    >
+                      <div className="flex items-center gap-2.5 min-w-0">
+                        <img
+                          src={authUser.avatar}
+                          alt="Personal"
+                          loading="lazy"
+                          decoding="async"
+                          className="w-8 h-8 rounded-lg object-cover shrink-0 border border-slate-200"
+                        />
+                        <div className="min-w-0">
+                          <div className="text-xs font-bold truncate text-slate-900">{authUser.name}</div>
+                          <div className="text-[10px] text-teal-700 font-mono">Personal • @{authUser.username}</div>
+                        </div>
                       </div>
-                      <div className="space-y-1 mt-1 max-h-40 overflow-y-auto pr-1">
-                        {pages.map((p) => (
-                          <button
-                            key={p.id}
-                            type="button"
-                            onClick={() => handleSelectIdentity('page', p)}
-                            className={`w-full p-2 rounded-xl text-left flex items-center justify-between transition cursor-pointer ${
-                              activeIdentity.id === p.id
-                                ? 'bg-purple-50 border border-purple-300 text-purple-900 shadow-xs'
-                                : 'hover:bg-slate-50 text-slate-800 hover:text-slate-900 border border-transparent'
-                            }`}
-                          >
-                            <div className="flex items-center gap-2.5 min-w-0">
-                              <img
-                                src={p.avatar}
-                                alt={p.name}
-                                loading="lazy"
-                                decoding="async"
-                                className="w-7 h-7 rounded-lg object-cover shrink-0 border border-slate-200"
-                              />
-                              <div className="min-w-0">
-                                <div className="text-xs font-bold truncate text-slate-900">{p.name}</div>
-                                <div className="text-[10px] text-purple-700 font-mono">Page • {p.category}</div>
-                              </div>
-                            </div>
-                            {activeIdentity.id === p.id && (
-                              <CheckCircle2 className="w-4 h-4 text-teal-600 shrink-0" />
-                            )}
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-                  )}
+                      {activeIdentity.type === 'personal' && (
+                        <CheckCircle2 className="w-4 h-4 text-teal-600 shrink-0" />
+                      )}
+                    </button>
 
-                  {/* Managed Groups Section */}
-                  {groups.length > 0 && (
-                    <div className="mt-2 pt-2 border-t border-slate-100">
-                      <div className="px-2.5 py-1 text-[10px] font-bold text-slate-500 uppercase tracking-wider">
-                        Managed Groups
-                      </div>
-                      <div className="space-y-1 mt-1 max-h-36 overflow-y-auto pr-1">
-                        {groups.map((g) => (
-                          <button
-                            key={g.id}
-                            type="button"
-                            onClick={() => handleSelectIdentity('group', g)}
-                            className={`w-full p-2 rounded-xl text-left flex items-center justify-between transition cursor-pointer ${
-                              activeIdentity.id === g.id
-                                ? 'bg-purple-50 border border-purple-300 text-purple-900 shadow-xs'
-                                : 'hover:bg-slate-50 text-slate-800 hover:text-slate-900 border border-transparent'
-                            }`}
-                          >
-                            <div className="flex items-center gap-2.5 min-w-0">
-                              <img
-                                src={g.avatar}
-                                alt={g.name}
-                                loading="lazy"
-                                decoding="async"
-                                className="w-7 h-7 rounded-lg object-cover shrink-0 border border-slate-200"
-                              />
-                              <div className="min-w-0">
-                                <div className="text-xs font-bold truncate text-slate-900">{g.name}</div>
-                                <div className="text-[10px] text-amber-700 font-mono">
-                                  Group • {g.membersCount} members
+                    {/* Pages Section */}
+                    {pages.length > 0 && (
+                      <div className="mt-2 pt-2 border-t border-slate-100">
+                        <div className="px-2.5 py-1 text-[10px] font-bold text-slate-500 uppercase tracking-wider">
+                          Creator Pages
+                        </div>
+                        <div className="space-y-1 mt-1 max-h-40 overflow-y-auto pr-1">
+                          {pages.map((p) => (
+                            <button
+                              key={p.id}
+                              type="button"
+                              onClick={() => handleSelectIdentity('page', p)}
+                              className={`w-full p-2 rounded-xl text-left flex items-center justify-between transition cursor-pointer ${
+                                activeIdentity.id === p.id
+                                  ? 'bg-purple-50 border border-purple-300 text-purple-900 shadow-xs'
+                                  : 'hover:bg-slate-50 text-slate-800 hover:text-slate-900 border border-transparent'
+                              }`}
+                            >
+                              <div className="flex items-center gap-2.5 min-w-0">
+                                <img
+                                  src={p.avatar}
+                                  alt={p.name}
+                                  loading="lazy"
+                                  decoding="async"
+                                  className="w-7 h-7 rounded-lg object-cover shrink-0 border border-slate-200"
+                                />
+                                <div className="min-w-0">
+                                  <div className="text-xs font-bold truncate text-slate-900">{p.name}</div>
+                                  <div className="text-[10px] text-purple-700 font-mono">Page • {p.category}</div>
                                 </div>
                               </div>
-                            </div>
-                            {activeIdentity.id === g.id && (
-                              <CheckCircle2 className="w-4 h-4 text-teal-600 shrink-0" />
-                            )}
-                          </button>
-                        ))}
+                              {activeIdentity.id === p.id && (
+                                <CheckCircle2 className="w-4 h-4 text-teal-600 shrink-0" />
+                              )}
+                            </button>
+                          ))}
+                        </div>
                       </div>
-                    </div>
-                  )}
+                    )}
 
-                  {/* Create New Page / Group Shortcuts */}
-                  {(onCreatePageClick || onCreateGroupClick) && (
-                    <div className="mt-2 pt-2 border-t border-slate-100 flex items-center gap-1.5">
-                      {onCreatePageClick && (
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setIsSwitcherOpen(false);
-                            onCreatePageClick();
-                          }}
-                          className="flex-1 px-2.5 py-1.5 bg-purple-50 hover:bg-purple-100 text-purple-700 hover:text-purple-900 text-[11px] font-bold rounded-lg transition flex items-center justify-center gap-1 border border-purple-200 cursor-pointer"
-                        >
-                          <Plus className="w-3 h-3" />
-                          <span>New Page</span>
-                        </button>
-                      )}
-                      {onCreateGroupClick && (
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setIsSwitcherOpen(false);
-                            onCreateGroupClick();
-                          }}
-                          className="flex-1 px-2.5 py-1.5 bg-amber-50 hover:bg-amber-100 text-amber-800 hover:text-amber-900 text-[11px] font-bold rounded-lg transition flex items-center justify-center gap-1 border border-amber-200 cursor-pointer"
-                        >
-                          <Plus className="w-3 h-3" />
-                          <span>New Group</span>
-                        </button>
-                      )}
-                    </div>
-                  )}
-                </div>
-              )}
-            </div>
+                    {/* Managed Groups Section */}
+                    {groups.length > 0 && (
+                      <div className="mt-2 pt-2 border-t border-slate-100">
+                        <div className="px-2.5 py-1 text-[10px] font-bold text-slate-500 uppercase tracking-wider">
+                          Managed Groups
+                        </div>
+                        <div className="space-y-1 mt-1 max-h-36 overflow-y-auto pr-1">
+                          {groups.map((g) => (
+                            <button
+                              key={g.id}
+                              type="button"
+                              onClick={() => handleSelectIdentity('group', g)}
+                              className={`w-full p-2 rounded-xl text-left flex items-center justify-between transition cursor-pointer ${
+                                activeIdentity.id === g.id
+                                  ? 'bg-purple-50 border border-purple-300 text-purple-900 shadow-xs'
+                                  : 'hover:bg-slate-50 text-slate-800 hover:text-slate-900 border border-transparent'
+                              }`}
+                            >
+                              <div className="flex items-center gap-2.5 min-w-0">
+                                <img
+                                  src={g.avatar}
+                                  alt={g.name}
+                                  loading="lazy"
+                                  decoding="async"
+                                  className="w-7 h-7 rounded-lg object-cover shrink-0 border border-slate-200"
+                                />
+                                <div className="min-w-0">
+                                  <div className="text-xs font-bold truncate text-slate-900">{g.name}</div>
+                                  <div className="text-[10px] text-amber-700 font-mono">
+                                    Group • {g.membersCount} members
+                                  </div>
+                                </div>
+                              </div>
+                              {activeIdentity.id === g.id && (
+                                <CheckCircle2 className="w-4 h-4 text-teal-600 shrink-0" />
+                              )}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    )}
 
-            {/* 3. ✨ AI Avatar Studio Trigger */}
-            <button
-              type="button"
-              id="ai-avatar-btn"
-              onClick={() => setIsAIAvatarModalOpen(true)}
-              className="px-3.5 py-2 bg-purple-50 hover:bg-purple-100 border border-purple-200 text-purple-700 hover:text-purple-900 text-xs font-bold rounded-xl flex items-center gap-1.5 shadow-xs transition active:scale-95 cursor-pointer"
-            >
-              <Wand2 className="w-3.5 h-3.5 text-purple-600" />
-              <span>✨ AI Avatar</span>
-            </button>
+                    {/* Create New Page / Group Shortcuts */}
+                    {(onCreatePageClick || onCreateGroupClick) && (
+                      <div className="mt-2 pt-2 border-t border-slate-100 flex items-center gap-1.5">
+                        {onCreatePageClick && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setIsSwitcherOpen(false);
+                              onCreatePageClick();
+                            }}
+                            className="flex-1 px-2.5 py-1.5 bg-purple-50 hover:bg-purple-100 text-purple-700 hover:text-purple-900 text-[11px] font-bold rounded-lg transition flex items-center justify-center gap-1 border border-purple-200 cursor-pointer"
+                          >
+                            <Plus className="w-3 h-3" />
+                            <span>New Page</span>
+                          </button>
+                        )}
+                        {onCreateGroupClick && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setIsSwitcherOpen(false);
+                              onCreateGroupClick();
+                            }}
+                            className="flex-1 px-2.5 py-1.5 bg-amber-50 hover:bg-amber-100 text-amber-800 hover:text-amber-900 text-[11px] font-bold rounded-lg transition flex items-center justify-center gap-1 border border-amber-200 cursor-pointer"
+                          >
+                            <Plus className="w-3 h-3" />
+                            <span>New Group</span>
+                          </button>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
 
-            {/* 4. Upload Photo Button */}
-            <button
-              type="button"
-              id="upload-avatar-btn"
-              onClick={() => fileInputRef.current?.click()}
-              className="px-3.5 py-2 bg-slate-100 hover:bg-slate-200 border border-slate-200 text-slate-700 hover:text-slate-900 text-xs font-semibold rounded-xl flex items-center gap-1.5 transition active:scale-95 cursor-pointer"
-            >
-              <Camera className="w-3.5 h-3.5 text-teal-600" />
-              <span className="hidden sm:inline">Upload Photo</span>
-              <span className="sm:hidden">Photo</span>
-            </button>
+            {/* 3. ✨ AI Avatar Studio Trigger - ONLY for own profile */}
+            {isOwnProfile && (
+              <button
+                type="button"
+                id="ai-avatar-btn"
+                onClick={() => setIsAIAvatarModalOpen(true)}
+                className="px-3.5 py-2 bg-purple-50 hover:bg-purple-100 border border-purple-200 text-purple-700 hover:text-purple-900 text-xs font-bold rounded-xl flex items-center gap-1.5 shadow-xs transition active:scale-95 cursor-pointer"
+              >
+                <Wand2 className="w-3.5 h-3.5 text-purple-600" />
+                <span>✨ AI Avatar</span>
+              </button>
+            )}
+
+            {/* 4. Upload Photo Button - ONLY for own profile */}
+            {isOwnProfile && (
+              <button
+                type="button"
+                id="upload-avatar-btn"
+                onClick={() => fileInputRef.current?.click()}
+                className="px-3.5 py-2 bg-slate-100 hover:bg-slate-200 border border-slate-200 text-slate-700 hover:text-slate-900 text-xs font-semibold rounded-xl flex items-center gap-1.5 transition active:scale-95 cursor-pointer"
+              >
+                <Camera className="w-3.5 h-3.5 text-teal-600" />
+                <span className="hidden sm:inline">Upload Photo</span>
+                <span className="sm:hidden">Photo</span>
+              </button>
+            )}
 
             {/* 5. SSO / Auth Modal Trigger — Render ONLY for guest users so authenticated users are not prompted */}
-            {onOpenAuthModal && authUser.authType === 'guest' && (
+            {isOwnProfile && onOpenAuthModal && authUser.authType === 'guest' && (
               <button
                 type="button"
                 id="profile-auth-btn"
@@ -769,14 +950,14 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
 
             <div className="p-3 bg-slate-50 rounded-2xl border border-slate-200 flex flex-col items-center justify-center">
               <span className="text-xl sm:text-2xl font-black text-slate-900">
-                {userProfile.stats?.followersCount || 3840}
+                {displayProfile.stats?.followersCount ?? 0}
               </span>
               <span className="text-[11px] text-slate-500 uppercase font-semibold mt-0.5">Followers</span>
             </div>
 
             <div className="p-3 bg-slate-50 rounded-2xl border border-slate-200 flex flex-col items-center justify-center">
               <span className="text-xl sm:text-2xl font-black text-slate-900">
-                {userProfile.stats?.followingCount || 192}
+                {displayProfile.stats?.followingCount ?? 0}
               </span>
               <span className="text-[11px] text-slate-500 uppercase font-semibold mt-0.5">Following</span>
             </div>
@@ -821,19 +1002,21 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
               <span>Reels ({userReels.length})</span>
             </button>
 
-            <button
-              type="button"
-              id="tab-saved-btn"
-              onClick={() => setActiveTab('saved')}
-              className={`px-4 py-2 rounded-xl text-xs font-bold transition flex items-center gap-1.5 cursor-pointer ${
-                activeTab === 'saved'
-                  ? 'bg-amber-600 text-white shadow-xs'
-                  : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
-              }`}
-            >
-              <Bookmark className="w-3.5 h-3.5" />
-              <span>Saved ({savedPosts.length + savedReels.length})</span>
-            </button>
+            {isOwnProfile && (
+              <button
+                type="button"
+                id="tab-saved-btn"
+                onClick={() => setActiveTab('saved')}
+                className={`px-4 py-2 rounded-xl text-xs font-bold transition flex items-center gap-1.5 cursor-pointer ${
+                  activeTab === 'saved'
+                    ? 'bg-amber-600 text-white shadow-xs'
+                    : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
+                }`}
+              >
+                <Bookmark className="w-3.5 h-3.5" />
+                <span>Saved ({savedPosts.length + savedReels.length})</span>
+              </button>
+            )}
           </div>
         </div>
 

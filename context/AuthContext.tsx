@@ -56,27 +56,47 @@ interface AuthContextType {
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
 export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
-  const isSupabaseConnected = isSupabaseConfigured();
+  const [isSupabaseConnected, setIsSupabaseConnected] = useState<boolean>(() => isSupabaseConfigured());
+
+  // Check if runtime configuration is delivered via /api/config on initial mount
+  useEffect(() => {
+    if (!isSupabaseConnected && typeof window !== 'undefined') {
+      fetch('/api/config')
+        .then((res) => (res.ok ? res.json() : null))
+        .then((cfg) => {
+          if (cfg && cfg.supabaseUrl && cfg.supabaseAnonKey) {
+            (window as any).__ENV__ = Object.assign((window as any).__ENV__ || {}, {
+              VITE_SUPABASE_URL: cfg.supabaseUrl,
+              VITE_SUPABASE_ANON_KEY: cfg.supabaseAnonKey,
+            });
+            if (isSupabaseConfigured()) {
+              setIsSupabaseConnected(true);
+            }
+          }
+        })
+        .catch(() => {});
+    }
+  }, [isSupabaseConnected]);
 
   // App Startup — Single Source of Truth:
   // When Supabase is configured, do NOT initialize the active authenticated user from localStorage as authority!
   // Start strictly in guest state until supabase.auth.getSession() resolves the authoritative session.
   const [user, setUser] = useState<AuthUser>(() => {
-    if (isSupabaseConnected) {
+    if (isSupabaseConfigured()) {
       return GUEST_USER;
     }
     return getActiveSSOUser();
   });
 
   const [userProfile, setUserProfile] = useState<UserProfile>(() => {
-    if (isSupabaseConnected) {
+    if (isSupabaseConfigured()) {
       return GUEST_PROFILE;
     }
     return getUserProfile();
   });
 
   const [activeIdentity, setActiveIdentityState] = useState<PostingIdentity>(() => {
-    if (isSupabaseConnected) {
+    if (isSupabaseConfigured()) {
       return {
         type: 'personal',
         id: GUEST_USER.id,
@@ -307,6 +327,9 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     }) => {
       const result = await saveProfileAndEnterMetfa(params);
       if (!result.error && result.user && result.user.authType !== 'guest' && result.user.id) {
+        if (isSupabaseConfigured()) {
+          setIsSupabaseConnected(true);
+        }
         setUser(result.user);
         setUserProfile(result.profile);
         const activeId: PostingIdentity = {
@@ -359,6 +382,9 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     }) => {
       const result = await signInExistingUser(params);
       if (result.user && result.profile && result.user.authType !== 'guest') {
+        if (isSupabaseConfigured()) {
+          setIsSupabaseConnected(true);
+        }
         setUser(result.user);
         setUserProfile(result.profile);
         const activeId: PostingIdentity = {
@@ -380,6 +406,9 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   const signInWithGoogle = useCallback(async (params?: { email?: string; fullName?: string; avatar?: string }) => {
     const res = await signInWithGoogleOAuth(params);
     if (res.user && res.profile && res.user.authType !== 'guest') {
+      if (isSupabaseConfigured()) {
+        setIsSupabaseConnected(true);
+      }
       setUser(res.user);
       setUserProfile(res.profile);
       const activeId: PostingIdentity = {

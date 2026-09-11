@@ -52,6 +52,8 @@ export function App() {
       window.open('https://shop.metfaai.com', '_blank', 'noopener,noreferrer');
       return;
     }
+    // Opening normal tabs (including profile tab) clears viewed profile to show authenticated user's profile
+    setViewedProfileUserId(null);
     setActiveTab(tab as any);
     try {
       const url = new URL(window.location.href);
@@ -60,6 +62,22 @@ export function App() {
       } else {
         url.searchParams.set('tab', tab);
       }
+      window.history.replaceState({}, '', url.toString());
+    } catch {}
+  }, []);
+
+  // Handle viewing another user's profile (e.g. from Chat screen)
+  const handleViewProfile = useCallback((targetId: string) => {
+    if (!targetId) {
+      setViewedProfileUserId(null);
+      setActiveTab('profile');
+      return;
+    }
+    setViewedProfileUserId(targetId);
+    setActiveTab('profile');
+    try {
+      const url = new URL(window.location.href);
+      url.searchParams.set('tab', 'profile');
       window.history.replaceState({}, '', url.toString());
     } catch {}
   }, []);
@@ -112,6 +130,10 @@ export function App() {
   // Active Direct Chat Target (passed to MessagesModule)
   const [activeChatPartnerId, setActiveChatPartnerId] = useState<string | null>(null);
   const [activeChatPartnerProfile, setActiveChatPartnerProfile] = useState<any | null>(null);
+  const [activeConversationId, setActiveConversationId] = useState<string | null>(null);
+
+  // Active Viewed Profile User ID (distinguishes own profile vs another user's profile)
+  const [viewedProfileUserId, setViewedProfileUserId] = useState<string | null>(null);
 
   // Listen for PWA Install Prompt
   useEffect(() => {
@@ -171,15 +193,31 @@ export function App() {
 
     // Global listener to open chat with a specific user
     const handleOpenChat = (e: any) => {
-      const { partnerId, partnerProfile } = e.detail || {};
+      const { partnerId, partnerProfile, conversationId } = e.detail || {};
       setActiveChatPartnerId(partnerId || null);
       setActiveChatPartnerProfile(partnerProfile || null);
+      setActiveConversationId(conversationId || null);
       handleNavigateTab('messages');
     };
     window.addEventListener('metfa_open_chat', handleOpenChat);
 
+    // Global listener to open profile for a specific user ID
+    const handleOpenProfile = (e: any) => {
+      const targetId = e.detail?.userId ?? e.detail?.targetId;
+      if (targetId) {
+        handleViewProfile(targetId);
+      } else {
+        setViewedProfileUserId(null);
+        handleNavigateTab('profile');
+      }
+    };
+    window.addEventListener('metfa_view_profile', handleOpenProfile);
+
     // Global listener to trigger Auth Modal from any deep action
-    const handleOpenAuth = () => setIsAuthModalOpen(true);
+    const handleOpenAuth = () => {
+      if (isAuthenticated) return;
+      setIsAuthModalOpen(true);
+    };
     const handleOpenApiKeys = () => setIsApiKeysModalOpen(true);
     window.addEventListener('metfa_open_auth_modal', handleOpenAuth);
     window.addEventListener('metfa_open_api_keys_modal', handleOpenApiKeys);
@@ -191,10 +229,11 @@ export function App() {
       window.removeEventListener('hashchange', handleCheckHashRoute);
       window.removeEventListener('metfa_open_marketplace', handleOpenMarketplace);
       window.removeEventListener('metfa_open_chat', handleOpenChat);
+      window.removeEventListener('metfa_view_profile', handleOpenProfile);
       window.removeEventListener('metfa_open_auth_modal', handleOpenAuth);
       window.removeEventListener('metfa_open_api_keys_modal', handleOpenApiKeys);
     };
-  }, []);
+  }, [handleViewProfile, handleNavigateTab, isAuthenticated]);
 
   const handleInstallPwa = async () => {
     if (!installPrompt) return;
@@ -277,7 +316,9 @@ export function App() {
         onNavigateTab={handleNavigateTab}
         creditsData={creditsData}
         onWatchAdClick={() => setIsRewardedAdOpen(true)}
-        onOpenAuthModal={() => setIsAuthModalOpen(true)}
+        onOpenAuthModal={() => {
+          if (!isAuthenticated) setIsAuthModalOpen(true);
+        }}
         onCreatePageClick={() => setIsCreatePageOpen(true)}
         onCreateGroupClick={() => setIsCreateGroupOpen(true)}
         installPrompt={installPrompt}
@@ -316,12 +357,17 @@ export function App() {
             onNavigateTab={handleNavigateTab}
             creditsData={creditsData}
             onWatchAdClick={() => setIsRewardedAdOpen(true)}
-            onOpenAuthModal={() => setIsAuthModalOpen(true)}
+            onOpenAuthModal={() => {
+              if (!isAuthenticated) setIsAuthModalOpen(true);
+            }}
             onRemixPrompt={handleRemixPrompt}
             shareModalData={shareModalData}
             onCloseShareModal={() => setShareModalData(null)}
             activeChatPartnerId={activeChatPartnerId}
             activeChatPartnerProfile={activeChatPartnerProfile}
+            activeConversationId={activeConversationId}
+            viewedProfileUserId={viewedProfileUserId}
+            onViewProfile={handleViewProfile}
           />
         </div>
       </main>
@@ -333,10 +379,10 @@ export function App() {
       />
 
       {/* 4. Global SSO Auth Modal */}
-      {isAuthModalOpen && (
+      {isAuthModalOpen && !isAuthenticated && (
         <Suspense fallback={null}>
           <AuthModal
-            isOpen={isAuthModalOpen}
+            isOpen={isAuthModalOpen && !isAuthenticated}
             onClose={() => setIsAuthModalOpen(false)}
           />
         </Suspense>

@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import {
   X,
   Phone,
@@ -12,15 +12,18 @@ import {
   AlertCircle,
   Loader2,
   Lock,
+  UserPlus,
 } from 'lucide-react';
 import { AuthUser } from '../services/authService';
 import { useAuth } from '../context/AuthContext';
 import { compressImageDataUrl } from '../utils/storageUtils';
+import BrandTitle from './BrandTitle';
 
 interface AuthModalProps {
   isOpen: boolean;
   onClose: () => void;
   onAuthSuccess?: (user: AuthUser) => void;
+  initialMode?: 'signin' | 'signup';
 }
 
 const AVATAR_PRESETS = [
@@ -35,8 +38,18 @@ export const AuthModal: React.FC<AuthModalProps> = ({
   isOpen,
   onClose,
   onAuthSuccess,
+  initialMode = 'signin',
 }) => {
-  const { saveProfileAndEnter, signInWithGoogle, isSupabaseConnected } = useAuth();
+  const {
+    user,
+    isAuthenticated,
+    saveProfileAndEnter,
+    signInUser,
+    signInWithGoogle,
+    isSupabaseConnected,
+  } = useAuth();
+
+  const [authMode, setAuthMode] = useState<'signin' | 'signup'>(initialMode);
   const [authMethod, setAuthMethod] = useState<'phone' | 'gmail'>('gmail');
   const [phoneNumber, setPhoneNumber] = useState('');
   const [phoneCountryCode, setPhoneCountryCode] = useState('+1');
@@ -50,7 +63,23 @@ export const AuthModal: React.FC<AuthModalProps> = ({
   const [errorMsg, setErrorMsg] = useState('');
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
-  if (!isOpen) return null;
+  // If user is ALREADY AUTHENTICATED, immediately bypass modal & go directly into METFA Social
+  useEffect(() => {
+    if (isOpen && isAuthenticated) {
+      onAuthSuccess?.(user);
+      onClose();
+    }
+  }, [isOpen, isAuthenticated, user, onAuthSuccess, onClose]);
+
+  // Keep mode in sync with initialMode when modal opens
+  useEffect(() => {
+    if (isOpen) {
+      setAuthMode(initialMode);
+      setErrorMsg('');
+    }
+  }, [isOpen, initialMode]);
+
+  if (!isOpen || isAuthenticated) return null;
 
   const handleAvatarFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -84,34 +113,56 @@ export const AuthModal: React.FC<AuthModalProps> = ({
       }
     }
 
-    if (!fullName.trim()) {
-      setErrorMsg('Please enter your full name or creator display name.');
-      return;
-    }
-
-    setIsSubmitting(true);
-    try {
-      const identifier = authMethod === 'phone'
+    const identifier =
+      authMethod === 'phone'
         ? `${phoneCountryCode} ${phoneNumber.trim()}`
         : gmailEmail.trim();
 
-      const result = await saveProfileAndEnter({
-        authMethod,
-        identifier,
-        fullName: fullName.trim(),
-        username: customUsername.trim() || undefined,
-        avatar: selectedAvatar,
-        password: password.trim() || undefined,
-      });
+    setIsSubmitting(true);
 
-      setIsSubmitting(false);
-      if (result.error) {
-        setErrorMsg(result.error);
-        return;
+    try {
+      if (authMode === 'signin') {
+        // EXISTING USER: Sign In / Log In without overwriting profile or creating duplicates
+        const result = await signInUser({
+          authMethod,
+          identifier,
+          password: password.trim() || undefined,
+        });
+
+        setIsSubmitting(false);
+        if (result.error) {
+          setErrorMsg(result.error);
+          return;
+        }
+
+        onAuthSuccess?.(result.user);
+        onClose();
+      } else {
+        // NEW USER: Sign Up / Create Account
+        if (!fullName.trim()) {
+          setIsSubmitting(false);
+          setErrorMsg('Please enter your full name or creator display name.');
+          return;
+        }
+
+        const result = await saveProfileAndEnter({
+          authMethod,
+          identifier,
+          fullName: fullName.trim(),
+          username: customUsername.trim() || undefined,
+          avatar: selectedAvatar,
+          password: password.trim() || undefined,
+        });
+
+        setIsSubmitting(false);
+        if (result.error) {
+          setErrorMsg(result.error);
+          return;
+        }
+
+        onAuthSuccess?.(result.user);
+        onClose();
       }
-
-      onAuthSuccess?.(result.user);
-      onClose();
     } catch (err: any) {
       setIsSubmitting(false);
       setErrorMsg(err?.message || 'Authentication failed. Please check network connection.');
@@ -167,10 +218,17 @@ export const AuthModal: React.FC<AuthModalProps> = ({
               }}
             />
             <div>
-              <h3 className="text-base font-black text-slate-900 flex items-center gap-1.5">
-                <span>Join Metfa Social</span>
-              </h3>
-              <p className="text-xs text-slate-500 font-medium">Single Account for AI Studio & Social Media</p>
+              <div className="flex items-center gap-1.5 select-none">
+                <span className="text-base font-bold text-slate-900">
+                  {authMode === 'signin' ? 'Sign In to' : 'Join'}
+                </span>
+                <BrandTitle service="Social" size="base" asHeading={true} />
+              </div>
+              <p className="text-xs text-slate-500 font-medium">
+                {authMode === 'signin'
+                  ? 'Access your existing profile, posts, and messages'
+                  : 'Single Account for AI Studio & Social Media'}
+              </p>
             </div>
           </div>
 
@@ -183,55 +241,94 @@ export const AuthModal: React.FC<AuthModalProps> = ({
           </button>
         </div>
 
-        {/* Avatar Picker / Upload */}
-        <div className="flex items-center gap-3 p-3 bg-slate-50 rounded-2xl border border-slate-200 mb-4">
-          <div className="relative shrink-0 group cursor-pointer" onClick={() => fileInputRef.current?.click()}>
-            <img
-              src={selectedAvatar}
-              alt="Avatar Preview"
-              className="w-14 h-14 rounded-2xl object-cover border-2 border-purple-500/50 shadow-md"
-            />
-            <div className="absolute inset-0 bg-black/50 rounded-2xl opacity-0 group-hover:opacity-100 flex items-center justify-center transition">
-              <Camera className="w-4 h-4 text-white" />
-            </div>
-            <input
-              type="file"
-              ref={fileInputRef}
-              onChange={handleAvatarFile}
-              accept="image/*"
-              className="hidden"
-            />
-          </div>
+        {/* Mode Switcher: Sign In vs Sign Up */}
+        <div className="grid grid-cols-2 gap-2 bg-slate-100 p-1.5 rounded-2xl border border-slate-200 mb-4">
+          <button
+            type="button"
+            id="auth-tab-signin"
+            onClick={() => {
+              setAuthMode('signin');
+              setErrorMsg('');
+            }}
+            className={`py-2 px-3 rounded-xl text-xs font-bold transition flex items-center justify-center gap-2 cursor-pointer ${
+              authMode === 'signin'
+                ? 'bg-purple-600 text-white shadow-md'
+                : 'text-slate-600 hover:text-slate-900'
+            }`}
+          >
+            <LogIn className="w-3.5 h-3.5" />
+            <span>Sign In (Existing User)</span>
+          </button>
 
-          <div className="flex-1 min-w-0">
-            <div className="flex items-center justify-between mb-1">
-              <span className="text-xs font-bold text-slate-800">Profile Photo</span>
-              <button
-                type="button"
-                onClick={() => fileInputRef.current?.click()}
-                className="text-[11px] font-bold text-purple-600 hover:text-purple-700 transition"
-              >
-                Upload Photo
-              </button>
-            </div>
-            <div className="flex items-center gap-1.5 overflow-x-auto py-1">
-              {AVATAR_PRESETS.map((preset, idx) => (
-                <button
-                  key={idx}
-                  type="button"
-                  onClick={() => setSelectedAvatar(preset)}
-                  className={`w-7 h-7 rounded-xl overflow-hidden border transition shrink-0 ${
-                    selectedAvatar === preset ? 'border-teal-500 ring-2 ring-teal-400/40' : 'border-slate-200 opacity-60 hover:opacity-100'
-                  }`}
-                >
-                  <img src={preset} alt={`Preset ${idx + 1}`} className="w-full h-full object-cover" />
-                </button>
-              ))}
-            </div>
-          </div>
+          <button
+            type="button"
+            id="auth-tab-signup"
+            onClick={() => {
+              setAuthMode('signup');
+              setErrorMsg('');
+            }}
+            className={`py-2 px-3 rounded-xl text-xs font-bold transition flex items-center justify-center gap-2 cursor-pointer ${
+              authMode === 'signup'
+                ? 'bg-purple-600 text-white shadow-md'
+                : 'text-slate-600 hover:text-slate-900'
+            }`}
+          >
+            <UserPlus className="w-3.5 h-3.5" />
+            <span>Sign Up (New User)</span>
+          </button>
         </div>
 
-        {/* Tabs: Gmail vs Mobile Phone */}
+        {/* Avatar Picker / Upload (Sign Up Only) */}
+        {authMode === 'signup' && (
+          <div className="flex items-center gap-3 p-3 bg-slate-50 rounded-2xl border border-slate-200 mb-4 animate-fadeIn">
+            <div className="relative shrink-0 group cursor-pointer" onClick={() => fileInputRef.current?.click()}>
+              <img
+                src={selectedAvatar}
+                alt="Avatar Preview"
+                className="w-14 h-14 rounded-2xl object-cover border-2 border-purple-500/50 shadow-md"
+              />
+              <div className="absolute inset-0 bg-black/50 rounded-2xl opacity-0 group-hover:opacity-100 flex items-center justify-center transition">
+                <Camera className="w-4 h-4 text-white" />
+              </div>
+              <input
+                type="file"
+                ref={fileInputRef}
+                onChange={handleAvatarFile}
+                accept="image/*"
+                className="hidden"
+              />
+            </div>
+
+            <div className="flex-1 min-w-0">
+              <div className="flex items-center justify-between mb-1">
+                <span className="text-xs font-bold text-slate-800">Profile Photo</span>
+                <button
+                  type="button"
+                  onClick={() => fileInputRef.current?.click()}
+                  className="text-[11px] font-bold text-purple-600 hover:text-purple-700 transition cursor-pointer"
+                >
+                  Upload Photo
+                </button>
+              </div>
+              <div className="flex items-center gap-1.5 overflow-x-auto py-1">
+                {AVATAR_PRESETS.map((preset, idx) => (
+                  <button
+                    key={idx}
+                    type="button"
+                    onClick={() => setSelectedAvatar(preset)}
+                    className={`w-7 h-7 rounded-xl overflow-hidden border transition shrink-0 ${
+                      selectedAvatar === preset ? 'border-teal-500 ring-2 ring-teal-400/40' : 'border-slate-200 opacity-60 hover:opacity-100'
+                    }`}
+                  >
+                    <img src={preset} alt={`Preset ${idx + 1}`} className="w-full h-full object-cover" />
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Method Switcher: Gmail vs Mobile Phone */}
         <div className="grid grid-cols-2 gap-2 bg-slate-100 p-1.5 rounded-2xl border border-slate-200 mb-4">
           <button
             type="button"
@@ -239,7 +336,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
               setAuthMethod('gmail');
               setErrorMsg('');
             }}
-            className={`py-2 px-3 rounded-xl text-xs font-bold transition flex items-center justify-center gap-2 ${
+            className={`py-2 px-3 rounded-xl text-xs font-bold transition flex items-center justify-center gap-2 cursor-pointer ${
               authMethod === 'gmail'
                 ? 'bg-purple-600 text-white shadow-md'
                 : 'text-slate-600 hover:text-slate-900'
@@ -255,7 +352,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
               setAuthMethod('phone');
               setErrorMsg('');
             }}
-            className={`py-2 px-3 rounded-xl text-xs font-bold transition flex items-center justify-center gap-2 ${
+            className={`py-2 px-3 rounded-xl text-xs font-bold transition flex items-center justify-center gap-2 cursor-pointer ${
               authMethod === 'phone'
                 ? 'bg-purple-600 text-white shadow-md'
                 : 'text-slate-600 hover:text-slate-900'
@@ -275,39 +372,45 @@ export const AuthModal: React.FC<AuthModalProps> = ({
             </div>
           )}
 
-          <div>
-            <label className="text-xs font-bold text-slate-700 block mb-1">
-              Full Name / Display Name
-            </label>
-            <div className="relative">
-              <User className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
-              <input
-                type="text"
-                required
-                value={fullName}
-                onChange={(e) => setFullName(e.target.value)}
-                placeholder="e.g. Elena Rostova or Sophia Chen"
-                className="w-full bg-slate-50 border border-slate-200 rounded-xl pl-10 pr-3 py-2 text-xs text-slate-900 placeholder:text-slate-400 focus:outline-none focus:border-purple-500 focus:bg-white font-medium"
-              />
-            </div>
-          </div>
+          {/* Full Name & Username for Sign Up only */}
+          {authMode === 'signup' && (
+            <>
+              <div className="animate-fadeIn">
+                <label className="text-xs font-bold text-slate-700 block mb-1">
+                  Full Name / Display Name
+                </label>
+                <div className="relative">
+                  <User className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
+                  <input
+                    type="text"
+                    required
+                    value={fullName}
+                    onChange={(e) => setFullName(e.target.value)}
+                    placeholder="e.g. Elena Rostova or Sophia Chen"
+                    className="w-full bg-slate-50 border border-slate-200 rounded-xl pl-10 pr-3 py-2 text-xs text-slate-900 placeholder:text-slate-400 focus:outline-none focus:border-purple-500 focus:bg-white font-medium"
+                  />
+                </div>
+              </div>
 
-          <div>
-            <label className="text-xs font-bold text-slate-700 block mb-1">
-              Custom Username (Optional)
-            </label>
-            <div className="relative">
-              <AtSign className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
-              <input
-                type="text"
-                value={customUsername}
-                onChange={(e) => setCustomUsername(e.target.value.replace(/[^a-zA-Z0-9._]/g, ''))}
-                placeholder="e.g. elena_ai or alex.creative"
-                className="w-full bg-slate-50 border border-slate-200 rounded-xl pl-10 pr-3 py-2 text-xs text-slate-900 placeholder:text-slate-400 focus:outline-none focus:border-purple-500 focus:bg-white font-medium"
-              />
-            </div>
-          </div>
+              <div className="animate-fadeIn">
+                <label className="text-xs font-bold text-slate-700 block mb-1">
+                  Custom Username (Optional)
+                </label>
+                <div className="relative">
+                  <AtSign className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
+                  <input
+                    type="text"
+                    value={customUsername}
+                    onChange={(e) => setCustomUsername(e.target.value.replace(/[^a-zA-Z0-9._]/g, ''))}
+                    placeholder="e.g. elena_ai or alex.creative"
+                    className="w-full bg-slate-50 border border-slate-200 rounded-xl pl-10 pr-3 py-2 text-xs text-slate-900 placeholder:text-slate-400 focus:outline-none focus:border-purple-500 focus:bg-white font-medium"
+                  />
+                </div>
+              </div>
+            </>
+          )}
 
+          {/* Identifier Input */}
           {authMethod === 'phone' ? (
             <div>
               <label className="text-xs font-bold text-slate-700 block mb-1">
@@ -365,7 +468,9 @@ export const AuthModal: React.FC<AuthModalProps> = ({
           <div>
             <label className="text-xs font-bold text-slate-700 block mb-1 flex items-center justify-between">
               <span>Account Password</span>
-              <span className="text-[10px] text-slate-400 font-normal">Optional (auto-secured)</span>
+              <span className="text-[10px] text-slate-400 font-normal">
+                {authMode === 'signin' ? 'Required if set' : 'Optional (auto-secured)'}
+              </span>
             </label>
             <div className="relative">
               <Lock className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
@@ -373,7 +478,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                 type="password"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
-                placeholder="Choose a password for multi-device access"
+                placeholder={authMode === 'signin' ? 'Enter your account password' : 'Choose a password for multi-device access'}
                 className="w-full bg-slate-50 border border-slate-200 rounded-xl pl-10 pr-3 py-2 text-xs text-slate-900 placeholder:text-slate-400 focus:outline-none focus:border-purple-500 focus:bg-white font-medium"
               />
             </div>
@@ -388,15 +493,52 @@ export const AuthModal: React.FC<AuthModalProps> = ({
             {isSubmitting ? (
               <>
                 <Loader2 className="w-4 h-4 animate-spin" />
-                <span>Saving Profile & Entering Metfa...</span>
+                <span>
+                  {authMode === 'signin' ? 'Signing in to METFA Social...' : 'Creating Account & Entering METFA Social...'}
+                </span>
               </>
             ) : (
               <>
-                <LogIn className="w-4 h-4" />
-                <span>Save Profile & Enter Metfa</span>
+                {authMode === 'signin' ? <LogIn className="w-4 h-4" /> : <UserPlus className="w-4 h-4" />}
+                <span>
+                  {authMode === 'signin' ? 'Sign In to Account' : 'Create Account & Enter METFA Social'}
+                </span>
               </>
             )}
           </button>
+
+          {/* Switch Mode Prompt */}
+          <div className="text-center pt-1">
+            {authMode === 'signin' ? (
+              <p className="text-xs text-slate-600">
+                New to METFA Social?{' '}
+                <button
+                  type="button"
+                  onClick={() => {
+                    setAuthMode('signup');
+                    setErrorMsg('');
+                  }}
+                  className="font-bold text-purple-600 hover:text-purple-700 underline cursor-pointer"
+                >
+                  Create an Account (Sign Up)
+                </button>
+              </p>
+            ) : (
+              <p className="text-xs text-slate-600">
+                Already have a METFA Social account?{' '}
+                <button
+                  type="button"
+                  onClick={() => {
+                    setAuthMode('signin');
+                    setErrorMsg('');
+                  }}
+                  className="font-bold text-purple-600 hover:text-purple-700 underline cursor-pointer"
+                >
+                  Sign In / Log In
+                </button>
+              </p>
+            )}
+          </div>
 
           {/* Google OAuth Section */}
           <div className="relative my-3">
@@ -426,7 +568,9 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                   alt="Google"
                   className="w-4 h-4 object-contain"
                 />
-                <span>Instant Sign in with Google</span>
+                <span>
+                  {authMode === 'signin' ? 'Instant Sign in with Google' : 'Instant Sign up with Google'}
+                </span>
               </>
             )}
           </button>
