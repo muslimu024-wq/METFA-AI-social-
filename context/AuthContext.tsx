@@ -126,7 +126,6 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
               badge: syncedProfile.isVerified ? 'Verified Creator' : 'Creator',
             };
             setActiveIdentityState(iden);
-            doSetActiveIdentity(iden);
           });
         } else {
           setUser(GUEST_USER);
@@ -140,7 +139,6 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
             badge: 'Guest',
           };
           setActiveIdentityState(guestIden);
-          doSetActiveIdentity(guestIden);
         }
       });
       return;
@@ -287,21 +285,18 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       if (e.detail) {
         setUser(e.detail);
       }
-      refreshAuth();
     };
 
     const handleProfileUpdated = (e: any) => {
       if (e.detail) {
         setUserProfile(e.detail);
       }
-      refreshAuth();
     };
 
     const handleIdentityChanged = (e: any) => {
       if (e.detail) {
         setActiveIdentityState(e.detail);
       }
-      refreshAuth();
     };
 
     window.addEventListener('metfa_auth_changed', handleAuthChanged);
@@ -313,7 +308,7 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       window.removeEventListener('metfa_profile_updated', handleProfileUpdated);
       window.removeEventListener('metfa_identity_changed', handleIdentityChanged);
     };
-  }, [refreshAuth]);
+  }, []);
 
   // Real Save Profile & Enter Metfa Handler
   const saveProfileAndEnter = useCallback(

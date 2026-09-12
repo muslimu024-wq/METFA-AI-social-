@@ -4,6 +4,10 @@ import fs from "fs";
 import { createServer as createViteServer } from "vite";
 import { GoogleGenAI } from "@google/genai";
 import { checkContentSafety, METFA_AI_SAFETY_SYSTEM_INSTRUCTION } from "./utils/contentSafety";
+import { v2RevenueEngine } from "./services/v2RevenueEngine";
+import { runV2RevenueEngineVerification } from "./tests/v2RevenueVerification";
+import { v2ContributionEngine } from "./services/v2ContributionEngine";
+import { runV2ContributionEngineVerification } from "./tests/v2ContributionVerification";
 
 async function startServer() {
   const app = express();
@@ -814,8 +818,8 @@ ${METFA_AI_SAFETY_SYSTEM_INSTRUCTION}`;
 
   // Client runtime configuration endpoint (safely provides public non-sensitive Supabase client credentials)
   app.get("/api/config", (_req, res) => {
-    const supabaseUrl = process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL || "";
-    const supabaseAnonKey = process.env.VITE_SUPABASE_ANON_KEY || process.env.SUPABASE_ANON_KEY || "";
+    const supabaseUrl = (process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL || "").trim();
+    const supabaseAnonKey = (process.env.VITE_SUPABASE_ANON_KEY || process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY || process.env.SUPABASE_ANON_KEY || "").trim();
     res.json({
       supabaseUrl,
       supabaseAnonKey,
@@ -2706,6 +2710,385 @@ Output strictly in JSON: {"replies": ["reply 1", "reply 2", "reply 3"]}`;
   });
 
   // =========================================================================
+  // METFA V2: SERVER-SIDE REVENUE ENGINE API (FINANCE & AUDIT RESTRICTED)
+  // =========================================================================
+
+  // Helper middleware for V2 Finance Admin & Operator authorization
+  const requireV2FinanceAuth = (req: express.Request, res: express.Response, next: express.NextFunction) => {
+    const actorRole = (req.headers["x-metfa-role"] as string) || (req.body?.actor_role as string) || "GUEST";
+    const allowedRoles = ["SUPER_ADMIN", "ADMIN", "FINANCE_ADMIN", "OPERATOR"];
+    if (!allowedRoles.includes(actorRole)) {
+      return res.status(403).json({
+        error: `Forbidden: Revenue engine operations require elevated finance privileges. Received role '${actorRole}'.`,
+      });
+    }
+    next();
+  };
+
+  // 1. List or get Revenue Periods
+  app.get("/api/v2/revenue/periods", requireV2FinanceAuth, (_req, res) => {
+    try {
+      const periods = v2RevenueEngine.listPeriods();
+      res.json({ periods });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || "Failed to list revenue periods." });
+    }
+  });
+
+  app.get("/api/v2/revenue/periods/:id", requireV2FinanceAuth, (req, res) => {
+    try {
+      const periodId = String(req.params.id);
+      const period = v2RevenueEngine.getPeriod(periodId);
+      if (!period) return res.status(404).json({ error: "Period not found." });
+      const ledger = v2RevenueEngine.getLedgerEntries(periodId);
+      res.json({ period, ledger });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || "Failed to get revenue period." });
+    }
+  });
+
+  // 2. Create a new Revenue Period
+  app.post("/api/v2/revenue/periods", requireV2FinanceAuth, (req, res) => {
+    try {
+      const { period_name, period_start, period_end, currency, actor_id, actor_role } = req.body;
+      if (!period_name || !period_start || !period_end) {
+        return res.status(400).json({ error: "Missing period_name, period_start, or period_end." });
+      }
+      const period = v2RevenueEngine.createRevenuePeriod({
+        period_name,
+        period_start,
+        period_end,
+        currency,
+        actor_id: actor_id || "system_operator",
+        actor_role: actor_role || "FINANCE_ADMIN",
+      });
+      res.status(201).json({ period });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || "Failed to create revenue period." });
+    }
+  });
+
+  // 3. Idempotent Revenue Ingestion
+  app.post("/api/v2/revenue/entries", requireV2FinanceAuth, (req, res) => {
+    try {
+      const {
+        period_id,
+        source,
+        entry_type,
+        amount_cents,
+        currency,
+        reference_id,
+        description,
+        metadata,
+        actor_id,
+        actor_role,
+        auto_verify,
+      } = req.body;
+
+      if (!period_id || !source || !entry_type || amount_cents === undefined || !reference_id) {
+        return res.status(400).json({ error: "Missing required fields for revenue ledger entry." });
+      }
+
+      const result = v2RevenueEngine.recordRevenueEntry({
+        period_id,
+        source,
+        entry_type,
+        amount_cents: Number(amount_cents),
+        currency: currency || "USD",
+        reference_id: String(reference_id),
+        description: description || "Inbound revenue transaction",
+        metadata,
+        actor_id: actor_id || "api_ingestion",
+        actor_role: actor_role || "FINANCE_ADMIN",
+        auto_verify: Boolean(auto_verify),
+      });
+
+      if (!result.success) {
+        return res.status(400).json({ error: result.error });
+      }
+
+      res.status(result.is_duplicate ? 200 : 201).json(result);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || "Failed to record revenue entry." });
+    }
+  });
+
+  // 4. Verify Ledger Entry
+  app.post("/api/v2/revenue/entries/:id/verify", requireV2FinanceAuth, (req, res) => {
+    try {
+      const { actor_id, actor_role } = req.body;
+      const result = v2RevenueEngine.verifyRevenueEntry({
+        entry_id: String(req.params.id),
+        actor_id: actor_id || "finance_officer",
+        actor_role: actor_role || "FINANCE_ADMIN",
+      });
+      if (!result.success) return res.status(400).json({ error: result.error });
+      res.json(result);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || "Failed to verify entry." });
+    }
+  });
+
+  // 5. Reconcile Period
+  app.post("/api/v2/revenue/periods/:id/reconcile", requireV2FinanceAuth, (req, res) => {
+    try {
+      const { actor_id, actor_role, source_reports } = req.body;
+      if (Array.isArray(source_reports)) {
+        for (const report of source_reports) {
+          v2RevenueEngine.submitSourceReport(report);
+        }
+      }
+      const reconciliation = v2RevenueEngine.reconcileRevenuePeriod({
+        period_id: String(req.params.id),
+        actor_id: actor_id || "finance_auditor",
+        actor_role: actor_role || "FINANCE_ADMIN",
+      });
+      res.json({ reconciliation });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || "Failed to perform reconciliation." });
+    }
+  });
+
+  // 6. Lock Period
+  app.post("/api/v2/revenue/periods/:id/lock", requireV2FinanceAuth, (req, res) => {
+    try {
+      const { actor_id, actor_role } = req.body;
+      const result = v2RevenueEngine.lockRevenuePeriod({
+        period_id: String(req.params.id),
+        actor_id: actor_id || "finance_supervisor",
+        actor_role: actor_role || "FINANCE_ADMIN",
+      });
+      if (!result.success) return res.status(400).json({ error: result.error });
+      res.json(result);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || "Failed to lock period." });
+    }
+  });
+
+  // 7. Finalize Period (Strict Role Check)
+  app.post("/api/v2/revenue/periods/:id/finalize", requireV2FinanceAuth, (req, res) => {
+    try {
+      const { actor_id, actor_role } = req.body;
+      const result = v2RevenueEngine.finalizeRevenuePeriod({
+        period_id: String(req.params.id),
+        actor_id: actor_id || "chief_financial_officer",
+        actor_role: actor_role || "SUPER_ADMIN",
+      });
+      if (!result.success) return res.status(403).json({ error: result.error });
+      res.json(result);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || "Failed to finalize period." });
+    }
+  });
+
+  // 8. Health & Audit Telemetry
+  app.get("/api/v2/revenue/health", requireV2FinanceAuth, (_req, res) => {
+    try {
+      const health = v2RevenueEngine.getRevenueHealth();
+      res.json({ health });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || "Failed to get revenue health." });
+    }
+  });
+
+  app.get("/api/v2/revenue/audit-logs", requireV2FinanceAuth, (req, res) => {
+    try {
+      const entityId = req.query.target_entity_id as string | undefined;
+      const logs = v2RevenueEngine.getAuditLogs(entityId);
+      res.json({ audit_logs: logs });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || "Failed to fetch audit logs." });
+    }
+  });
+
+  // 9. METFA AI Revenue Assistance (Advisory Only — Zero Financial Authority)
+  app.post("/api/v2/revenue/ai-brief", requireV2FinanceAuth, async (req, res) => {
+    try {
+      const { period_id } = req.body;
+      const period = period_id ? v2RevenueEngine.getPeriod(period_id) : null;
+      const periods = v2RevenueEngine.listPeriods();
+      const health = v2RevenueEngine.getRevenueHealth();
+
+      const contextData = {
+        target_period: period,
+        recent_periods_summary: periods.slice(0, 3).map((p) => ({
+          period_name: p.period_name,
+          gross_cents: p.gross_revenue_cents,
+          net_cents: p.eligible_net_revenue_cents,
+          reward_pool_cents: p.reward_pool_cents,
+          status: p.status,
+        })),
+        engine_health: health,
+      };
+
+      const ai = getAiClient(req.body.geminiApiKey, req);
+      const prompt = `You are the METFA V2 Operations Financial Advisor AI.
+You are strictly an advisory and analysis assistant.
+You CANNOT create revenue, alter balances, finalize periods, or distribute funds.
+
+Review the following operational revenue data and produce a structured, high-level Financial & Accounting Brief:
+${JSON.stringify(contextData, null, 2)}
+
+Structure your response into 3 concise sections:
+1. Executive Revenue Summary (Gross, Deductions, and Eligible Net Revenue breakdown in USD)
+2. Accounting Integrity & Reconciliation Health (Verification status, variance risks, ledger completeness)
+3. Operational Recommendations (Audit advisories for the Finance Admin before period finalization)`;
+
+      const response = await ai.models.generateContent({
+        model: "gemini-2.5-flash",
+        contents: prompt,
+      });
+
+      const briefText = response.text || "Revenue analysis currently unavailable.";
+      res.json({
+        brief: briefText,
+        disclaimer: "AI financial assistance is advisory only. All authoritative settlements require human Finance Admin authorization.",
+      });
+    } catch (err: any) {
+      res.status(500).json({
+        error: cleanErrorMessage(err.message || "Failed to generate AI revenue brief."),
+      });
+    }
+  });
+
+  // 10. Run V2 Revenue Engine Automated Verification Suite (Admin only)
+  app.get("/api/v2/revenue/run-tests", requireV2FinanceAuth, (_req, res) => {
+    try {
+      const suiteResult = runV2RevenueEngineVerification();
+      res.json(suiteResult);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || "Test execution error." });
+    }
+  });
+
+  // =========================================================================
+  // METFA V2: SERVER-AUTHORITATIVE CONTRIBUTION ENGINE API (PHASE 5)
+  // =========================================================================
+
+  // Helper middleware for Operator/Admin contribution control
+  const requireV2OperatorAuth = (req: express.Request, res: express.Response, next: express.NextFunction) => {
+    const actorRole = (req.headers["x-metfa-role"] as string) || (req.body?.actor_role as string) || "GUEST";
+    const allowedRoles = ["SUPER_ADMIN", "ADMIN", "FINANCE_ADMIN", "OPERATOR"];
+    if (!allowedRoles.includes(actorRole)) {
+      return res.status(403).json({
+        error: `Forbidden: This contribution management operation requires operator privileges. Received role '${actorRole}'.`,
+      });
+    }
+    next();
+  };
+
+  // 1. Engine Health & Status
+  app.get("/api/v2/contribution/health", (_req, res) => {
+    try {
+      const health = v2ContributionEngine.getEngineHealth();
+      res.json(health);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || "Failed to retrieve contribution engine health." });
+    }
+  });
+
+  // 2. List Active & Historical Contribution Policies
+  app.get("/api/v2/contribution/policies", (_req, res) => {
+    try {
+      const policies = v2ContributionEngine.listPolicies();
+      res.json(policies);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || "Failed to list policies." });
+    }
+  });
+
+  // 3. Process Activity Event (Server-Authoritative Qualification & CP Award)
+  app.post("/api/v2/contribution/process", (req, res) => {
+    try {
+      const { user_id, action, source_ref, payload, user_tier } = req.body || {};
+      if (!user_id || !action || !source_ref) {
+        return res.status(400).json({
+          error: "Missing required activity parameters: user_id, action, and source_ref.",
+        });
+      }
+      const result = v2ContributionEngine.processActivity({
+        user_id,
+        action,
+        source_ref,
+        payload,
+        user_tier: user_tier || "STANDARD",
+      });
+      res.json(result);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || "Failed to process contribution activity." });
+    }
+  });
+
+  // 4. Get User Contribution Summary
+  app.get("/api/v2/contribution/user/:userId/summary", (req, res) => {
+    try {
+      const { userId } = req.params;
+      const summary = v2ContributionEngine.getUserSummary(userId);
+      res.json(summary);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || "Failed to retrieve user contribution summary." });
+    }
+  });
+
+  // 5. Query Immutable Contribution Ledger
+  app.get("/api/v2/contribution/ledger", (req, res) => {
+    try {
+      const userId = req.query.user_id as string | undefined;
+      const entries = v2ContributionEngine.listLedger(userId);
+      res.json(entries);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || "Failed to retrieve contribution ledger." });
+    }
+  });
+
+  // 6. Authorized Reversal / Adjustment of a Contribution Entry
+  app.post("/api/v2/contribution/reverse", requireV2OperatorAuth, (req, res) => {
+    try {
+      const { original_entry_id, reason, actor_id, actor_role } = req.body || {};
+      if (!original_entry_id || !reason) {
+        return res.status(400).json({ error: "Missing original_entry_id or reason for reversal." });
+      }
+      const role = actor_role || (req.headers["x-metfa-role"] as string) || "OPERATOR";
+      const result = v2ContributionEngine.reverseContribution({
+        original_entry_id,
+        reason,
+        actor_id: actor_id || "operator_system",
+        actor_role: role,
+      });
+      if (!result.success) {
+        return res.status(400).json({ error: result.error });
+      }
+      res.json(result);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || "Failed to reverse contribution entry." });
+    }
+  });
+
+  // 7. Toggle Feature Flag 'contribution_enabled'
+  app.post("/api/v2/contribution/feature-flag", requireV2OperatorAuth, (req, res) => {
+    try {
+      const { enabled } = req.body || {};
+      if (typeof enabled !== "boolean") {
+        return res.status(400).json({ error: "Boolean 'enabled' field required." });
+      }
+      v2ContributionEngine.setContributionEnabled(enabled);
+      res.json({ success: true, contribution_enabled: enabled });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || "Failed to update feature flag." });
+    }
+  });
+
+  // 8. Run V2 Contribution Engine Automated 21-Test Verification Suite
+  app.get("/api/v2/contribution/run-tests", requireV2OperatorAuth, (_req, res) => {
+    try {
+      const suiteResult = runV2ContributionEngineVerification();
+      res.json(suiteResult);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || "Test suite execution error." });
+    }
+  });
+
+  // =========================================================================
   // 10. PWA Manifest, Service Worker & Favicon Optimization Endpoints
   // =========================================================================
   app.get(["/manifest.json", "/manifest.webmanifest"], (_req, res) => {
@@ -2802,8 +3185,8 @@ Sitemap: ${baseUrl}/sitemap.xml
       try {
         const indexPath = path.resolve(process.cwd(), "index.html");
         let template = fs.readFileSync(indexPath, "utf-8");
-        const supabaseUrl = process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL || "";
-        const supabaseAnonKey = process.env.VITE_SUPABASE_ANON_KEY || process.env.SUPABASE_ANON_KEY || "";
+        const supabaseUrl = (process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL || "").trim();
+        const supabaseAnonKey = (process.env.VITE_SUPABASE_ANON_KEY || process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY || process.env.SUPABASE_ANON_KEY || "").trim();
         const envSnippet = `<script>window.__ENV__=Object.assign(window.__ENV__||{},{VITE_SUPABASE_URL:${JSON.stringify(supabaseUrl)},VITE_SUPABASE_ANON_KEY:${JSON.stringify(supabaseAnonKey)}});</script>`;
         template = template.replace("<head>", `<head>${envSnippet}`);
         template = await vite.transformIndexHtml(url, template);
@@ -2820,8 +3203,8 @@ Sitemap: ${baseUrl}/sitemap.xml
       const indexFile = path.join(distPath, "index.html");
       if (fs.existsSync(indexFile)) {
         let content = fs.readFileSync(indexFile, "utf-8");
-        const supabaseUrl = process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL || "";
-        const supabaseAnonKey = process.env.VITE_SUPABASE_ANON_KEY || process.env.SUPABASE_ANON_KEY || "";
+        const supabaseUrl = (process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL || "").trim();
+        const supabaseAnonKey = (process.env.VITE_SUPABASE_ANON_KEY || process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY || process.env.SUPABASE_ANON_KEY || "").trim();
         const envSnippet = `<script>window.__ENV__=Object.assign(window.__ENV__||{},{VITE_SUPABASE_URL:${JSON.stringify(supabaseUrl)},VITE_SUPABASE_ANON_KEY:${JSON.stringify(supabaseAnonKey)}});</script>`;
         content = content.replace("<head>", `<head>${envSnippet}`);
         res.status(200).set({ "Content-Type": "text/html" }).send(content);

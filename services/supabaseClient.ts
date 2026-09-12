@@ -18,12 +18,10 @@ export function validateSupabaseConfig(): { url: string; key: string } | null {
       '';
 
     const rawKey =
-      (metaEnv && metaEnv.VITE_SUPABASE_ANON_KEY) ||
-      (win && win.__ENV__ && win.__ENV__.VITE_SUPABASE_ANON_KEY) ||
-      (win && win.__ENV__ && win.__ENV__.SUPABASE_ANON_KEY) ||
-      (win && win.VITE_SUPABASE_ANON_KEY) ||
-      (win && win.SUPABASE_ANON_KEY) ||
-      (procEnv && (procEnv.VITE_SUPABASE_ANON_KEY || procEnv.SUPABASE_ANON_KEY)) ||
+      (metaEnv && (metaEnv.VITE_SUPABASE_ANON_KEY || metaEnv.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY)) ||
+      (win && win.__ENV__ && (win.__ENV__.VITE_SUPABASE_ANON_KEY || win.__ENV__.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY || win.__ENV__.SUPABASE_ANON_KEY)) ||
+      (win && (win.VITE_SUPABASE_ANON_KEY || win.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY || win.SUPABASE_ANON_KEY)) ||
+      (procEnv && (procEnv.VITE_SUPABASE_ANON_KEY || procEnv.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY || procEnv.SUPABASE_ANON_KEY)) ||
       '';
 
     const cleanUrl = typeof rawUrl === 'string' ? rawUrl.trim() : '';
@@ -43,7 +41,7 @@ export function validateSupabaseConfig(): { url: string; key: string } | null {
       return null;
     }
 
-    return { url: normalizedUrl, key: cleanKey };
+    return { url: parsed.origin, key: cleanKey };
   } catch {
     return null;
   }
@@ -102,6 +100,7 @@ const createFallbackClient = (): SupabaseClient => {
 // Cached client instances
 let clientInstance: SupabaseClient | null = null;
 let lastUsedConfig: { url: string; key: string } | null = null;
+let initFailed = false;
 const fallbackClient = createFallbackClient();
 
 export function getActiveSupabaseClient(): SupabaseClient {
@@ -119,6 +118,15 @@ export function getActiveSupabaseClient(): SupabaseClient {
     return clientInstance;
   }
 
+  if (
+    lastUsedConfig &&
+    lastUsedConfig.url === config.url &&
+    lastUsedConfig.key === config.key &&
+    initFailed
+  ) {
+    return fallbackClient;
+  }
+
   try {
     clientInstance = createClient(config.url, config.key, {
       auth: {
@@ -129,9 +137,12 @@ export function getActiveSupabaseClient(): SupabaseClient {
       },
     });
     lastUsedConfig = config;
+    initFailed = false;
     return clientInstance;
   } catch (e) {
     console.warn('[Supabase] Initialization failed, using fallback client:', e);
+    lastUsedConfig = config;
+    initFailed = true;
     return fallbackClient;
   }
 }

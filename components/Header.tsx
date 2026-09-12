@@ -22,6 +22,7 @@ import {
   Download,
   ShoppingBag,
   MessageSquare,
+  LayoutGrid,
 } from 'lucide-react';
 import { DailyCreditsData } from '../utils/creditManager';
 import { getPages, getGroups } from '../utils/socialStore';
@@ -395,6 +396,28 @@ export const Header: React.FC<HeaderProps> = ({
                   </div>
                   <span className="text-[10px] bg-gradient-to-r from-teal-500 to-purple-600 text-white px-2 py-0.5 rounded-full font-bold shadow-xs">
                     🛒 Open
+                  </span>
+                </button>
+
+                {/* METFA V2 Dashboard Launcher */}
+                <button
+                  type="button"
+                  onClick={() => handleNavigate('v2')}
+                  className={`w-full p-2.5 rounded-xl flex items-center justify-between text-xs font-bold transition cursor-pointer ${
+                    activeTab === 'v2'
+                      ? 'bg-purple-600 text-white'
+                      : 'text-slate-700 hover:bg-slate-100 hover:text-purple-600'
+                  }`}
+                  title="METFA V2 Dashboard"
+                >
+                  <div className="flex items-center gap-3">
+                    <LayoutGrid className={`w-4 h-4 ${activeTab === 'v2' ? 'text-white' : 'text-purple-600'}`} />
+                    <span>METFA V2 Dashboard</span>
+                  </div>
+                  <span className={`text-[10px] px-2 py-0.5 rounded-full font-bold shadow-xs ${
+                    activeTab === 'v2' ? 'bg-white/20 text-white' : 'bg-purple-100 text-purple-700'
+                  }`}>
+                    V2
                   </span>
                 </button>
               </div>

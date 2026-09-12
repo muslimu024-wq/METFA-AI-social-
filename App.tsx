@@ -13,16 +13,18 @@ const RewardedAdModal = lazy(() => import('./components/RewardedAdModal'));
 const CreatePageModal = lazy(() => import('./components/CreatePageModal'));
 const CreateGroupModal = lazy(() => import('./components/CreateGroupModal'));
 const AISettingsModal = lazy(() => import('./components/AISettingsModal'));
+const V2Dashboard = lazy(() => import('./components/v2/V2Dashboard'));
 
 export function App() {
   const { userProfile, isAuthenticated, metfaId } = useAuth();
 
   // App Navigation: Social-First Architecture - Sync with PWA shortcuts and URL query params
-  const [activeTab, setActiveTab] = useState<'chat' | SocialSubTab>(() => {
+  const [activeTab, setActiveTab] = useState<'chat' | 'v2' | SocialSubTab>(() => {
     try {
       const params = new URLSearchParams(window.location.search);
       const tabParam = params.get('tab');
       if (tabParam === 'chat') return 'chat';
+      if (tabParam === 'v2') return 'v2';
       if (tabParam && ['feed', 'reels', 'notifications', 'live', 'pages', 'groups', 'profile'].includes(tabParam)) {
         return tabParam as SocialSubTab;
       }
@@ -173,6 +175,11 @@ export function App() {
         ) {
           setActiveTab('feed');
         } else if (
+          targetTab === 'v2' ||
+          rawHash.replace('#', '').toLowerCase() === 'v2'
+        ) {
+          setActiveTab('v2');
+        } else if (
           targetTab === 'marketplace' ||
           rawHash.replace('#', '').toLowerCase() === 'marketplace' ||
           urlParams.get('source') === 'sellme'
@@ -278,7 +285,7 @@ export function App() {
     }, 150);
   }, [handleNavigateTab]);
 
-  const isSocialTab = activeTab !== 'chat';
+  const isSocialTab = activeTab !== 'chat' && activeTab !== 'v2';
 
   return (
     <div className="flex flex-col h-screen h-[100dvh] w-full bg-slate-50 text-slate-900 overflow-hidden font-sans select-none">
@@ -370,6 +377,22 @@ export function App() {
             onViewProfile={handleViewProfile}
           />
         </div>
+
+        {/* Module C: METFA V2 Dashboard & Reusable Viewport Shell */}
+        {activeTab === 'v2' && (
+          <div className="w-full h-full flex flex-col flex-1 min-h-0">
+            <Suspense
+              fallback={
+                <div className="flex-1 flex flex-col items-center justify-center gap-3 p-8 text-slate-400">
+                  <div className="w-8 h-8 rounded-full border-2 border-purple-500 border-t-transparent animate-spin" />
+                  <span className="text-xs font-medium">Loading METFA V2 Dashboard...</span>
+                </div>
+              }
+            >
+              <V2Dashboard onBackToSocial={() => handleNavigateTab('feed')} />
+            </Suspense>
+          </div>
+        )}
       </main>
 
       {/* 3. Global Persistent Bottom Navigation */}

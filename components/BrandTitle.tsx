@@ -1,6 +1,27 @@
 import React from 'react';
 
-export type BrandService = 'Social' | 'AI' | 'Chat';
+export type BrandService =
+  | 'Social'
+  | 'AI'
+  | 'Chat'
+  | 'V2 Dashboard'
+  | 'Verified'
+  | 'Ads'
+  | 'Revenue'
+  | 'Contribution'
+  | 'Rewards'
+  | 'Risk'
+  | 'Wallet'
+  | 'Payout'
+  | 'Operations AI'
+  | 'Signal'
+  | 'Work'
+  | 'Freelancer/Team'
+  | 'Creator'
+  | 'Audio'
+  | 'Admin Control'
+  | 'Governance + Audit'
+  | (string & {});
 
 interface BrandTitleProps {
   service?: BrandService;
