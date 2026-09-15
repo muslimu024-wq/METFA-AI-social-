@@ -5,6 +5,7 @@ import BottomNav from './components/BottomNav';
 import { SocialEcosystemModule, SocialSubTab } from './features/social';
 import { getDailyCredits, addRewardCredits, DailyCreditsData } from './utils/creditManager';
 import { useAuth } from './context/AuthContext';
+import { initV2IntegrationListeners } from './services/v2IntegrationAdapter';
 
 // Lazy-load genuinely heavy, non-initial features & modals
 const AIStudioModule = lazy(() => import('./features/ai-studio'));
@@ -229,7 +230,11 @@ export function App() {
     window.addEventListener('metfa_open_auth_modal', handleOpenAuth);
     window.addEventListener('metfa_open_api_keys_modal', handleOpenApiKeys);
 
+    // Initialize non-destructive V2 Integration Event Listeners
+    const cleanupV2 = initV2IntegrationListeners();
+
     return () => {
+      cleanupV2();
       window.removeEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
       window.removeEventListener('appinstalled', handleAppInstalled);
       window.removeEventListener('swUpdated', handleSwUpdated);

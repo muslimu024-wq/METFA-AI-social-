@@ -38,7 +38,7 @@ import {
   V2WalletReconciliationResult,
   V2WalletEngineHealth,
 } from '../types/v2Wallet';
-import { v2RewardEngine } from './v2RewardEngine';
+import { V2RewardEngine, v2RewardEngine } from './v2RewardEngine';
 
 export interface V2WalletAuditLog {
   id: string;
@@ -939,6 +939,7 @@ export class V2WalletEngine {
         account_pending_balance_cents: 0,
         account_approved_balance_cents: 0,
         account_locked_balance_cents: 0,
+        replayed_ledger_entries_count: 0,
         discrepancies: ['Wallet account does not exist'],
         reconciled_at: new Date().toISOString(),
       };
@@ -1085,6 +1086,7 @@ export class V2WalletEngine {
       account_pending_balance_cents: wallet.pending_balance_cents,
       account_approved_balance_cents: wallet.approved_balance_cents,
       account_locked_balance_cents: wallet.locked_balance_cents,
+      replayed_ledger_entries_count: entries.length,
       discrepancies,
       reconciled_at: new Date().toISOString(),
     };
@@ -1220,6 +1222,10 @@ export class V2WalletEngine {
       .map((id) => this.ledger.get(id))
       .filter((e): e is V2WalletLedgerEntry => e !== undefined)
       .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+  }
+
+  public getWalletLedger(walletId: string): V2WalletLedgerEntry[] {
+    return this.getLedgerEntriesForWallet(walletId);
   }
 
   public getLedgerEntriesForUser(userId: string): V2WalletLedgerEntry[] {

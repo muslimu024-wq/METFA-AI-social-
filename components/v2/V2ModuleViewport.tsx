@@ -37,6 +37,9 @@ import V2RevenueModule from './modules/V2RevenueModule';
 import V2ContributionModule from './modules/V2ContributionModule';
 import V2RewardModule from './modules/V2RewardModule';
 import V2WalletModule from './modules/V2WalletModule';
+import V2RiskModule from './modules/V2RiskModule';
+import V2AdminControlModule from './modules/V2AdminControlModule';
+import V2GovernanceAuditModule from './modules/V2GovernanceAuditModule';
 
 interface V2ModuleViewportProps {
   module: V2ModuleMetadata;
@@ -130,6 +133,12 @@ export const V2ModuleViewport: React.FC<V2ModuleViewportProps> = ({
           <V2RewardModule />
         ) : module.id === 'wallet' ? (
           <V2WalletModule />
+        ) : module.id === 'risk' ? (
+          <V2RiskModule />
+        ) : module.id === 'admin-control' ? (
+          <V2AdminControlModule />
+        ) : module.id === 'governance-audit' ? (
+          <V2GovernanceAuditModule />
         ) : (
           <div className="bg-white rounded-2xl border border-slate-200 p-6 sm:p-10 shadow-xs text-center flex flex-col items-center">
             <div className="w-16 h-16 rounded-2xl bg-purple-50 border border-purple-100 flex items-center justify-center text-purple-600 mb-4 shadow-inner">

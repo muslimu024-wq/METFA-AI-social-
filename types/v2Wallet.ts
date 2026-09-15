@@ -87,6 +87,8 @@ export interface V2WalletLedgerEntry {
   balance_after_cents: number;     // Available balance snapshot after posting
   reference_id?: string;           // Points to original entry for reversals/releases
   description: string;
+  actor_id?: string;
+  actor_role?: string;
   metadata: {
     origin?: string;
     period_id?: string;
@@ -176,6 +178,7 @@ export interface V2WalletReconciliationResult {
   user_id: string;
   currency: string;
   is_reconciled: boolean;
+  replayed_ledger_entries_count: number;
   
   // Ledger-derived calculations
   ledger_total_credits_cents: number;
