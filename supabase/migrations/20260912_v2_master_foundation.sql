@@ -3,7 +3,7 @@
 -- Migration: 20260912_v2_master_foundation.sql
 -- =====================================================================
 -- STRICT SAFETY RULES:
--- 1. All migrations are 100% idempotent (IF NOT EXISTS, safe drop triggers/policies).
+-- 1. All V2 foundation migrations are designed for safe rerunnability (IF NOT EXISTS, safe drop triggers/policies on V2 objects).
 -- 2. Zero modifications, drops, or alterations to existing public.profiles,
 --    public.posts, public.conversations, public.messages, or storage.buckets.
 -- 3. All V2 tables follow the prefix convention: public.v2_<module>_<entity>.
@@ -43,7 +43,12 @@ ALTER TABLE public.v2_user_roles ENABLE ROW LEVEL SECURITY;
 
 -- Helper security function: Check if current authenticated user has an administrative role
 CREATE OR REPLACE FUNCTION public.v2_has_role(required_role TEXT)
-RETURNS BOOLEAN AS $$
+RETURNS BOOLEAN
+LANGUAGE plpgsql
+SECURITY DEFINER
+STABLE
+SET search_path = public, pg_temp
+AS $$
 BEGIN
   IF auth.uid() IS NULL THEN
     RETURN false;
@@ -55,11 +60,16 @@ BEGIN
       AND (role = required_role OR role = 'SUPER_ADMIN')
   );
 END;
-$$ LANGUAGE plpgsql SECURITY DEFINER STABLE;
+$$;
 
 -- Helper security function: Check if current user has any admin/operator role
 CREATE OR REPLACE FUNCTION public.v2_is_admin_or_operator()
-RETURNS BOOLEAN AS $$
+RETURNS BOOLEAN
+LANGUAGE plpgsql
+SECURITY DEFINER
+STABLE
+SET search_path = public, pg_temp
+AS $$
 BEGIN
   IF auth.uid() IS NULL THEN
     RETURN false;
@@ -71,7 +81,7 @@ BEGIN
       AND role IN ('SUPER_ADMIN', 'ADMIN', 'FINANCE_ADMIN', 'OPERATOR')
   );
 END;
-$$ LANGUAGE plpgsql SECURITY DEFINER STABLE;
+$$;
 
 DROP POLICY IF EXISTS "Users can view their own roles" ON public.v2_user_roles;
 CREATE POLICY "Users can view their own roles"
@@ -858,7 +868,10 @@ USING (auth.uid() = owner_user_id OR public.v2_is_admin_or_operator());
 
 -- Protect financial, accounting, and licensing authority fields on audio tracks
 CREATE OR REPLACE FUNCTION public.v2_protect_audio_track_accounting()
-RETURNS TRIGGER AS $$
+RETURNS TRIGGER
+LANGUAGE plpgsql
+SET search_path = public, pg_temp
+AS $$
 BEGIN
   -- Privileged admin or operator can perform administrative updates
   IF public.v2_is_admin_or_operator() THEN
@@ -930,11 +943,14 @@ USING (false);
 -- =====================================================================
 
 CREATE OR REPLACE FUNCTION public.v2_prevent_ledger_mutation()
-RETURNS TRIGGER AS $$
+RETURNS TRIGGER
+LANGUAGE plpgsql
+SET search_path = public, pg_temp
+AS $$
 BEGIN
   RAISE EXCEPTION 'Ledger records are strictly immutable and cannot be updated or deleted from %', TG_TABLE_NAME;
 END;
-$$ LANGUAGE plpgsql;
+$$;
 
 DROP TRIGGER IF EXISTS trg_v2_revenue_ledger_immutable ON public.v2_revenue_ledger;
 CREATE TRIGGER trg_v2_revenue_ledger_immutable
@@ -967,9 +983,8 @@ EXECUTE FUNCTION public.v2_prevent_ledger_mutation();
 -- Verification documents bucket (Strictly PRIVATE)
 INSERT INTO storage.buckets (id, name, public)
 VALUES ('v2-verification-private', 'v2-verification-private', false)
-ON CONFLICT (id) DO UPDATE SET public = false;
+ON CONFLICT (id) DO NOTHING;
 
-DROP POLICY IF EXISTS "Users can upload verification docs" ON storage.objects;
 DROP POLICY IF EXISTS "v2_verification_users_upload" ON storage.objects;
 CREATE POLICY "v2_verification_users_upload" ON storage.objects
 FOR INSERT WITH CHECK (
@@ -978,7 +993,6 @@ FOR INSERT WITH CHECK (
   AND (storage.foldername(name))[1] = auth.uid()::text
 );
 
-DROP POLICY IF EXISTS "Users and admins can view verification docs" ON storage.objects;
 DROP POLICY IF EXISTS "v2_verification_users_and_admins_view" ON storage.objects;
 CREATE POLICY "v2_verification_users_and_admins_view" ON storage.objects
 FOR SELECT USING (
@@ -1018,11 +1032,7 @@ GRANT SELECT, INSERT, UPDATE, DELETE ON
   public.v2_risk_holds,
   public.v2_ai_health_events,
   public.v2_signals,
-  public.v2_audio_economy_tracks,
-  public.profiles,
-  public.conversations,
-  public.conversation_members,
-  public.messages
+  public.v2_audio_economy_tracks
 TO service_role;
 
 GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO service_role;
