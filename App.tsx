@@ -322,21 +322,23 @@ export function App() {
         </div>
       )}
 
-      {/* 1. Global Metfa Unified Top Header */}
-      <Header
-        activeTab={activeTab}
-        onNavigateTab={handleNavigateTab}
-        creditsData={creditsData}
-        onWatchAdClick={() => setIsRewardedAdOpen(true)}
-        onOpenAuthModal={() => {
-          if (!isAuthenticated) setIsAuthModalOpen(true);
-        }}
-        onCreatePageClick={() => setIsCreatePageOpen(true)}
-        onCreateGroupClick={() => setIsCreateGroupOpen(true)}
-        installPrompt={installPrompt}
-        onInstallPwa={handleInstallPwa}
-        isStandalone={isStandalone}
-      />
+      {/* 1. Global Metfa Unified Top Header (hidden on METFA V2 Dashboard) */}
+      {activeTab !== 'v2' && (
+        <Header
+          activeTab={activeTab}
+          onNavigateTab={handleNavigateTab}
+          creditsData={creditsData}
+          onWatchAdClick={() => setIsRewardedAdOpen(true)}
+          onOpenAuthModal={() => {
+            if (!isAuthenticated) setIsAuthModalOpen(true);
+          }}
+          onCreatePageClick={() => setIsCreatePageOpen(true)}
+          onCreateGroupClick={() => setIsCreateGroupOpen(true)}
+          installPrompt={installPrompt}
+          onInstallPwa={handleInstallPwa}
+          isStandalone={isStandalone}
+        />
+      )}
 
       {/* 2. Decoupled Feature Modules Viewport */}
       <main className="flex-1 min-h-0 flex flex-col relative overflow-hidden">

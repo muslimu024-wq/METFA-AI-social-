@@ -42,6 +42,13 @@ export const GlobalSearchBar: React.FC<GlobalSearchBarProps> = ({
   const [isMobileSearchOpen, setIsMobileSearchOpen] = useState(false);
   const [isListening, setIsListening] = useState(false);
   const [speechError, setSpeechError] = useState<string | null>(null);
+  const [speechLanguage, setSpeechLanguage] = useState<'en-US' | 'bn-BD'>(() => {
+    if (typeof window !== 'undefined') {
+      const saved = localStorage.getItem('metfa_speech_lang');
+      if (saved === 'bn-BD' || saved === 'en-US') return saved;
+    }
+    return 'en-US';
+  });
 
   const containerRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -207,6 +214,26 @@ export const GlobalSearchBar: React.FC<GlobalSearchBarProps> = ({
     );
   };
 
+  const joinWithSpacing = (base: string, addition: string): string => {
+    const b = (base || '').trim();
+    const a = (addition || '').trim();
+    if (!b) return a;
+    if (!a) return b;
+    if (/^[.,!?;:।\)\]]/.test(a)) {
+      return `${b}${a}`;
+    }
+    return `${b} ${a}`;
+  };
+
+  const handleLanguageChange = (lang: 'en-US' | 'bn-BD') => {
+    setSpeechLanguage(lang);
+    try {
+      localStorage.setItem('metfa_speech_lang', lang);
+    } catch {
+      // ignore
+    }
+  };
+
   const toggleSpeechRecognition = () => {
     const SpeechRecognition =
       (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
@@ -233,10 +260,7 @@ export const GlobalSearchBar: React.FC<GlobalSearchBarProps> = ({
       const recognition = new SpeechRecognition();
       recognition.continuous = false;
       recognition.interimResults = true;
-
-      const autoDetectedLang =
-        typeof navigator !== 'undefined' && navigator.language ? navigator.language : 'en-US';
-      recognition.lang = autoDetectedLang;
+      recognition.lang = speechLanguage;
       recognition.maxAlternatives = 1;
 
       baseQueryRef.current = query;
@@ -248,25 +272,23 @@ export const GlobalSearchBar: React.FC<GlobalSearchBarProps> = ({
       };
 
       recognition.onresult = (event: any) => {
-        let sessionFinal = '';
-        let sessionInterim = '';
+        let finalizedTranscript = '';
+        let interimTranscript = '';
 
         for (let i = 0; i < event.results.length; i++) {
-          const transcriptChunk = event.results[i][0].transcript;
-          if (event.results[i].isFinal) {
-            sessionFinal += transcriptChunk;
+          const result = event.results[i];
+          const chunk = result[0]?.transcript || '';
+          if (!chunk) continue;
+
+          if (result.isFinal) {
+            finalizedTranscript = joinWithSpacing(finalizedTranscript, chunk);
           } else {
-            sessionInterim += transcriptChunk;
+            interimTranscript = joinWithSpacing(interimTranscript, chunk);
           }
         }
 
-        const currentSessionTranscript = (
-          sessionFinal + (sessionInterim ? ' ' + sessionInterim : '')
-        ).trim();
-        const base = baseQueryRef.current.trim();
-        const updated = base
-          ? `${base} ${currentSessionTranscript}`
-          : currentSessionTranscript;
+        const sessionVoiceText = joinWithSpacing(finalizedTranscript, interimTranscript);
+        const updated = joinWithSpacing(baseQueryRef.current, sessionVoiceText);
 
         setQuery(updated);
         if (!isOpen) setIsOpen(true);
@@ -349,23 +371,47 @@ export const GlobalSearchBar: React.FC<GlobalSearchBarProps> = ({
                 id="global-modal-search-input"
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
-                placeholder={isListening ? 'Listening for speech...' : 'Search posts, prompts, tags, groups...'}
+                placeholder={
+                  isListening
+                    ? speechLanguage === 'bn-BD'
+                      ? 'বাংলায় বলুন...'
+                      : 'Listening for speech...'
+                    : 'Search posts, prompts, tags, groups...'
+                }
                 className="w-full bg-transparent text-sm sm:text-base text-white placeholder-gray-500 focus:outline-none"
               />
 
-              {/* Speech Recognition Mic Button */}
-              <button
-                type="button"
-                onClick={toggleSpeechRecognition}
-                className={`p-2 rounded-xl transition flex items-center justify-center shrink-0 ${
-                  isListening
-                    ? 'bg-rose-500/20 text-rose-400 border border-rose-500/50 animate-pulse shadow-sm shadow-rose-500/40'
-                    : 'text-gray-400 hover:text-purple-300 hover:bg-gray-800'
-                }`}
-                title={isListening ? 'Stop dictation' : 'Dictate with voice'}
-              >
-                <Mic className={`w-4 h-4 ${isListening ? 'text-rose-400 animate-bounce' : ''}`} />
-              </button>
+              {/* Speech Recognition Mic Button + Language Selector */}
+              <div className="flex items-center gap-1 shrink-0">
+                <button
+                  type="button"
+                  onClick={toggleSpeechRecognition}
+                  className={`p-2 rounded-xl transition flex items-center justify-center ${
+                    isListening
+                      ? 'bg-rose-500/20 text-rose-400 border border-rose-500/50 animate-pulse shadow-sm shadow-rose-500/40'
+                      : 'text-gray-400 hover:text-purple-300 hover:bg-gray-800'
+                  }`}
+                  title={
+                    isListening
+                      ? 'Stop dictation'
+                      : `Dictate with voice (${speechLanguage === 'bn-BD' ? 'বাংলা' : 'English'})`
+                  }
+                >
+                  <Mic className={`w-4 h-4 ${isListening ? 'text-rose-400 animate-bounce' : ''}`} />
+                </button>
+
+                <select
+                  aria-label="Voice search language"
+                  value={speechLanguage}
+                  onChange={(e) => handleLanguageChange(e.target.value as 'en-US' | 'bn-BD')}
+                  disabled={isListening}
+                  className="text-[11px] font-semibold bg-gray-800 text-gray-300 hover:text-white px-1.5 py-1 rounded-lg border border-gray-700 cursor-pointer focus:outline-none"
+                  title="Voice Search Language (English / বাংলা)"
+                >
+                  <option value="en-US">EN</option>
+                  <option value="bn-BD">বাংলা</option>
+                </select>
+              </div>
 
               {query && (
                 <button
@@ -410,7 +456,9 @@ export const GlobalSearchBar: React.FC<GlobalSearchBarProps> = ({
             {isListening && (
               <div className="p-2.5 bg-rose-950/40 border-b border-rose-800/50 flex items-center gap-2 text-rose-300 text-xs animate-pulse">
                 <Mic className="w-4 h-4 text-rose-400 animate-bounce" />
-                <span className="font-semibold">Listening... Speak now to fill search terms</span>
+                <span className="font-semibold">
+                  Listening ({speechLanguage === 'bn-BD' ? 'বাংলা' : 'English'})... Speak now to fill search terms
+                </span>
               </div>
             )}
 

@@ -10,7 +10,7 @@
  */
 
 import React, { useState } from 'react';
-import { LayoutGrid, Sparkles, Shield, ArrowLeft } from 'lucide-react';
+import { LayoutGrid, Shield, ArrowLeft } from 'lucide-react';
 import BrandTitle from '../BrandTitle';
 import V2AppGrid from './V2AppGrid';
 import V2ModuleViewport from './V2ModuleViewport';
@@ -72,14 +72,6 @@ export const V2Dashboard: React.FC<V2DashboardProps> = ({ onBackToSocial }) => {
               className="truncate"
             />
           </div>
-        </div>
-
-        {/* Foundation Tag */}
-        <div className="flex items-center gap-1.5 shrink-0">
-          <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-bold bg-gradient-to-r from-purple-500/10 to-teal-500/10 border border-purple-200 text-purple-700">
-            <Sparkles className="w-3 h-3 text-purple-600" />
-            <span>Master Foundation</span>
-          </span>
         </div>
       </div>
 

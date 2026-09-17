@@ -15,10 +15,12 @@ import {
   Undo2,
   RotateCcw,
   Download,
+  ScanText,
 } from 'lucide-react';
 import { ChatAttachment, StudioSettings } from '../types/chat';
 import { fileToAttachment } from '../utils/fileUtils';
 import AttachmentModal from './AttachmentModal';
+import ImageTextScannerModal from './ImageTextScannerModal';
 import { RecentPromptHistoryList } from '../features/ai-studio/components/RecentPromptHistoryList';
 import { addRecentPrompt } from '../features/ai-studio/utils/promptHistoryStore';
 
@@ -72,6 +74,15 @@ export const MultimodalInputBar: React.FC<MultimodalInputBarProps> = ({
   const [showPresets, setShowPresets] = useState(false);
   const [speechError, setSpeechError] = useState<string | null>(null);
   const [isActionModalOpen, setIsActionModalOpen] = useState(false);
+  const [isScannerModalOpen, setIsScannerModalOpen] = useState(false);
+  const [scannerInitialImage, setScannerInitialImage] = useState<string | undefined>(undefined);
+  const [speechLanguage, setSpeechLanguage] = useState<'en-US' | 'bn-BD'>(() => {
+    if (typeof window !== 'undefined') {
+      const saved = localStorage.getItem('metfa_speech_lang');
+      if (saved === 'bn-BD' || saved === 'en-US') return saved;
+    }
+    return 'en-US';
+  });
 
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -257,6 +268,26 @@ export const MultimodalInputBar: React.FC<MultimodalInputBarProps> = ({
     fileInputRef.current?.click();
   };
 
+  const joinWithSpacing = (base: string, addition: string): string => {
+    const b = (base || '').trim();
+    const a = (addition || '').trim();
+    if (!b) return a;
+    if (!a) return b;
+    if (/^[.,!?;:।\)\]]/.test(a)) {
+      return `${b}${a}`;
+    }
+    return `${b} ${a}`;
+  };
+
+  const handleLanguageChange = (lang: 'en-US' | 'bn-BD') => {
+    setSpeechLanguage(lang);
+    try {
+      localStorage.setItem('metfa_speech_lang', lang);
+    } catch {
+      // ignore
+    }
+  };
+
   const toggleSpeechRecognition = () => {
     const SpeechRecognition =
       (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
@@ -283,10 +314,7 @@ export const MultimodalInputBar: React.FC<MultimodalInputBarProps> = ({
       const recognition = new SpeechRecognition();
       recognition.continuous = true;
       recognition.interimResults = true;
-      
-      // Auto-detect client / browser language dynamically in the background without UI dropdowns
-      const autoDetectedLang = (typeof navigator !== 'undefined' && navigator.language) ? navigator.language : 'en-US';
-      recognition.lang = autoDetectedLang;
+      recognition.lang = speechLanguage;
       recognition.maxAlternatives = 1;
 
       // Save the base text buffer before this speech session started
@@ -301,32 +329,37 @@ export const MultimodalInputBar: React.FC<MultimodalInputBarProps> = ({
         }
         setIsRecording(true);
         setSpeechError(null);
-        setInterimFeedback('🎙️ Listening... (Auto-detecting language)');
+        setInterimFeedback(
+          speechLanguage === 'bn-BD'
+            ? '🎙️ শুনছি (বাংলা)...'
+            : '🎙️ Listening (English)...'
+        );
       };
 
       recognition.onresult = (event: any) => {
-        let sessionFinal = '';
-        let sessionInterim = '';
+        let finalizedTranscript = '';
+        let interimTranscript = '';
 
-        // Iterate through all results in the current session
+        // Process each result index in the current session
         for (let i = 0; i < event.results.length; i++) {
-          const transcriptChunk = event.results[i][0].transcript;
-          if (event.results[i].isFinal) {
-            sessionFinal += transcriptChunk;
+          const result = event.results[i];
+          const chunk = result[0]?.transcript || '';
+          if (!chunk) continue;
+
+          if (result.isFinal) {
+            finalizedTranscript = joinWithSpacing(finalizedTranscript, chunk);
           } else {
-            sessionInterim += transcriptChunk;
+            interimTranscript = joinWithSpacing(interimTranscript, chunk);
           }
         }
 
-        // Construct clean text without repetitive duplicate word appending
-        const currentSessionTranscript = (sessionFinal + (sessionInterim ? ' ' + sessionInterim : '')).trim();
-        const base = baseTextRef.current.trim();
-        const updated = base
-          ? `${base} ${currentSessionTranscript}`
-          : currentSessionTranscript;
+        // Maintain clear separation between:
+        // BASE TEXT + FINALIZED VOICE TRANSCRIPT + CURRENT INTERIM TRANSCRIPT
+        const sessionVoiceText = joinWithSpacing(finalizedTranscript, interimTranscript);
+        const updated = joinWithSpacing(baseTextRef.current, sessionVoiceText);
 
         setInputText(updated);
-        setInterimFeedback(sessionInterim || sessionFinal || '');
+        setInterimFeedback(interimTranscript || finalizedTranscript || '');
       };
 
       recognition.onerror = (event: any) => {
@@ -398,7 +431,7 @@ export const MultimodalInputBar: React.FC<MultimodalInputBarProps> = ({
         onChange={(e) => handleFileUpload(e.target.files)}
       />
 
-      {/* Choose an Action Bottom Modal / Action Sheet (Includes Camera as 1st option) */}
+      {/* Choose an Action Bottom Modal / Action Sheet (Includes Camera as 1st option, Scan Text as 4th) */}
       <AttachmentModal
         isOpen={isActionModalOpen}
         onClose={() => setIsActionModalOpen(false)}
@@ -406,6 +439,20 @@ export const MultimodalInputBar: React.FC<MultimodalInputBarProps> = ({
         onRecordVideo={handleRecordVideo}
         onOpenGallery={handleOpenGallery}
         onOpenDocuments={handleOpenDocuments}
+        onScanText={() => {
+          setScannerInitialImage(undefined);
+          setIsScannerModalOpen(true);
+        }}
+      />
+
+      {/* Browser-Side OCR Image Text Scanner Modal */}
+      <ImageTextScannerModal
+        isOpen={isScannerModalOpen}
+        onClose={() => {
+          setIsScannerModalOpen(false);
+          setScannerInitialImage(undefined);
+        }}
+        initialImageSrc={scannerInitialImage}
       />
 
       {/* Style Presets Bar (collapsible / toggleable) */}
@@ -443,7 +490,7 @@ export const MultimodalInputBar: React.FC<MultimodalInputBarProps> = ({
           <div className="flex items-center gap-2 text-rose-800 min-w-0">
             <Radio className="w-4 h-4 text-rose-600 animate-spin shrink-0" />
             <span className="font-bold shrink-0">
-              🎙️ Listening... (Auto-Detecting Language)
+              🎙️ Listening ({speechLanguage === 'bn-BD' ? 'বাংলা' : 'English'})...
             </span>
             {interimFeedback && (
               <span className="text-rose-950 font-medium italic truncate max-w-[200px] sm:max-w-md">
@@ -473,7 +520,21 @@ export const MultimodalInputBar: React.FC<MultimodalInputBarProps> = ({
                 className="relative group shrink-0 rounded-xl overflow-hidden bg-gray-50 border border-gray-200 h-16 w-20 flex items-center justify-center shadow-xs"
               >
                 {att.type === 'image' && att.previewUrl ? (
-                  <img src={att.previewUrl} alt={att.name} className="w-full h-full object-cover" />
+                  <>
+                    <img src={att.previewUrl} alt={att.name} className="w-full h-full object-cover" />
+                    <button
+                      type="button"
+                      title="Scan text from this image (OCR)"
+                      onClick={() => {
+                        setScannerInitialImage(att.previewUrl);
+                        setIsScannerModalOpen(true);
+                      }}
+                      className="absolute bottom-1 left-1 p-1 bg-black/70 hover:bg-purple-600 text-white rounded-md transition opacity-90 group-hover:opacity-100 shadow-xs"
+                      aria-label="Scan image text"
+                    >
+                      <ScanText className="w-3 h-3" />
+                    </button>
+                  </>
                 ) : att.type === 'video' ? (
                   <div className="flex flex-col items-center justify-center p-1 text-center">
                     <Video className="w-5 h-5 text-indigo-600" />
@@ -541,25 +602,43 @@ export const MultimodalInputBar: React.FC<MultimodalInputBarProps> = ({
               <span className="hidden sm:inline">Attach</span>
             </button>
 
-            {/* 2. Multilingual Voice Recognition Button (Auto-Detect, No Dropdown) */}
-            <button
-              type="button"
-              id="chat-voice-btn"
-              onClick={toggleSpeechRecognition}
-              className={`px-3 py-1.5 rounded-xl transition flex items-center gap-1.5 text-xs font-medium ${
-                isRecording
-                  ? 'bg-rose-600 text-white font-bold animate-pulse shadow-sm'
-                  : 'text-gray-700 hover:text-gray-900 hover:bg-gray-100 bg-gray-50 border border-gray-200'
-              }`}
-              title={isRecording ? 'Stop Recording' : 'Voice Input (Auto-detects any spoken language)'}
-            >
-              {isRecording ? (
-                <MicOff className="w-3.5 h-3.5 text-white" />
-              ) : (
-                <Mic className="w-3.5 h-3.5 text-indigo-600" />
-              )}
-              <span>{isRecording ? 'Listening...' : 'Voice'}</span>
-            </button>
+            {/* 2. Voice Recognition Button with Language Selector */}
+            <div className="flex items-center gap-1 bg-gray-50 border border-gray-200 rounded-xl p-0.5">
+              <button
+                type="button"
+                id="chat-voice-btn"
+                onClick={toggleSpeechRecognition}
+                className={`px-2.5 py-1.5 rounded-lg transition flex items-center gap-1.5 text-xs font-medium ${
+                  isRecording
+                    ? 'bg-rose-600 text-white font-bold animate-pulse shadow-sm'
+                    : 'text-gray-700 hover:text-gray-900 hover:bg-gray-100'
+                }`}
+                title={
+                  isRecording
+                    ? 'Stop Recording'
+                    : `Voice Input (${speechLanguage === 'bn-BD' ? 'বাংলা' : 'English'})`
+                }
+              >
+                {isRecording ? (
+                  <MicOff className="w-3.5 h-3.5 text-white" />
+                ) : (
+                  <Mic className="w-3.5 h-3.5 text-indigo-600" />
+                )}
+                <span>{isRecording ? 'Listening...' : 'Voice'}</span>
+              </button>
+
+              <select
+                aria-label="Voice input language"
+                value={speechLanguage}
+                onChange={(e) => handleLanguageChange(e.target.value as 'en-US' | 'bn-BD')}
+                disabled={isRecording}
+                className="text-[11px] font-semibold bg-transparent text-gray-700 hover:text-gray-900 px-1.5 py-1 rounded cursor-pointer focus:outline-none"
+                title="Speech recognition language (English / বাংলা)"
+              >
+                <option value="en-US">EN</option>
+                <option value="bn-BD">বাংলা</option>
+              </select>
+            </div>
 
             {/* 3. Layers / Style Presets Button */}
             <button

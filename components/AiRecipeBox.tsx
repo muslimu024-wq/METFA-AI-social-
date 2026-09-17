@@ -6,6 +6,8 @@ export interface AiRecipeBoxProps {
   stylePreset?: string;
   onRemixPrompt?: (prompt: string, stylePreset?: string) => void;
   className?: string;
+  forceExpanded?: boolean;
+  onClose?: () => void;
 }
 
 /**
@@ -22,12 +24,21 @@ export const AiRecipeBox: React.FC<AiRecipeBoxProps> = ({
   stylePreset,
   onRemixPrompt,
   className = '',
+  forceExpanded,
+  onClose,
 }) => {
   // STRICT DEFAULT CLOSED STATE: Opt-in only
   const [showRecipe, setShowRecipe] = useState<boolean>(false);
   const [copied, setCopied] = useState<boolean>(false);
 
   if (!prompt || !prompt.trim()) return null;
+
+  const isExpanded = forceExpanded !== undefined ? forceExpanded : showRecipe;
+
+  const handleClose = () => {
+    setShowRecipe(false);
+    onClose?.();
+  };
 
   const handleCopy = (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -42,8 +53,8 @@ export const AiRecipeBox: React.FC<AiRecipeBoxProps> = ({
   };
 
   return (
-    <div className={`mt-2 ${className}`}>
-      {!showRecipe ? (
+    <div className={`${isExpanded ? '' : 'mt-2'} ${className}`}>
+      {!isExpanded ? (
         // USER-TRIGGERED COMPACT TOGGLE BUTTON (DEFAULT CLOSED)
         <div className="flex items-center gap-2">
           <button
@@ -87,7 +98,7 @@ export const AiRecipeBox: React.FC<AiRecipeBoxProps> = ({
             {/* Explicit Close Button ❌ */}
             <button
               type="button"
-              onClick={() => setShowRecipe(false)}
+              onClick={handleClose}
               className="p-1 text-slate-400 hover:text-rose-600 hover:bg-slate-100 rounded-lg transition cursor-pointer"
               title="Close AI Recipe (Collapse)"
               aria-label="Close AI Recipe"
@@ -115,7 +126,7 @@ export const AiRecipeBox: React.FC<AiRecipeBoxProps> = ({
             <div className="flex items-center gap-2">
               <button
                 type="button"
-                onClick={() => setShowRecipe(false)}
+                onClick={handleClose}
                 className="px-2.5 py-1 text-xs text-slate-500 hover:text-slate-800 transition font-medium cursor-pointer"
               >
                 Hide

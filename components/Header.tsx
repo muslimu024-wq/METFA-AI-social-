@@ -94,15 +94,76 @@ export const Header: React.FC<HeaderProps> = ({
               <Menu className="w-5 h-5" />
             </button>
 
-            {/* [App Logo] and [Master Brand Title: METFA Social / METFA AI / METFA Chat] */}
+            {/* [App Logo] and [Header Title: Metfa Social (Home) / Reels / Notifications / METFA <Service>] */}
             {(() => {
-              const activeService: BrandService =
-                activeTab === 'chat' ? 'AI' : activeTab === 'messages' ? 'Chat' : 'Social';
+              const renderTitle = () => {
+                if (activeTab === 'feed') {
+                  return (
+                    <h1 className="inline-flex items-baseline m-0 p-0 leading-none group-hover:opacity-90 transition-opacity">
+                      <span className="inline-flex items-baseline select-none whitespace-nowrap leading-none gap-1 sm:gap-1.5">
+                        <span className="font-black tracking-tight text-base sm:text-lg text-slate-900">
+                          Metfa
+                        </span>
+                        <span className="font-bold tracking-tight text-base sm:text-lg text-purple-600">
+                          Social
+                        </span>
+                      </span>
+                    </h1>
+                  );
+                }
+                if (activeTab === 'reels') {
+                  return (
+                    <h1 className="inline-flex items-baseline m-0 p-0 leading-none group-hover:opacity-90 transition-opacity">
+                      <span className="inline-flex items-baseline select-none whitespace-nowrap leading-none">
+                        <span className="font-black tracking-tight text-base sm:text-lg text-slate-900">
+                          Reels
+                        </span>
+                      </span>
+                    </h1>
+                  );
+                }
+                if (activeTab === 'notifications') {
+                  return (
+                    <h1 className="inline-flex items-baseline m-0 p-0 leading-none group-hover:opacity-90 transition-opacity">
+                      <span className="inline-flex items-baseline select-none whitespace-nowrap leading-none">
+                        <span className="font-black tracking-tight text-base sm:text-lg text-slate-900">
+                          Notifications
+                        </span>
+                      </span>
+                    </h1>
+                  );
+                }
+                if (activeTab === 'profile') {
+                  return null;
+                }
+                const activeService: BrandService =
+                  activeTab === 'chat' ? 'AI' : activeTab === 'messages' ? 'Chat' : 'Social';
+                return (
+                  <BrandTitle
+                    service={activeService}
+                    size="base"
+                    asHeading={true}
+                    className="group-hover:opacity-90 transition-opacity"
+                  />
+                );
+              };
+
+              const tooltipTitle =
+                activeTab === 'feed'
+                  ? 'Metfa Social - Home Feed'
+                  : activeTab === 'reels'
+                  ? 'Reels - Home Feed'
+                  : activeTab === 'notifications'
+                  ? 'Notifications - Home Feed'
+                  : activeTab === 'profile'
+                  ? 'Home Feed'
+                  : `METFA ${activeTab === 'chat' ? 'AI' : activeTab === 'messages' ? 'Chat' : 'Social'} - Home Feed`;
+
               return (
                 <div
                   onClick={() => onNavigateTab('feed')}
                   className="flex items-center gap-1.5 cursor-pointer group select-none shrink-0"
-                  title={`METFA ${activeService} - Home Feed`}
+                  title={tooltipTitle}
                 >
                   <img
                     src="/logo.png"
@@ -113,12 +174,7 @@ export const Header: React.FC<HeaderProps> = ({
                       (e.currentTarget as HTMLImageElement).src = '/metfa-emblem.png';
                     }}
                   />
-                  <BrandTitle
-                    service={activeService}
-                    size="base"
-                    asHeading={true}
-                    className="group-hover:opacity-90 transition-opacity"
-                  />
+                  {renderTitle()}
                 </div>
               );
             })()}

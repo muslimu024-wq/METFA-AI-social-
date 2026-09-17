@@ -115,6 +115,7 @@ export const CommunityFeed: React.FC<CommunityFeedProps> = ({
   const [editingCommentId, setEditingCommentId] = useState<string | null>(null);
   const [editingCommentText, setEditingCommentText] = useState<string>('');
   const [editingPost, setEditingPost] = useState<CommunityPost | null>(null);
+  const [activeRecipePostId, setActiveRecipePostId] = useState<string | null>(null);
   const [confirmModal, setConfirmModal] = useState<{
     isOpen: boolean;
     title: string;
@@ -261,10 +262,37 @@ export const CommunityFeed: React.FC<CommunityFeedProps> = ({
   const [isShareModalOpen, setIsShareModalOpen] = useState(false);
   const [sharingPostId, setSharingPostId] = useState<string | null>(null);
 
-  // Voice Dictation (Speech-to-Text in Comments with Auto Language Detection)
+  // Voice Dictation (Speech-to-Text in Comments)
   const [dictatingPostId, setDictatingPostId] = useState<string | null>(null);
+  const [speechLanguage, setSpeechLanguage] = useState<'en-US' | 'bn-BD'>(() => {
+    if (typeof window !== 'undefined') {
+      const saved = localStorage.getItem('metfa_speech_lang');
+      if (saved === 'bn-BD' || saved === 'en-US') return saved;
+    }
+    return 'en-US';
+  });
   const speechRecognitionRef = useRef<any>(null);
   const commentBaseTextRef = useRef<string>('');
+
+  const joinWithSpacing = (base: string, addition: string): string => {
+    const b = (base || '').trim();
+    const a = (addition || '').trim();
+    if (!b) return a;
+    if (!a) return b;
+    if (/^[.,!?;:।\)\]]/.test(a)) {
+      return `${b}${a}`;
+    }
+    return `${b} ${a}`;
+  };
+
+  const handleSpeechLangChange = (lang: 'en-US' | 'bn-BD') => {
+    setSpeechLanguage(lang);
+    try {
+      localStorage.setItem('metfa_speech_lang', lang);
+    } catch {
+      // ignore
+    }
+  };
 
   // 10-Second Voice Audio Comment Recording State
   const [isRecordingVoiceClip, setIsRecordingVoiceClip] = useState<string | null>(null);
@@ -500,8 +528,7 @@ export const CommunityFeed: React.FC<CommunityFeedProps> = ({
       const recognition = new SpeechRecognition();
       recognition.continuous = true;
       recognition.interimResults = true;
-      const autoLang = (typeof navigator !== 'undefined' && navigator.language) ? navigator.language : 'en-US';
-      recognition.lang = autoLang;
+      recognition.lang = speechLanguage;
       recognition.maxAlternatives = 1;
 
       commentBaseTextRef.current = commentInputs[postId] || '';
@@ -511,21 +538,23 @@ export const CommunityFeed: React.FC<CommunityFeedProps> = ({
       };
 
       recognition.onresult = (event: any) => {
-        let sessionFinal = '';
-        let sessionInterim = '';
+        let finalizedTranscript = '';
+        let interimTranscript = '';
 
         for (let i = 0; i < event.results.length; i++) {
-          const chunk = event.results[i][0].transcript;
-          if (event.results[i].isFinal) {
-            sessionFinal += chunk;
+          const result = event.results[i];
+          const chunk = result[0]?.transcript || '';
+          if (!chunk) continue;
+
+          if (result.isFinal) {
+            finalizedTranscript = joinWithSpacing(finalizedTranscript, chunk);
           } else {
-            sessionInterim += chunk;
+            interimTranscript = joinWithSpacing(interimTranscript, chunk);
           }
         }
 
-        const sessionTranscript = (sessionFinal + (sessionInterim ? ' ' + sessionInterim : '')).trim();
-        const base = commentBaseTextRef.current.trim();
-        const updated = base ? `${base} ${sessionTranscript}` : sessionTranscript;
+        const sessionVoiceText = joinWithSpacing(finalizedTranscript, interimTranscript);
+        const updated = joinWithSpacing(commentBaseTextRef.current, sessionVoiceText);
 
         setCommentInputs((prev) => ({ ...prev, [postId]: updated }));
       };
@@ -995,20 +1024,6 @@ export const CommunityFeed: React.FC<CommunityFeedProps> = ({
                     </span>
                   )}
 
-                  {/* Quick Direct Edit Button for Content Owner */}
-                  {isOwner && (
-                    <button
-                      type="button"
-                      id={`quick-edit-post-btn-${post.id}`}
-                      onClick={() => setEditingPost(post)}
-                      className="px-2.5 py-1 text-xs font-semibold rounded-xl bg-purple-50 hover:bg-purple-100 text-purple-700 hover:text-purple-900 border border-purple-200 transition flex items-center gap-1 cursor-pointer shadow-2xs"
-                      title="Edit Post content, recipe and tags"
-                    >
-                      <Edit3 className="w-3.5 h-3.5 text-purple-600" />
-                      <span>Edit</span>
-                    </button>
-                  )}
-
                   {/* Post Context Action Menu */}
                   <div className="relative" data-menu-root="true">
                     <button
@@ -1189,15 +1204,6 @@ export const CommunityFeed: React.FC<CommunityFeedProps> = ({
                   />
                 )}
 
-                {/* Prompt Recipe Card (if AI Artwork - Strictly Opt-In) */}
-                {post.prompt && post.prompt !== post.caption && (
-                  <AiRecipeBox
-                    prompt={post.prompt}
-                    stylePreset={post.stylePreset}
-                    onRemixPrompt={onRemixPrompt}
-                  />
-                )}
-
                 {/* Post Action Buttons & Reaction Popover */}
                 <div className="relative pt-2 border-t border-slate-100 text-slate-600 text-xs">
                   {/* Floating Reactions Bar Popover */}
@@ -1217,64 +1223,117 @@ export const CommunityFeed: React.FC<CommunityFeedProps> = ({
                     </div>
                   )}
 
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-3 sm:gap-4">
-                      {/* Like / Reaction Trigger */}
-                      <button
-                        type="button"
-                        onClick={() => handleLike(post.id)}
-                        onMouseEnter={() => setActiveReactionPickerPostId(post.id)}
-                        className={`flex items-center gap-1.5 transition ${
-                          userReaction
-                            ? `${REACTION_EMOJIS[userReaction]?.color} font-bold`
-                            : post.isLiked
-                            ? 'text-rose-500 font-bold'
-                            : 'hover:text-slate-900'
+                  {/* Single horizontal row for all 6 action items without wrapping */}
+                  <div className="flex items-center justify-between gap-1 sm:gap-1.5 flex-nowrap w-full overflow-x-auto no-scrollbar py-0.5">
+                    {/* 1. Like + count */}
+                    <button
+                      type="button"
+                      onClick={() => handleLike(post.id)}
+                      onMouseEnter={() => setActiveReactionPickerPostId(post.id)}
+                      className={`flex items-center gap-1 px-1.5 py-1 rounded-lg text-xs font-semibold transition shrink-0 whitespace-nowrap cursor-pointer ${
+                        userReaction
+                          ? `${REACTION_EMOJIS[userReaction]?.color} font-bold`
+                          : post.isLiked
+                          ? 'text-rose-500 font-bold'
+                          : 'hover:text-slate-900 text-slate-600'
+                      }`}
+                      title="Like"
+                    >
+                      {userReaction ? (
+                        <span className="text-sm leading-none">{REACTION_EMOJIS[userReaction].emoji}</span>
+                      ) : (
+                        <Heart className={`w-3.5 h-3.5 sm:w-4 sm:h-4 ${post.isLiked ? 'fill-current' : ''}`} />
+                      )}
+                      <span>{post.likesCount || 0}</span>
+                    </button>
+
+                    {/* 2. Comment + count */}
+                    <button
+                      type="button"
+                      onClick={() => setActiveCommentsPostId(isCommentsOpen ? null : post.id)}
+                      className={`flex items-center gap-1 px-1.5 py-1 rounded-lg text-xs font-semibold transition shrink-0 whitespace-nowrap cursor-pointer ${
+                        isCommentsOpen ? 'text-purple-600 font-bold' : 'hover:text-slate-900 text-slate-600'
+                      }`}
+                      title="Comments"
+                    >
+                      <MessageCircle className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
+                      <span>{totalCommentsCount}</span>
+                    </button>
+
+                    {/* 3. Repost + count */}
+                    <button
+                      type="button"
+                      onClick={() => onRemixPrompt(post.prompt || post.caption || '', post.stylePreset)}
+                      className="flex items-center gap-1 px-1.5 py-1 rounded-lg text-xs font-semibold text-slate-600 hover:text-slate-900 transition shrink-0 whitespace-nowrap cursor-pointer"
+                      title="Repost"
+                    >
+                      <Repeat className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
+                      <span>{post.remixCount || 0}</span>
+                    </button>
+
+                    {/* 4. AI Recipe */}
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setActiveRecipePostId((prev) => (prev === post.id ? null : post.id))
+                      }
+                      className={`inline-flex items-center gap-1 px-2 py-1 border text-xs font-semibold rounded-lg sm:rounded-xl transition shrink-0 whitespace-nowrap cursor-pointer shadow-xs ${
+                        activeRecipePostId === post.id
+                          ? 'bg-purple-600 text-white border-purple-600'
+                          : 'bg-purple-50 hover:bg-purple-100 border-purple-200 hover:border-purple-300 text-purple-700 hover:text-purple-800'
+                      }`}
+                      title="View AI Prompt Recipe & Parameters"
+                    >
+                      <Sparkles
+                        className={`w-3.5 h-3.5 ${
+                          activeRecipePostId === post.id
+                            ? 'text-white'
+                            : 'text-purple-600'
                         }`}
-                      >
-                        {userReaction ? (
-                          <span className="text-sm">{REACTION_EMOJIS[userReaction].emoji}</span>
-                        ) : (
-                          <Heart className={`w-4 h-4 ${post.isLiked ? 'fill-current' : ''}`} />
-                        )}
-                        <span>{post.likesCount || 0}</span>
-                      </button>
+                      />
+                      <span>AI Recipe</span>
+                    </button>
 
-                      {/* Comments Toggle */}
-                      <button
-                        type="button"
-                        onClick={() => setActiveCommentsPostId(isCommentsOpen ? null : post.id)}
-                        className={`flex items-center gap-1.5 transition ${
-                          isCommentsOpen ? 'text-purple-600 font-bold' : 'hover:text-slate-900'
-                        }`}
-                      >
-                        <MessageCircle className="w-4 h-4" />
-                        <span>{totalCommentsCount}</span>
-                      </button>
+                    {/* 5. Remix */}
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onRemixPrompt(post.prompt || post.caption || '', post.stylePreset);
+                      }}
+                      className="inline-flex items-center gap-1 px-2 py-1 bg-slate-100 hover:bg-slate-200 border border-slate-200 hover:border-slate-300 text-slate-700 hover:text-slate-900 text-xs font-medium rounded-lg sm:rounded-xl transition shrink-0 whitespace-nowrap cursor-pointer"
+                      title="Remix prompt directly in AI Studio"
+                    >
+                      <Wand2 className="w-3 h-3 text-teal-600" />
+                      <span>Remix</span>
+                    </button>
 
-                      {/* Remix Count */}
-                      <button
-                        type="button"
-                        onClick={() => onRemixPrompt(post.prompt, post.stylePreset)}
-                        className="flex items-center gap-1.5 hover:text-slate-900 transition"
-                      >
-                        <Repeat className="w-4 h-4" />
-                        <span>{post.remixCount || 0}</span>
-                      </button>
-                    </div>
-
+                    {/* 6. Share + count */}
                     <button
                       type="button"
                       id={`share-post-${post.id}`}
                       onClick={() => handleSharePost(post)}
-                      className="flex items-center gap-1.5 hover:text-slate-900 transition group"
+                      className="flex items-center gap-1 px-1.5 py-1 rounded-lg text-xs font-semibold text-slate-600 hover:text-slate-900 transition shrink-0 whitespace-nowrap cursor-pointer"
                       title="Share Post"
                     >
-                      <Share2 className="w-4 h-4 group-hover:scale-110 transition" />
+                      <Share2 className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
                       <span>{post.sharesCount || 0}</span>
                     </button>
                   </div>
                 </div>
+
+                {/* Expanded AI Recipe & Prompt Box when toggled open */}
+                {activeRecipePostId === post.id && (
+                  <div className="pt-2 animate-fadeIn">
+                    <AiRecipeBox
+                      prompt={post.prompt || post.caption || 'AI generated creative post'}
+                      stylePreset={post.stylePreset}
+                      onRemixPrompt={onRemixPrompt}
+                      forceExpanded={true}
+                      onClose={() => setActiveRecipePostId(null)}
+                    />
+                  </div>
+                )}
 
                 {/* Comments & 10s Voice Audio Section */}
                 {isCommentsOpen && (
@@ -1314,7 +1373,7 @@ export const CommunityFeed: React.FC<CommunityFeedProps> = ({
                         <div className="flex items-center gap-2 text-teal-800">
                           <Radio className="w-3.5 h-3.5 text-teal-600 animate-spin" />
                           <span className="font-bold">
-                            🎙️ Listening to your comment (Auto-detecting language)...
+                            🎙️ Listening to your comment ({speechLanguage === 'bn-BD' ? 'বাংলা' : 'English'})...
                           </span>
                         </div>
                         <button
@@ -1348,10 +1407,12 @@ export const CommunityFeed: React.FC<CommunityFeedProps> = ({
                           }}
                           placeholder={
                             dictatingPostId === post.id
-                              ? '🎙️ Listening... (Speak now)'
-                              : 'Write a comment or speak in any language...'
+                              ? speechLanguage === 'bn-BD'
+                                ? '🎙️ শুনছি (বাংলা)...'
+                                : '🎙️ Listening (English)...'
+                              : 'Write a comment...'
                           }
-                          className="w-full bg-slate-50 border border-slate-200 rounded-xl pl-3 pr-24 py-2 text-xs text-slate-900 placeholder:text-slate-400 focus:outline-none focus:border-purple-500 focus:bg-white"
+                          className="w-full bg-slate-50 border border-slate-200 rounded-xl pl-3 pr-28 py-2 text-xs text-slate-900 placeholder:text-slate-400 focus:outline-none focus:border-purple-500 focus:bg-white"
                         />
 
                         {/* Mic & Voice triggers */}
@@ -1359,7 +1420,7 @@ export const CommunityFeed: React.FC<CommunityFeedProps> = ({
                           <button
                             type="button"
                             onClick={() => toggleSpeechToText(post.id)}
-                            title="Voice Typing (Auto-Detect Language)"
+                            title={`Voice Typing (${speechLanguage === 'bn-BD' ? 'বাংলা' : 'English'})`}
                             className={`p-1 rounded-lg transition ${
                               isThisDictating
                                 ? 'bg-teal-600 text-white animate-pulse font-bold'
@@ -1368,6 +1429,18 @@ export const CommunityFeed: React.FC<CommunityFeedProps> = ({
                           >
                             <Mic className="w-3.5 h-3.5" />
                           </button>
+
+                          <select
+                            aria-label="Speech language"
+                            value={speechLanguage}
+                            onChange={(e) => handleSpeechLangChange(e.target.value as 'en-US' | 'bn-BD')}
+                            disabled={isThisDictating}
+                            className="text-[10px] font-semibold bg-slate-100 text-slate-700 hover:text-slate-900 px-1 py-0.5 rounded border border-slate-200 cursor-pointer focus:outline-none"
+                            title="Voice Language (English / বাংলা)"
+                          >
+                            <option value="en-US">EN</option>
+                            <option value="bn-BD">বাং</option>
+                          </select>
 
                           <button
                             type="button"

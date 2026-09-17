@@ -25,6 +25,8 @@ import {
   Film,
   Maximize2,
   Minimize2,
+  Wand2,
+  Repeat,
 } from 'lucide-react';
 import { CommunityPost, UserProfile } from '../types/community';
 import { AudioTrack } from '../types/audio';
@@ -94,6 +96,7 @@ export const PostCard: React.FC<PostCardProps> = ({
 }) => {
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const [showComments, setShowComments] = useState(false);
+  const [showAiRecipe, setShowAiRecipe] = useState(false);
   const [commentText, setCommentText] = useState('');
   const [showReactionPicker, setShowReactionPicker] = useState(false);
 
@@ -117,7 +120,46 @@ export const PostCard: React.FC<PostCardProps> = ({
 
   // Speech-to-text dictation state
   const [isDictating, setIsDictating] = useState(false);
+  const [speechLanguage, setSpeechLanguage] = useState<'en-US' | 'bn-BD'>(() => {
+    if (typeof window !== 'undefined') {
+      const saved = localStorage.getItem('metfa_speech_lang');
+      if (saved === 'bn-BD' || saved === 'en-US') return saved;
+    }
+    return 'en-US';
+  });
   const speechRecognitionRef = useRef<any>(null);
+  const baseCommentTextRef = useRef<string>('');
+
+  const joinWithSpacing = (base: string, addition: string): string => {
+    const b = (base || '').trim();
+    const a = (addition || '').trim();
+    if (!b) return a;
+    if (!a) return b;
+    if (/^[.,!?;:।\)\]]/.test(a)) {
+      return `${b}${a}`;
+    }
+    return `${b} ${a}`;
+  };
+
+  const handleSpeechLangChange = (lang: 'en-US' | 'bn-BD') => {
+    setSpeechLanguage(lang);
+    try {
+      localStorage.setItem('metfa_speech_lang', lang);
+    } catch {
+      // ignore
+    }
+  };
+
+  // Clean up speech recognition on unmount
+  useEffect(() => {
+    return () => {
+      if (speechRecognitionRef.current) {
+        try {
+          speechRecognitionRef.current.stop();
+        } catch {}
+      }
+    };
+  }, []);
 
   const isOwner = isContentOwner(post.author, userProfile, undefined, post.postingIdentity, post.id);
   const [isFollowed, setIsFollowed] = useState(
@@ -289,7 +331,13 @@ export const PostCard: React.FC<PostCardProps> = ({
     }
 
     if (isDictating) {
-      speechRecognitionRef.current?.stop();
+      if (speechRecognitionRef.current) {
+        try {
+          speechRecognitionRef.current.stop();
+        } catch (e) {
+          console.warn('Error stopping dictation:', e);
+        }
+      }
       setIsDictating(false);
       return;
     }
@@ -298,14 +346,38 @@ export const PostCard: React.FC<PostCardProps> = ({
       const recognition = new SpeechRecognition();
       recognition.continuous = true;
       recognition.interimResults = true;
-      recognition.lang = 'en-US';
+      recognition.lang = speechLanguage;
+      recognition.maxAlternatives = 1;
+
+      baseCommentTextRef.current = commentText;
+
+      recognition.onstart = () => {
+        setIsDictating(true);
+        onShowToast?.(
+          `Listening (${speechLanguage === 'bn-BD' ? 'বাংলা' : 'English'})... Speak now`
+        );
+      };
 
       recognition.onresult = (event: any) => {
-        let transcript = '';
-        for (let i = event.resultIndex; i < event.results.length; ++i) {
-          transcript += event.results[i][0].transcript;
+        let finalizedTranscript = '';
+        let interimTranscript = '';
+
+        for (let i = 0; i < event.results.length; i++) {
+          const result = event.results[i];
+          const chunk = result[0]?.transcript || '';
+          if (!chunk) continue;
+
+          if (result.isFinal) {
+            finalizedTranscript = joinWithSpacing(finalizedTranscript, chunk);
+          } else {
+            interimTranscript = joinWithSpacing(interimTranscript, chunk);
+          }
         }
-        setCommentText((prev) => `${prev} ${transcript}`.trim());
+
+        const sessionVoiceText = joinWithSpacing(finalizedTranscript, interimTranscript);
+        const updated = joinWithSpacing(baseCommentTextRef.current, sessionVoiceText);
+
+        setCommentText(updated);
       };
 
       recognition.onerror = () => setIsDictating(false);
@@ -313,8 +385,6 @@ export const PostCard: React.FC<PostCardProps> = ({
 
       speechRecognitionRef.current = recognition;
       recognition.start();
-      setIsDictating(true);
-      onShowToast?.('Listening... Speak now');
     } catch (err) {
       console.warn('Dictation error:', err);
       setIsDictating(false);
@@ -432,27 +502,6 @@ export const PostCard: React.FC<PostCardProps> = ({
             <span className="text-[10px] font-semibold px-2.5 py-1 bg-purple-50 border border-purple-200 text-purple-700 rounded-full hidden sm:inline-block">
               {post.stylePreset}
             </span>
-          )}
-
-          {/* Quick Direct Edit Button for Owner */}
-          {isOwner && (
-            <button
-              type="button"
-              id={`postcard-quick-edit-btn-${post.id}`}
-              onClick={() => {
-                if (onStartEdit) {
-                  onStartEdit(post);
-                } else {
-                  setIsInlineEditing(true);
-                  setEditCaption(post.caption || post.prompt);
-                }
-              }}
-              className="px-2 py-1 text-xs font-semibold rounded-xl bg-purple-50 hover:bg-purple-100 text-purple-700 hover:text-purple-900 border border-purple-200 transition flex items-center gap-1 cursor-pointer shadow-2xs"
-              title="Edit Post content"
-            >
-              <Edit3 className="w-3.5 h-3.5 text-purple-600" />
-              <span>Edit</span>
-            </button>
           )}
 
           {/* Top-Right Context Dropdown Menu (...) */}
@@ -715,14 +764,6 @@ export const PostCard: React.FC<PostCardProps> = ({
             />
           )}
 
-          {post.prompt && post.prompt !== post.caption && (
-            <AiRecipeBox
-              prompt={post.prompt}
-              stylePreset={post.stylePreset}
-              onRemixPrompt={onRemixPrompt}
-            />
-          )}
-
           {post.audioTrack && (
             <div className="p-2.5 rounded-2xl bg-purple-50 border border-purple-200 flex items-center justify-between gap-3">
               <div className="flex items-center gap-2.5 min-w-0">
@@ -796,72 +837,123 @@ export const PostCard: React.FC<PostCardProps> = ({
         </div>
       )}
 
-      {/* 4. Action Bar (Like, Comment, Share, Save) */}
-      <div className="px-4 py-3 border-t border-slate-100 flex items-center justify-between text-xs text-slate-600">
-        <div className="flex items-center gap-1 sm:gap-2">
-          {/* Reaction / Like Button */}
-          <div className="relative" data-reaction-container={post.id}>
-            <button
-              type="button"
-              id={`like-post-${post.id}`}
-              onClick={() => onToggleLike?.(post.id)}
-              onMouseEnter={() => setShowReactionPicker(true)}
-              className={`px-3 py-1.5 rounded-xl flex items-center gap-1.5 font-bold transition cursor-pointer ${
-                post.isLiked
-                  ? 'bg-rose-50 text-rose-600 border border-rose-200'
-                  : 'hover:bg-slate-100 text-slate-700'
-              }`}
-            >
-              <Heart className={`w-4 h-4 ${post.isLiked ? 'fill-current text-rose-600' : ''}`} />
-              <span>{post.likesCount}</span>
-            </button>
-          </div>
-
-          {/* Comments Toggle Button */}
+      {/* 4. Action Bar (Single horizontal row with no wrap) */}
+      <div className="px-4 py-2 border-t border-slate-100 flex items-center justify-between gap-1 sm:gap-1.5 flex-nowrap w-full overflow-x-auto no-scrollbar text-xs text-slate-600">
+        {/* 1. Like + count */}
+        <div className="relative shrink-0" data-reaction-container={post.id}>
           <button
             type="button"
-            id={`comments-toggle-${post.id}`}
-            onClick={() => setShowComments((prev) => !prev)}
-            className={`px-3 py-1.5 rounded-xl flex items-center gap-1.5 font-bold transition cursor-pointer ${
-              showComments ? 'bg-purple-50 text-purple-700 border border-purple-200' : 'hover:bg-slate-100 text-slate-700'
+            id={`like-post-${post.id}`}
+            onClick={() => onToggleLike?.(post.id)}
+            onMouseEnter={() => setShowReactionPicker(true)}
+            className={`px-1.5 py-1 rounded-lg flex items-center gap-1 text-xs font-semibold transition cursor-pointer shrink-0 whitespace-nowrap ${
+              post.isLiked
+                ? 'bg-rose-50 text-rose-600 border border-rose-200'
+                : 'hover:bg-slate-100 text-slate-700'
             }`}
+            title="Like"
           >
-            <MessageCircle className="w-4 h-4" />
-            <span>{(post.comments?.length || 0) + (post.voiceComments?.length || 0)}</span>
+            <Heart className={`w-3.5 h-3.5 sm:w-4 sm:h-4 ${post.isLiked ? 'fill-current text-rose-600' : ''}`} />
+            <span>{post.likesCount}</span>
           </button>
-
-          {/* Share Button */}
-          {onSharePost && (
-            <button
-              type="button"
-              id={`share-post-${post.id}`}
-              onClick={() => onSharePost(post)}
-              className="px-3 py-1.5 rounded-xl hover:bg-slate-100 text-slate-700 flex items-center gap-1.5 font-bold transition cursor-pointer"
-            >
-              <Share2 className="w-4 h-4" />
-              <span className="hidden sm:inline">Share</span>
-            </button>
-          )}
         </div>
 
-        {/* Quick Save Bookmark Action Button */}
+        {/* 2. Comment + count */}
         <button
           type="button"
-          id={`bookmark-post-${post.id}`}
-          onClick={handleSaveToggle}
-          className={`p-2 rounded-xl border transition cursor-pointer flex items-center gap-1.5 ${
-            isSaved
-              ? 'bg-amber-50 text-amber-800 border-amber-300 shadow-xs'
-              : 'border-slate-200 text-slate-600 hover:text-slate-900 hover:bg-slate-100'
+          id={`comments-toggle-${post.id}`}
+          onClick={() => setShowComments((prev) => !prev)}
+          className={`px-1.5 py-1 rounded-lg flex items-center gap-1 text-xs font-semibold transition cursor-pointer shrink-0 whitespace-nowrap ${
+            showComments ? 'bg-purple-50 text-purple-700 border border-purple-200' : 'hover:bg-slate-100 text-slate-700'
           }`}
-          title={isSaved ? 'Unsave from bookmarks' : 'Save post to bookmarks'}
+          title="Comments"
         >
-          <Bookmark className={`w-4 h-4 ${isSaved ? 'fill-current text-amber-500' : ''}`} />
-          <span className="text-[11px] font-bold hidden sm:inline">
-            {isSaved ? 'Saved' : 'Save'}
-          </span>
+          <MessageCircle className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
+          <span>{(post.comments?.length || 0) + (post.voiceComments?.length || 0)}</span>
         </button>
+
+        {/* 3. Repost + count */}
+        <button
+          type="button"
+          onClick={() => onRemixPrompt?.(post.prompt || post.caption || '', post.stylePreset)}
+          className="px-1.5 py-1 rounded-lg flex items-center gap-1 text-xs font-semibold text-slate-700 hover:bg-slate-100 transition cursor-pointer shrink-0 whitespace-nowrap"
+          title="Repost"
+        >
+          <Repeat className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
+          <span>{post.remixCount || 0}</span>
+        </button>
+
+        {/* 4. AI Recipe */}
+        <button
+          type="button"
+          onClick={() => setShowAiRecipe((prev) => !prev)}
+          className={`inline-flex items-center gap-1 px-2 py-1 border text-xs font-semibold rounded-lg sm:rounded-xl transition cursor-pointer shadow-xs shrink-0 whitespace-nowrap ${
+            showAiRecipe
+              ? 'bg-purple-600 text-white border-purple-600'
+              : 'bg-purple-50 hover:bg-purple-100 border-purple-200 hover:border-purple-300 text-purple-700 hover:text-purple-800'
+          }`}
+          title="View AI Prompt Recipe & Parameters"
+        >
+          <Sparkles
+            className={`w-3.5 h-3.5 ${
+              showAiRecipe ? 'text-white' : 'text-purple-600'
+            }`}
+          />
+          <span>AI Recipe</span>
+        </button>
+
+        {/* 5. Remix */}
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation();
+            onRemixPrompt?.(post.prompt || post.caption || '', post.stylePreset);
+          }}
+          className="inline-flex items-center gap-1 px-2 py-1 bg-slate-100 hover:bg-slate-200 border border-slate-200 hover:border-slate-300 text-slate-700 hover:text-slate-900 text-xs font-medium rounded-lg sm:rounded-xl transition cursor-pointer shrink-0 whitespace-nowrap"
+          title="Remix prompt directly in AI Studio"
+        >
+          <Wand2 className="w-3 h-3 text-teal-600" />
+          <span>Remix</span>
+        </button>
+
+        {/* 6. Share + count */}
+        {onSharePost ? (
+          <button
+            type="button"
+            id={`share-post-${post.id}`}
+            onClick={() => onSharePost(post)}
+            className="px-1.5 py-1 rounded-lg hover:bg-slate-100 text-slate-700 flex items-center gap-1 text-xs font-semibold transition cursor-pointer shrink-0 whitespace-nowrap"
+            title="Share Post"
+          >
+            <Share2 className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
+            <span>{post.sharesCount || 0}</span>
+          </button>
+        ) : (
+          <button
+            type="button"
+            id={`share-post-${post.id}`}
+            onClick={() => {}}
+            className="px-1.5 py-1 rounded-lg hover:bg-slate-100 text-slate-700 flex items-center gap-1 text-xs font-semibold transition cursor-pointer shrink-0 whitespace-nowrap"
+            title="Share Post"
+          >
+            <Share2 className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
+            <span>{post.sharesCount || 0}</span>
+          </button>
+        )}
       </div>
+
+      {/* Expanded AI Recipe & Prompt Box when toggled open */}
+      {showAiRecipe && (
+        <div className="px-4 pb-3 animate-fadeIn">
+          <AiRecipeBox
+            prompt={post.prompt || post.caption || 'AI generated creative post'}
+            stylePreset={post.stylePreset}
+            onRemixPrompt={onRemixPrompt}
+            forceExpanded={true}
+            onClose={() => setShowAiRecipe(false)}
+          />
+        </div>
+      )}
 
       {/* 5. Interactive Comments Section */}
       {showComments && (
@@ -957,21 +1049,47 @@ export const PostCard: React.FC<PostCardProps> = ({
               type="text"
               value={commentText}
               onChange={(e) => setCommentText(e.target.value)}
-              placeholder={isDictating ? 'Listening...' : 'Write a comment or prompt reply...'}
+              placeholder={
+                isDictating
+                  ? speechLanguage === 'bn-BD'
+                    ? '🎙️ শুনছি (বাংলা)...'
+                    : '🎙️ Listening (English)...'
+                  : 'Write a comment or prompt reply...'
+              }
               className="flex-1 bg-white border border-slate-300 focus:border-purple-600 rounded-xl px-3.5 py-2 text-xs text-slate-900 placeholder:text-slate-400 outline-none transition font-medium shadow-xs"
             />
 
-            {/* Speech Dictation Button */}
-            <button
-              type="button"
-              onClick={handleToggleDictation}
-              className={`p-2 rounded-xl transition cursor-pointer ${
-                isDictating ? 'bg-red-600 text-white animate-pulse' : 'bg-slate-200 text-slate-600 hover:text-slate-900'
-              }`}
-              title="Voice-to-Text Dictation"
-            >
-              <Mic className="w-4 h-4" />
-            </button>
+            {/* Speech Dictation Button + Language Selector */}
+            <div className="flex items-center gap-1 bg-slate-100 border border-slate-200 rounded-xl p-0.5 shrink-0">
+              <button
+                type="button"
+                onClick={handleToggleDictation}
+                className={`p-1.5 rounded-lg transition cursor-pointer ${
+                  isDictating
+                    ? 'bg-rose-600 text-white animate-pulse'
+                    : 'text-slate-600 hover:text-slate-900 hover:bg-slate-200'
+                }`}
+                title={
+                  isDictating
+                    ? 'Stop dictation'
+                    : `Voice-to-Text (${speechLanguage === 'bn-BD' ? 'বাংলা' : 'English'})`
+                }
+              >
+                <Mic className="w-4 h-4" />
+              </button>
+
+              <select
+                aria-label="Speech language"
+                value={speechLanguage}
+                onChange={(e) => handleSpeechLangChange(e.target.value as 'en-US' | 'bn-BD')}
+                disabled={isDictating}
+                className="text-[10px] font-semibold bg-transparent text-slate-700 hover:text-slate-900 px-1 py-0.5 rounded cursor-pointer focus:outline-none"
+                title="Voice Language (English / বাংলা)"
+              >
+                <option value="en-US">EN</option>
+                <option value="bn-BD">বাং</option>
+              </select>
+            </div>
 
             {/* 10s Voice Memo Button */}
             <button

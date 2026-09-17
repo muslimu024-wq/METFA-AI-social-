@@ -1,8 +1,8 @@
 import React from 'react';
-import { Camera, Video, Images, FileText, X } from 'lucide-react';
+import { Camera, Video, Images, FileText, ScanText, X } from 'lucide-react';
 
 export interface ActionSheetOption {
-  id: 'camera' | 'video' | 'gallery' | 'document';
+  id: 'camera' | 'video' | 'gallery' | 'scan_text' | 'document';
   label: string;
   description: string;
   icon: React.ComponentType<{ className?: string }>;
@@ -18,15 +18,17 @@ export interface AttachmentModalProps {
   onRecordVideo: () => void;
   onOpenGallery: () => void;
   onOpenDocuments: () => void;
+  onScanText?: () => void;
 }
 
 /**
  * Mobile-friendly Bottom Action Sheet for Metfa Social Chat
- * Clean 4-option menu:
+ * 5-option menu:
  * 1. Camera -> Direct photo capture
  * 2. Video -> Direct video recording
  * 3. Photos & Videos -> Local gallery selection
- * 4. Documents & Files -> Logs, code, documents
+ * 4. Scan Text (OCR) -> Browser-side OCR text extraction
+ * 5. Documents & Files -> Logs, code, documents
  */
 export const AttachmentModal: React.FC<AttachmentModalProps> = ({
   isOpen,
@@ -35,6 +37,7 @@ export const AttachmentModal: React.FC<AttachmentModalProps> = ({
   onRecordVideo,
   onOpenGallery,
   onOpenDocuments,
+  onScanText,
 }) => {
   if (!isOpen) return null;
 
@@ -53,12 +56,17 @@ export const AttachmentModal: React.FC<AttachmentModalProps> = ({
     onOpenGallery();
   };
 
+  const handleScanText = () => {
+    onClose();
+    onScanText?.();
+  };
+
   const handleOpenDocuments = () => {
     onClose();
     onOpenDocuments();
   };
 
-  // Action Menu Array Structure: 4 dedicated actions
+  // Action Menu Array Structure: 5 dedicated actions
   const actionOptions: ActionSheetOption[] = [
     {
       id: 'camera',
@@ -86,6 +94,15 @@ export const AttachmentModal: React.FC<AttachmentModalProps> = ({
       action: handleOpenGallery,
       accentColor: 'text-purple-600',
       bgGradient: 'from-purple-50 to-pink-50/60 border-purple-200 hover:border-purple-400',
+    },
+    {
+      id: 'scan_text',
+      label: 'Scan Text (OCR)',
+      description: 'Extract and copy text from any image or document',
+      icon: ScanText,
+      action: handleScanText,
+      accentColor: 'text-amber-600',
+      bgGradient: 'from-amber-50 to-orange-50/60 border-amber-200 hover:border-amber-400',
     },
     {
       id: 'document',

@@ -107,8 +107,10 @@ CREATE INDEX IF NOT EXISTS idx_v2_admin_policies_key_status ON public.v2_admin_p
 ALTER TABLE public.v2_admin_policies ENABLE ROW LEVEL SECURITY;
 
 DROP POLICY IF EXISTS "Public read access for active policies" ON public.v2_admin_policies;
-CREATE POLICY "Public read access for active policies"
+DROP POLICY IF EXISTS "Authenticated read access for active policies" ON public.v2_admin_policies;
+CREATE POLICY "Authenticated read access for active policies"
 ON public.v2_admin_policies FOR SELECT
+TO authenticated
 USING (status = 'ACTIVE' OR public.v2_is_admin_or_operator());
 
 DROP POLICY IF EXISTS "Only admins can modify policies" ON public.v2_admin_policies;
@@ -152,6 +154,86 @@ VALUES
   ('payout_enabled', false, 'Creator and contributor cash disbursement'),
   ('ai_monetization_enabled', false, 'Commercial AI tooling tiers')
 ON CONFLICT (key) DO NOTHING;
+
+-- Canonical 6 Emergency Kill Switches
+CREATE TABLE IF NOT EXISTS public.v2_kill_switches (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  key TEXT UNIQUE NOT NULL CHECK (key IN (
+    'ads_paused',
+    'rewards_paused',
+    'payouts_paused',
+    'contribution_paused',
+    'external_providers_paused',
+    'ai_actions_paused'
+  )),
+  label TEXT NOT NULL,
+  description TEXT NOT NULL,
+  is_paused BOOLEAN NOT NULL DEFAULT false,
+  target_module TEXT NOT NULL,
+  paused_by UUID REFERENCES public.profiles(id),
+  paused_role TEXT,
+  paused_at TIMESTAMPTZ,
+  reason TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_v2_kill_switches_key ON public.v2_kill_switches(key);
+ALTER TABLE public.v2_kill_switches ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS "Anyone can read kill switches" ON public.v2_kill_switches;
+CREATE POLICY "Anyone can read kill switches"
+ON public.v2_kill_switches FOR SELECT
+USING (true);
+
+DROP POLICY IF EXISTS "Admins can update kill switches" ON public.v2_kill_switches;
+CREATE POLICY "Admins can update kill switches"
+ON public.v2_kill_switches FOR ALL
+USING (public.v2_is_admin_or_operator());
+
+-- Canonical Multi-Party Approval Items
+CREATE TABLE IF NOT EXISTS public.v2_approval_items (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  category TEXT NOT NULL CHECK (category IN (
+    'PAYOUT_REQUEST',
+    'FINANCIAL_RECONCILIATION',
+    'RISK_APPEAL',
+    'KYC_TIER2',
+    'HIGH_VALUE_TRANSACTION',
+    'POLICY_MODIFICATION',
+    'KILL_SWITCH_OVERRIDE'
+  )),
+  title TEXT NOT NULL,
+  summary TEXT NOT NULL,
+  requester_id UUID REFERENCES public.profiles(id),
+  affected_entity_id TEXT NOT NULL,
+  amount_cents BIGINT,
+  currency TEXT DEFAULT 'USD',
+  evidence JSONB NOT NULL DEFAULT '{}'::jsonb,
+  status TEXT NOT NULL DEFAULT 'PENDING' CHECK (status IN ('PENDING', 'APPROVED', 'REJECTED')),
+  required_roles TEXT[] NOT NULL DEFAULT '{}'::text[],
+  ai_analysis JSONB,
+  decision_notes TEXT,
+  decided_by UUID REFERENCES public.profiles(id),
+  decided_by_role TEXT,
+  decided_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_v2_approval_items_status ON public.v2_approval_items(status);
+CREATE INDEX IF NOT EXISTS idx_v2_approval_items_category ON public.v2_approval_items(category);
+ALTER TABLE public.v2_approval_items ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS "Operators can view approval items" ON public.v2_approval_items;
+CREATE POLICY "Operators can view approval items"
+ON public.v2_approval_items FOR SELECT
+USING (public.v2_is_admin_or_operator());
+
+DROP POLICY IF EXISTS "Operators can update approval items" ON public.v2_approval_items;
+CREATE POLICY "Operators can update approval items"
+ON public.v2_approval_items FOR UPDATE
+USING (public.v2_is_admin_or_operator());
 
 -- =====================================================================
 -- 3. REVENUE FOUNDATION & IMMUTABLE REVENUE LEDGER
@@ -256,13 +338,14 @@ CREATE TABLE IF NOT EXISTS public.v2_contribution_ledger (
   source_ref TEXT, -- e.g. 'post:uuid', 'reel:uuid', 'audio_listen:uuid'
   risk_score INTEGER NOT NULL DEFAULT 0,
   status TEXT NOT NULL DEFAULT 'RECORDED' CHECK (status IN ('RECORDED', 'QUALIFIED', 'FLAGGED_RISK', 'SETTLED', 'DISCARDED')),
-  period_id UUID REFERENCES public.v2_revenue_periods(id),
+  revenue_period_id UUID REFERENCES public.v2_revenue_periods(id),
   metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 CREATE INDEX IF NOT EXISTS idx_v2_contribution_user ON public.v2_contribution_ledger(user_id);
-CREATE INDEX IF NOT EXISTS idx_v2_contribution_period ON public.v2_contribution_ledger(period_id);
+DROP INDEX IF EXISTS public.idx_v2_contribution_period;
+CREATE INDEX IF NOT EXISTS idx_v2_contribution_revenue_period ON public.v2_contribution_ledger(revenue_period_id);
 CREATE INDEX IF NOT EXISTS idx_v2_contribution_status ON public.v2_contribution_ledger(status);
 
 ALTER TABLE public.v2_contribution_ledger ENABLE ROW LEVEL SECURITY;
@@ -273,14 +356,57 @@ ON public.v2_contribution_ledger FOR SELECT
 USING (auth.uid() = user_id OR public.v2_is_admin_or_operator());
 
 -- =====================================================================
--- 5. REWARD PERIODS, ALLOCATIONS & REWARD LEDGER
+-- 5. REWARD SETTLEMENTS & REWARD ALLOCATIONS
 -- =====================================================================
+
+CREATE TABLE IF NOT EXISTS public.v2_reward_settlements (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  period_name TEXT NOT NULL,
+  revenue_period_id UUID NOT NULL REFERENCES public.v2_revenue_periods(id) ON DELETE RESTRICT,
+  contribution_period_id TEXT NOT NULL,
+  currency TEXT NOT NULL DEFAULT 'USD',
+  status TEXT NOT NULL DEFAULT 'PENDING' CHECK (status IN (
+    'PENDING', 'CALCULATING', 'SETTLED', 'FINALIZED', 'CANCELLED'
+  )),
+  applied_policy_id UUID REFERENCES public.v2_admin_policies(id),
+  applied_policy_version INTEGER NOT NULL DEFAULT 1,
+  reward_pool_percentage_basis_points INTEGER NOT NULL DEFAULT 0,
+  verified_eligible_net_revenue_cents BIGINT NOT NULL DEFAULT 0,
+  total_reward_pool_cents BIGINT NOT NULL DEFAULT 0,
+  total_allocated_reward_cents BIGINT NOT NULL DEFAULT 0,
+  undistributed_remainder_cents BIGINT NOT NULL DEFAULT 0,
+  total_network_eligible_cp BIGINT NOT NULL DEFAULT 0,
+  total_eligible_participants INTEGER NOT NULL DEFAULT 0,
+  revenue_locked_at TIMESTAMPTZ,
+  contribution_locked_at TIMESTAMPTZ,
+  settled_at TIMESTAMPTZ,
+  finalized_at TIMESTAMPTZ,
+  finalized_by UUID REFERENCES public.profiles(id),
+  idempotency_key TEXT UNIQUE NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_v2_reward_settlements_rev_period ON public.v2_reward_settlements(revenue_period_id);
+CREATE INDEX IF NOT EXISTS idx_v2_reward_settlements_status ON public.v2_reward_settlements(status);
+
+ALTER TABLE public.v2_reward_settlements ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS "Authorized operators can view reward settlements" ON public.v2_reward_settlements;
+CREATE POLICY "Authorized operators can view reward settlements"
+ON public.v2_reward_settlements FOR SELECT
+USING (public.v2_is_admin_or_operator());
 
 CREATE TABLE IF NOT EXISTS public.v2_reward_allocations (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  period_id UUID NOT NULL REFERENCES public.v2_revenue_periods(id) ON DELETE RESTRICT,
+  settlement_id UUID NOT NULL REFERENCES public.v2_reward_settlements(id) ON DELETE CASCADE,
+  revenue_period_id UUID NOT NULL REFERENCES public.v2_revenue_periods(id) ON DELETE RESTRICT,
   user_id UUID NOT NULL REFERENCES public.profiles(id) ON DELETE CASCADE,
   qualified_points INTEGER NOT NULL DEFAULT 0,
+  total_network_qualified_points BIGINT NOT NULL DEFAULT 0,
+  user_share_ratio NUMERIC(10,8) NOT NULL DEFAULT 0,
+  reward_pool_cents BIGINT NOT NULL DEFAULT 0,
+  allocated_cents BIGINT NOT NULL DEFAULT 0,
   estimated_reward_cents BIGINT NOT NULL DEFAULT 0,
   pending_reward_cents BIGINT NOT NULL DEFAULT 0,
   approved_reward_cents BIGINT NOT NULL DEFAULT 0,
@@ -296,9 +422,11 @@ CREATE TABLE IF NOT EXISTS public.v2_reward_allocations (
   approved_at TIMESTAMPTZ,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  UNIQUE (period_id, user_id)
+  CONSTRAINT uq_v2_reward_allocations_settlement_user UNIQUE (settlement_id, user_id)
 );
 
+CREATE INDEX IF NOT EXISTS idx_v2_reward_allocations_settlement ON public.v2_reward_allocations(settlement_id);
+CREATE INDEX IF NOT EXISTS idx_v2_reward_allocations_rev_period ON public.v2_reward_allocations(revenue_period_id);
 CREATE INDEX IF NOT EXISTS idx_v2_reward_allocations_user ON public.v2_reward_allocations(user_id);
 CREATE INDEX IF NOT EXISTS idx_v2_reward_allocations_status ON public.v2_reward_allocations(status);
 
@@ -597,6 +725,37 @@ CREATE POLICY "Only operators can view risk signals"
 ON public.v2_risk_signals FOR SELECT
 USING (public.v2_is_admin_or_operator());
 
+-- Canonical Option A: Risk Holds Lifecycle
+CREATE TABLE IF NOT EXISTS public.v2_risk_holds (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id UUID NOT NULL REFERENCES public.profiles(id) ON DELETE CASCADE,
+  hold_type TEXT NOT NULL CHECK (hold_type IN ('contribution', 'reward', 'payout')),
+  is_active BOOLEAN NOT NULL DEFAULT true,
+  reason TEXT NOT NULL,
+  placed_by UUID REFERENCES public.profiles(id),
+  placed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  lifted_by UUID REFERENCES public.profiles(id),
+  lifted_at TIMESTAMPTZ,
+  lift_reason TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_v2_risk_holds_user_active ON public.v2_risk_holds(user_id, is_active);
+CREATE INDEX IF NOT EXISTS idx_v2_risk_holds_type ON public.v2_risk_holds(hold_type);
+
+ALTER TABLE public.v2_risk_holds ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS "Users can view their own risk holds" ON public.v2_risk_holds;
+CREATE POLICY "Users can view their own risk holds"
+ON public.v2_risk_holds FOR SELECT
+USING (auth.uid() = user_id OR public.v2_is_admin_or_operator());
+
+DROP POLICY IF EXISTS "Operators can modify risk holds" ON public.v2_risk_holds;
+CREATE POLICY "Operators can modify risk holds"
+ON public.v2_risk_holds FOR ALL
+USING (public.v2_is_admin_or_operator());
+
 -- =====================================================================
 -- 11. AI HEALTH TELEMETRY (ZERO SECRETS STORED)
 -- =====================================================================
@@ -626,7 +785,7 @@ ON public.v2_ai_health_events FOR SELECT
 USING (public.v2_is_admin_or_operator());
 
 -- =====================================================================
--- 12. METFA SIGNAL & WORK / TASK ENGINE
+-- 12. METFA SIGNAL ENGINE
 -- =====================================================================
 
 CREATE TABLE IF NOT EXISTS public.v2_signals (
@@ -642,7 +801,6 @@ CREATE TABLE IF NOT EXISTS public.v2_signals (
   status TEXT NOT NULL DEFAULT 'DETECTED' CHECK (status IN (
     'DETECTED', 'AI_ANALYZED', 'TASK_CREATED', 'IN_PROGRESS', 'PENDING_APPROVAL', 'RESOLVED', 'DISMISSED'
   )),
-  linked_task_id UUID,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   resolved_at TIMESTAMPTZ,
   resolved_by UUID REFERENCES public.profiles(id)
@@ -657,83 +815,6 @@ CREATE POLICY "Operators can view all signals"
 ON public.v2_signals FOR SELECT
 USING (public.v2_is_admin_or_operator());
 
--- Work Center Projects
-CREATE TABLE IF NOT EXISTS public.v2_projects (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  name TEXT NOT NULL,
-  description TEXT,
-  lead_id UUID REFERENCES public.profiles(id),
-  status TEXT NOT NULL DEFAULT 'ACTIVE' CHECK (status IN ('PLANNING', 'ACTIVE', 'PAUSED', 'COMPLETED', 'ARCHIVED')),
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-
-ALTER TABLE public.v2_projects ENABLE ROW LEVEL SECURITY;
-
-DROP POLICY IF EXISTS "Authorized members can view projects" ON public.v2_projects;
-CREATE POLICY "Authorized members can view projects"
-ON public.v2_projects FOR SELECT
-USING (auth.uid() IS NOT NULL);
-
--- Work Center Tasks
-CREATE TABLE IF NOT EXISTS public.v2_tasks (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  project_id UUID REFERENCES public.v2_projects(id) ON DELETE SET NULL,
-  source_signal_id UUID REFERENCES public.v2_signals(id) ON DELETE SET NULL,
-  affected_module TEXT NOT NULL,
-  title TEXT NOT NULL,
-  description TEXT NOT NULL,
-  ai_brief JSONB,
-  requirements TEXT[] DEFAULT '{}',
-  do_not_change_constraints TEXT[] DEFAULT '{}',
-  deliverables JSONB DEFAULT '[]'::jsonb,
-  acceptance_criteria TEXT[] DEFAULT '{}',
-  test_requirements TEXT[] DEFAULT '{}',
-  priority TEXT NOT NULL DEFAULT 'MEDIUM' CHECK (priority IN ('LOW', 'MEDIUM', 'HIGH', 'URGENT')),
-  deadline TIMESTAMPTZ,
-  assigned_to UUID REFERENCES public.profiles(id) ON DELETE SET NULL,
-  created_by UUID REFERENCES public.profiles(id),
-  status TEXT NOT NULL DEFAULT 'DRAFT' CHECK (status IN (
-    'DRAFT', 'OPEN', 'ASSIGNED', 'IN_PROGRESS', 'SUBMITTED', 'AI_REVIEWED', 'ADMIN_APPROVED', 'COMPLETED', 'CANCELLED'
-  )),
-  ai_review JSONB,
-  admin_approval JSONB,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-
-CREATE INDEX IF NOT EXISTS idx_v2_tasks_assigned_to ON public.v2_tasks(assigned_to);
-CREATE INDEX IF NOT EXISTS idx_v2_tasks_status ON public.v2_tasks(status);
-
-ALTER TABLE public.v2_tasks ENABLE ROW LEVEL SECURITY;
-
-DROP POLICY IF EXISTS "Assigned users and operators can view tasks" ON public.v2_tasks;
-CREATE POLICY "Assigned users and operators can view tasks"
-ON public.v2_tasks FOR SELECT
-USING (auth.uid() = assigned_to OR public.v2_is_admin_or_operator());
-
--- Task Deliverables & Attachments
-CREATE TABLE IF NOT EXISTS public.v2_task_deliverables (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  task_id UUID NOT NULL REFERENCES public.v2_tasks(id) ON DELETE CASCADE,
-  submitted_by UUID NOT NULL REFERENCES public.profiles(id),
-  file_url TEXT NOT NULL,
-  checksum_hash TEXT,
-  notes TEXT,
-  review_status TEXT NOT NULL DEFAULT 'SUBMITTED' CHECK (review_status IN ('SUBMITTED', 'ACCEPTED', 'REVISION_REQUESTED')),
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-
-ALTER TABLE public.v2_task_deliverables ENABLE ROW LEVEL SECURITY;
-
-DROP POLICY IF EXISTS "Task participants can view deliverables" ON public.v2_task_deliverables;
-CREATE POLICY "Task participants can view deliverables"
-ON public.v2_task_deliverables FOR SELECT
-USING (
-  submitted_by = auth.uid() OR
-  public.v2_is_admin_or_operator() OR
-  EXISTS (SELECT 1 FROM public.v2_tasks t WHERE t.id = task_id AND t.assigned_to = auth.uid())
-);
-
 -- =====================================================================
 -- 13. AUDIO ECONOMY & LICENSING (NON-SOCIAL VOICE POST)
 -- =====================================================================
@@ -746,7 +827,10 @@ CREATE TABLE IF NOT EXISTS public.v2_audio_economy_tracks (
   license_type TEXT NOT NULL CHECK (license_type IN (
     'CREATIVE_COMMONS_BY', 'PLATFORM_FREE_USE', 'COMMERCIAL_REV_SHARE', 'EXCLUSIVE_CREATOR'
   )),
-  creator_revenue_split_percentage NUMERIC(5,2) NOT NULL DEFAULT 70.00,
+  creator_revenue_split_percentage NUMERIC(5,2) NOT NULL CHECK (
+    creator_revenue_split_percentage >= 0.00
+    AND creator_revenue_split_percentage <= 100.00
+  ),
   total_usages_in_reels INTEGER NOT NULL DEFAULT 0,
   total_usages_in_videos INTEGER NOT NULL DEFAULT 0,
   total_qualified_plays BIGINT NOT NULL DEFAULT 0,
@@ -771,6 +855,37 @@ DROP POLICY IF EXISTS "Owners can update their audio tracks" ON public.v2_audio_
 CREATE POLICY "Owners can update their audio tracks"
 ON public.v2_audio_economy_tracks FOR UPDATE
 USING (auth.uid() = owner_user_id OR public.v2_is_admin_or_operator());
+
+-- Protect financial, accounting, and licensing authority fields on audio tracks
+CREATE OR REPLACE FUNCTION public.v2_protect_audio_track_accounting()
+RETURNS TRIGGER AS $$
+BEGIN
+  -- Privileged admin or operator can perform administrative updates
+  IF public.v2_is_admin_or_operator() THEN
+    RETURN NEW;
+  END IF;
+
+  -- Client-owner updates cannot modify accounting or licensing authority fields
+  IF NEW.creator_revenue_split_percentage IS DISTINCT FROM OLD.creator_revenue_split_percentage
+     OR NEW.total_usages_in_reels IS DISTINCT FROM OLD.total_usages_in_reels
+     OR NEW.total_usages_in_videos IS DISTINCT FROM OLD.total_usages_in_videos
+     OR NEW.total_qualified_plays IS DISTINCT FROM OLD.total_qualified_plays
+     OR NEW.generated_ad_pool_revenue_cents IS DISTINCT FROM OLD.generated_ad_pool_revenue_cents
+     OR NEW.copyright_claim_status IS DISTINCT FROM OLD.copyright_claim_status
+     OR NEW.license_type IS DISTINCT FROM OLD.license_type
+     OR NEW.owner_user_id IS DISTINCT FROM OLD.owner_user_id THEN
+    RAISE EXCEPTION 'Track owners can only update editable metadata (title, artist_name). Financial and accounting fields are protected.';
+  END IF;
+
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS trg_v2_protect_audio_track_accounting ON public.v2_audio_economy_tracks;
+CREATE TRIGGER trg_v2_protect_audio_track_accounting
+BEFORE UPDATE ON public.v2_audio_economy_tracks
+FOR EACH ROW
+EXECUTE FUNCTION public.v2_protect_audio_track_accounting();
 
 -- =====================================================================
 -- 14. IMMUTABLE AUDIT LOG & COMPLIANCE
@@ -811,6 +926,41 @@ ON public.v2_audit_logs FOR UPDATE
 USING (false);
 
 -- =====================================================================
+-- DATABASE-LEVEL LEDGER IMMUTABILITY ENFORCEMENT
+-- =====================================================================
+
+CREATE OR REPLACE FUNCTION public.v2_prevent_ledger_mutation()
+RETURNS TRIGGER AS $$
+BEGIN
+  RAISE EXCEPTION 'Ledger records are strictly immutable and cannot be updated or deleted from %', TG_TABLE_NAME;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS trg_v2_revenue_ledger_immutable ON public.v2_revenue_ledger;
+CREATE TRIGGER trg_v2_revenue_ledger_immutable
+BEFORE UPDATE OR DELETE ON public.v2_revenue_ledger
+FOR EACH ROW
+EXECUTE FUNCTION public.v2_prevent_ledger_mutation();
+
+DROP TRIGGER IF EXISTS trg_v2_contribution_ledger_immutable ON public.v2_contribution_ledger;
+CREATE TRIGGER trg_v2_contribution_ledger_immutable
+BEFORE UPDATE OR DELETE ON public.v2_contribution_ledger
+FOR EACH ROW
+EXECUTE FUNCTION public.v2_prevent_ledger_mutation();
+
+DROP TRIGGER IF EXISTS trg_v2_wallet_ledger_immutable ON public.v2_wallet_ledger;
+CREATE TRIGGER trg_v2_wallet_ledger_immutable
+BEFORE UPDATE OR DELETE ON public.v2_wallet_ledger
+FOR EACH ROW
+EXECUTE FUNCTION public.v2_prevent_ledger_mutation();
+
+DROP TRIGGER IF EXISTS trg_v2_audit_logs_immutable ON public.v2_audit_logs;
+CREATE TRIGGER trg_v2_audit_logs_immutable
+BEFORE UPDATE OR DELETE ON public.v2_audit_logs
+FOR EACH ROW
+EXECUTE FUNCTION public.v2_prevent_ledger_mutation();
+
+-- =====================================================================
 -- 15. PRIVATE STORAGE BUCKETS CONFIGURATION FOR V2
 -- =====================================================================
 
@@ -820,7 +970,8 @@ VALUES ('v2-verification-private', 'v2-verification-private', false)
 ON CONFLICT (id) DO UPDATE SET public = false;
 
 DROP POLICY IF EXISTS "Users can upload verification docs" ON storage.objects;
-CREATE POLICY "Users can upload verification docs" ON storage.objects
+DROP POLICY IF EXISTS "v2_verification_users_upload" ON storage.objects;
+CREATE POLICY "v2_verification_users_upload" ON storage.objects
 FOR INSERT WITH CHECK (
   bucket_id = 'v2-verification-private'
   AND auth.uid() IS NOT NULL
@@ -828,30 +979,52 @@ FOR INSERT WITH CHECK (
 );
 
 DROP POLICY IF EXISTS "Users and admins can view verification docs" ON storage.objects;
-CREATE POLICY "Users and admins can view verification docs" ON storage.objects
+DROP POLICY IF EXISTS "v2_verification_users_and_admins_view" ON storage.objects;
+CREATE POLICY "v2_verification_users_and_admins_view" ON storage.objects
 FOR SELECT USING (
   bucket_id = 'v2-verification-private'
   AND auth.uid() IS NOT NULL
   AND ((storage.foldername(name))[1] = auth.uid()::text OR public.v2_is_admin_or_operator())
 );
 
--- Work deliverables bucket (Strictly Authenticated)
-INSERT INTO storage.buckets (id, name, public)
-VALUES ('v2-work-deliverables', 'v2-work-deliverables', false)
-ON CONFLICT (id) DO UPDATE SET public = false;
+-- =====================================================================
+-- 16. TARGETED SERVICE-ROLE DATABASE PRIVILEGES
+-- =====================================================================
 
-DROP POLICY IF EXISTS "Authenticated users can upload work deliverables" ON storage.objects;
-CREATE POLICY "Authenticated users can upload work deliverables" ON storage.objects
-FOR INSERT WITH CHECK (
-  bucket_id = 'v2-work-deliverables'
-  AND auth.uid() IS NOT NULL
-);
+GRANT USAGE ON SCHEMA public TO service_role, authenticated, anon;
 
-DROP POLICY IF EXISTS "Authenticated users can read work deliverables" ON storage.objects;
-CREATE POLICY "Authenticated users can read work deliverables" ON storage.objects
-FOR SELECT USING (
-  bucket_id = 'v2-work-deliverables'
-  AND auth.uid() IS NOT NULL
-);
+GRANT SELECT, INSERT, UPDATE, DELETE ON
+  public.v2_user_roles,
+  public.v2_admin_policies,
+  public.v2_feature_flags,
+  public.v2_kill_switches,
+  public.v2_approval_items,
+  public.v2_audit_logs,
+  public.v2_revenue_periods,
+  public.v2_revenue_ledger,
+  public.v2_contribution_policies,
+  public.v2_contribution_ledger,
+  public.v2_reward_settlements,
+  public.v2_reward_allocations,
+  public.v2_wallet_accounts,
+  public.v2_wallet_ledger,
+  public.v2_payout_requests,
+  public.v2_ads_campaigns,
+  public.v2_ads_creatives,
+  public.v2_ads_targeting,
+  public.v2_ads_events,
+  public.v2_verification_requests,
+  public.v2_risk_signals,
+  public.v2_risk_holds,
+  public.v2_ai_health_events,
+  public.v2_signals,
+  public.v2_audio_economy_tracks,
+  public.profiles,
+  public.conversations,
+  public.conversation_members,
+  public.messages
+TO service_role;
+
+GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO service_role;
 
 -- End of METFA V2 Master Database Foundation
