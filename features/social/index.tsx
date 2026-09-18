@@ -2,12 +2,12 @@ import React, { useState, useEffect, useMemo, Suspense, lazy } from 'react';
 import CommunityFeed from '../../components/CommunityFeed';
 import ReelsFeedView from '../../components/ReelsFeedView';
 import CreatePostModal from '../../components/CreatePostModal';
+import ProfileView from '../../components/ProfileView';
 
 // Lazy-load heavy non-initial views and modals
 const LiveStreamingStudio = lazy(() => import('../../components/LiveStreamingStudio'));
 const PagesDirectory = lazy(() => import('../../components/PagesDirectory'));
 const GroupsDirectory = lazy(() => import('../../components/GroupsDirectory'));
-const ProfileView = lazy(() => import('../../components/ProfileView'));
 const NotificationsView = lazy(() => import('../../components/NotificationsView'));
 const CreateReelModal = lazy(() => import('../../components/CreateReelModal'));
 const CreatePageModal = lazy(() => import('../../components/CreatePageModal'));
@@ -163,7 +163,7 @@ export const SocialEcosystemModule: React.FC<SocialEcosystemProps> = ({
   // Automatically dismiss active modals when currentTab changes
   useEffect(() => {
     if (currentTab === 'marketplace') {
-      window.open('https://shop.metfaai.com', '_blank', 'noopener,noreferrer');
+      window.open('https://sellme-copy-975fc0cd.base44.app', '_blank', 'noopener,noreferrer');
       onNavigateTab('feed');
       return;
     }
@@ -289,45 +289,43 @@ export const SocialEcosystemModule: React.FC<SocialEcosystemProps> = ({
       )}
 
       {currentTab === 'profile' && (
-        <Suspense fallback={<div className="flex-1 flex items-center justify-center p-8 text-slate-400 text-xs">Loading Profile...</div>}>
-          <ProfileView
-            userProfile={userProfile}
-            viewedProfileUserId={viewedProfileUserId}
-            onUpdateProfile={updateProfile}
-            creditsData={creditsData}
-            userPosts={
-              viewedProfileUserId && viewedProfileUserId !== user?.id && viewedProfileUserId !== userProfile?.id
-                ? posts.filter((p) => p.author?.id === viewedProfileUserId)
-                : posts.filter((p) => isContentOwner(p.author, userProfile, user, p.postingIdentity, p.id))
-            }
-            userReels={
-              viewedProfileUserId && viewedProfileUserId !== user?.id && viewedProfileUserId !== userProfile?.id
-                ? reels.filter((r) => r.author?.id === viewedProfileUserId)
-                : reels.filter((r) => r.author.id === userProfile.id)
-            }
-            allPosts={posts}
-            allReels={reels}
-            onUpdatePosts={(updated) => {
-              setPosts(updated);
-              saveCommunityPosts(updated);
-            }}
-            onUpdateReels={(updated) => {
-              setReels(updated);
-              saveReelHighlights(updated);
-            }}
-            onWatchAdClick={onWatchAdClick}
-            onOpenAuthModal={onOpenAuthModal}
-            onCreatePageClick={() => setIsCreatePageOpen(true)}
-            onCreateGroupClick={() => setIsCreateGroupOpen(true)}
-            onOpenChatWithUser={(targetId, targetProfile, conversationId) => {
-              window.dispatchEvent(
-                new CustomEvent('metfa_open_chat', {
-                  detail: { partnerId: targetId, partnerProfile: targetProfile, conversationId },
-                })
-              );
-            }}
-          />
-        </Suspense>
+        <ProfileView
+          userProfile={userProfile}
+          viewedProfileUserId={viewedProfileUserId}
+          onUpdateProfile={updateProfile}
+          creditsData={creditsData}
+          userPosts={
+            viewedProfileUserId && viewedProfileUserId !== user?.id && viewedProfileUserId !== userProfile?.id
+              ? posts.filter((p) => p.author?.id === viewedProfileUserId)
+              : posts.filter((p) => isContentOwner(p.author, userProfile, user, p.postingIdentity, p.id))
+          }
+          userReels={
+            viewedProfileUserId && viewedProfileUserId !== user?.id && viewedProfileUserId !== userProfile?.id
+              ? reels.filter((r) => r.author?.id === viewedProfileUserId)
+              : reels.filter((r) => r.author.id === userProfile.id)
+          }
+          allPosts={posts}
+          allReels={reels}
+          onUpdatePosts={(updated) => {
+            setPosts(updated);
+            saveCommunityPosts(updated);
+          }}
+          onUpdateReels={(updated) => {
+            setReels(updated);
+            saveReelHighlights(updated);
+          }}
+          onWatchAdClick={onWatchAdClick}
+          onOpenAuthModal={onOpenAuthModal}
+          onCreatePageClick={() => setIsCreatePageOpen(true)}
+          onCreateGroupClick={() => setIsCreateGroupOpen(true)}
+          onOpenChatWithUser={(targetId, targetProfile, conversationId) => {
+            window.dispatchEvent(
+              new CustomEvent('metfa_open_chat', {
+                detail: { partnerId: targetId, partnerProfile: targetProfile, conversationId },
+              })
+            );
+          }}
+        />
       )}
 
       {currentTab === 'messages' && (

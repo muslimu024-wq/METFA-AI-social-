@@ -8,6 +8,8 @@ import { v2RevenueEngine } from "./services/v2RevenueEngine";
 import { runV2RevenueEngineVerification } from "./tests/v2RevenueVerification";
 import { v2ContributionEngine } from "./services/v2ContributionEngine";
 import { runV2ContributionEngineVerification } from "./tests/v2ContributionVerification";
+import { requireAuth, requireV2Role, getServerSupabaseClient } from "./services/serverAuth";
+import { runV2BackendAuthorityVerification } from "./tests/v2BackendAuthorityVerification";
 
 async function startServer() {
   const app = express();
@@ -26,7 +28,7 @@ async function startServer() {
     res.setHeader("X-XSS-Protection", "1; mode=block");
     res.setHeader("Referrer-Policy", "strict-origin-when-cross-origin");
 
-    // 2. Universal CORS Support: Allow cross-app communication for Sellme (shop.metfaai.com) and Metfa Social
+    // 2. Universal CORS Support: Allow cross-app communication for Sellme (sellme-copy-975fc0cd.base44.app) and Metfa Social
     const origin = req.headers.origin;
     if (origin) {
       res.setHeader("Access-Control-Allow-Origin", origin);
@@ -1239,7 +1241,7 @@ ${METFA_AI_SAFETY_SYSTEM_INSTRUCTION}`;
 
   // =========================================================================
   // MARKETPLACE & ALIEXPRESS DROPSHIPPING API (Cross-App Routing & Proxy)
-  // Ensures Sellme (shop.metfaai.com) and Metfa Social merged catalog
+  // Ensures Sellme (sellme-copy-975fc0cd.base44.app) and Metfa Social merged catalog
   // =========================================================================
   const SERVER_MARKETPLACE_CATALOG = [
     // Local Sellme Marketplace Products
@@ -1269,8 +1271,8 @@ ${METFA_AI_SAFETY_SYSTEM_INSTRUCTION}`;
         isFree: true,
         estimatedDelivery: "2-4 business days (Fast Local)"
       },
-      productUrl: "https://shop.metfaai.com/products/sellme-studio-mic",
-      affiliateUrl: "https://shop.metfaai.com/products/sellme-studio-mic?ref=metfa_social",
+      productUrl: "https://sellme-copy-975fc0cd.base44.app/products/sellme-studio-mic",
+      affiliateUrl: "https://sellme-copy-975fc0cd.base44.app/products/sellme-studio-mic?ref=metfa_social",
       description: "Studio-grade 192kHz/24bit cardioid condenser microphone with built-in zero-latency headphone monitoring, touch-mute sensor, RGB gain halo, and custom shock mount.",
       specifications: {
         "Polar Pattern": "Cardioid Studio Condenser",
@@ -1302,8 +1304,8 @@ ${METFA_AI_SAFETY_SYSTEM_INSTRUCTION}`;
         isFree: true,
         estimatedDelivery: "2-5 business days"
       },
-      productUrl: "https://shop.metfaai.com/products/ai-tracking-gimbal",
-      affiliateUrl: "https://shop.metfaai.com/products/ai-tracking-gimbal?ref=metfa_social",
+      productUrl: "https://sellme-copy-975fc0cd.base44.app/products/ai-tracking-gimbal",
+      affiliateUrl: "https://sellme-copy-975fc0cd.base44.app/products/ai-tracking-gimbal?ref=metfa_social",
       description: "360-degree AI face and body recognition phone stabilizer requiring NO APP installation for live streaming.",
       specifications: {
         "Tracking Angle": "360° Horizontal Infinite",
@@ -1334,8 +1336,8 @@ ${METFA_AI_SAFETY_SYSTEM_INSTRUCTION}`;
         isFree: true,
         estimatedDelivery: "2-4 business days (Fast Local)"
       },
-      productUrl: "https://shop.metfaai.com/products/sellme-smart-hub",
-      affiliateUrl: "https://shop.metfaai.com/products/sellme-smart-hub?ref=metfa_social",
+      productUrl: "https://sellme-copy-975fc0cd.base44.app/products/sellme-smart-hub",
+      affiliateUrl: "https://sellme-copy-975fc0cd.base44.app/products/sellme-smart-hub?ref=metfa_social",
       description: "Next-gen desktop assistant with custom macro keys, real-time Gemini AI integration, audio visualizer, weather & social media live telemetry dashboard.",
       specifications: {
         "Display": "3.5\" High-Contrast IPS Touchscreen",
@@ -1366,8 +1368,8 @@ ${METFA_AI_SAFETY_SYSTEM_INSTRUCTION}`;
         isFree: true,
         estimatedDelivery: "3-5 business days"
       },
-      productUrl: "https://shop.metfaai.com/products/magnetic-power-bank",
-      affiliateUrl: "https://shop.metfaai.com/products/magnetic-power-bank?ref=metfa_social",
+      productUrl: "https://sellme-copy-975fc0cd.base44.app/products/magnetic-power-bank",
+      affiliateUrl: "https://sellme-copy-975fc0cd.base44.app/products/magnetic-power-bank?ref=metfa_social",
       description: "Compact MagSafe-compatible 15W wireless and 22.5W USB-C PD fast power bank with ambient LED battery indicator.",
       specifications: {
         "Capacity": "10,000 mAh Li-Polymer",
@@ -1398,8 +1400,8 @@ ${METFA_AI_SAFETY_SYSTEM_INSTRUCTION}`;
         isFree: true,
         estimatedDelivery: "3-6 business days"
       },
-      productUrl: "https://shop.metfaai.com/products/ai-translator-earbuds",
-      affiliateUrl: "https://shop.metfaai.com/products/ai-translator-earbuds?ref=metfa_social",
+      productUrl: "https://sellme-copy-975fc0cd.base44.app/products/ai-translator-earbuds",
+      affiliateUrl: "https://sellme-copy-975fc0cd.base44.app/products/ai-translator-earbuds?ref=metfa_social",
       description: "Simultaneous two-way real-time voice translation across 144 languages and accents with 98% neural accuracy.",
       specifications: {
         "Languages": "144 Languages & Accents",
@@ -1430,8 +1432,8 @@ ${METFA_AI_SAFETY_SYSTEM_INSTRUCTION}`;
         isFree: true,
         estimatedDelivery: "2-4 business days (Fast Local)"
       },
-      productUrl: "https://shop.metfaai.com/products/pulse-pro-smart-ring",
-      affiliateUrl: "https://shop.metfaai.com/products/pulse-pro-smart-ring?ref=metfa_social",
+      productUrl: "https://sellme-copy-975fc0cd.base44.app/products/pulse-pro-smart-ring",
+      affiliateUrl: "https://sellme-copy-975fc0cd.base44.app/products/pulse-pro-smart-ring?ref=metfa_social",
       description: "Ultralight titanium smart ring weighing only 2.9g with sleep stages and HRV monitoring.",
       specifications: {
         "Material": "Aviation-Grade Titanium Alloy",
@@ -1462,8 +1464,8 @@ ${METFA_AI_SAFETY_SYSTEM_INSTRUCTION}`;
         isFree: true,
         estimatedDelivery: "3-5 business days"
       },
-      productUrl: "https://shop.metfaai.com/products/activepro-fitness-band",
-      affiliateUrl: "https://shop.metfaai.com/products/activepro-fitness-band?ref=metfa_social",
+      productUrl: "https://sellme-copy-975fc0cd.base44.app/products/activepro-fitness-band",
+      affiliateUrl: "https://sellme-copy-975fc0cd.base44.app/products/activepro-fitness-band?ref=metfa_social",
       description: "Slim lightweight fitness tracker with 1.47\" AMOLED vibrant touch display and 120+ workout modes.",
       specifications: {
         "Display": "1.47\" AMOLED Color Screen",
@@ -1494,8 +1496,8 @@ ${METFA_AI_SAFETY_SYSTEM_INSTRUCTION}`;
         isFree: true,
         estimatedDelivery: "2-4 business days (Fast Local)"
       },
-      productUrl: "https://shop.metfaai.com/products/cyberpunk-crossbody-bag",
-      affiliateUrl: "https://shop.metfaai.com/products/cyberpunk-crossbody-bag?ref=metfa_social",
+      productUrl: "https://sellme-copy-975fc0cd.base44.app/products/cyberpunk-crossbody-bag",
+      affiliateUrl: "https://sellme-copy-975fc0cd.base44.app/products/cyberpunk-crossbody-bag?ref=metfa_social",
       description: "Futuristic urban crossbody bag built from waterproof ballistic nylon with Fidlock magnetic quick-release buckles.",
       specifications: {
         "Capacity": "Expandable 4L to 6L",
@@ -1526,8 +1528,8 @@ ${METFA_AI_SAFETY_SYSTEM_INSTRUCTION}`;
         isFree: true,
         estimatedDelivery: "2-4 business days"
       },
-      productUrl: "https://shop.metfaai.com/products/metfa-creator-hoodie",
-      affiliateUrl: "https://shop.metfaai.com/products/metfa-creator-hoodie?ref=metfa_social",
+      productUrl: "https://sellme-copy-975fc0cd.base44.app/products/metfa-creator-hoodie",
+      affiliateUrl: "https://sellme-copy-975fc0cd.base44.app/products/metfa-creator-hoodie?ref=metfa_social",
       description: "450 GSM luxury heavyweight french terry cotton hoodie with embroidered minimalist Metfa neural icon.",
       specifications: {
         "Fabric": "100% Organic Heavyweight Cotton 450 GSM",
@@ -1558,8 +1560,8 @@ ${METFA_AI_SAFETY_SYSTEM_INSTRUCTION}`;
         isFree: true,
         estimatedDelivery: "2-5 business days"
       },
-      productUrl: "https://shop.metfaai.com/products/smart-ambient-desk-bar",
-      affiliateUrl: "https://shop.metfaai.com/products/smart-ambient-desk-bar?ref=metfa_social",
+      productUrl: "https://sellme-copy-975fc0cd.base44.app/products/smart-ambient-desk-bar",
+      affiliateUrl: "https://sellme-copy-975fc0cd.base44.app/products/smart-ambient-desk-bar?ref=metfa_social",
       description: "Aluminum monitor light bar with auto-dimming ambient light sensor and rear RGB music-sync backlight.",
       specifications: {
         "CRI": "Ra 95+ True Color Reproduction",
@@ -1590,8 +1592,8 @@ ${METFA_AI_SAFETY_SYSTEM_INSTRUCTION}`;
         isFree: true,
         estimatedDelivery: "2-4 business days"
       },
-      productUrl: "https://shop.metfaai.com/products/3-in-1-aluminum-charging-stand",
-      affiliateUrl: "https://shop.metfaai.com/products/3-in-1-aluminum-charging-stand?ref=metfa_social",
+      productUrl: "https://sellme-copy-975fc0cd.base44.app/products/3-in-1-aluminum-charging-stand",
+      affiliateUrl: "https://sellme-copy-975fc0cd.base44.app/products/3-in-1-aluminum-charging-stand?ref=metfa_social",
       description: "CNC machined aerospace aluminum charging tree supporting simultaneous high-speed 15W MagSafe charging.",
       specifications: {
         "Material": "Solid Anodized Aluminum Alloy",
@@ -1628,8 +1630,8 @@ ${METFA_AI_SAFETY_SYSTEM_INSTRUCTION}`;
         isFree: true,
         estimatedDelivery: "7-12 business days"
       },
-      productUrl: "https://shop.metfaai.com/products/ai-anc-earbuds",
-      affiliateUrl: "https://shop.metfaai.com/products/ai-anc-earbuds?ref=metfa_social",
+      productUrl: "https://sellme-copy-975fc0cd.base44.app/products/ai-anc-earbuds",
+      affiliateUrl: "https://sellme-copy-975fc0cd.base44.app/products/ai-anc-earbuds?ref=metfa_social",
       description: "High-fidelity Bluetooth 5.4 wireless earbuds featuring active noise cancellation up to 45dB, AI adaptive ambient mode, 36-hour total battery life.",
       specifications: {
         "Bluetooth Version": "5.4 Low Latency",
@@ -1665,8 +1667,8 @@ ${METFA_AI_SAFETY_SYSTEM_INSTRUCTION}`;
         isFree: true,
         estimatedDelivery: "5-10 business days"
       },
-      productUrl: "https://shop.metfaai.com/products/ultra-smartwatch-amoled",
-      affiliateUrl: "https://shop.metfaai.com/products/ultra-smartwatch-amoled?ref=metfa_social",
+      productUrl: "https://sellme-copy-975fc0cd.base44.app/products/ultra-smartwatch-amoled",
+      affiliateUrl: "https://sellme-copy-975fc0cd.base44.app/products/ultra-smartwatch-amoled?ref=metfa_social",
       description: "1.43-inch Always-On AMOLED curved touchscreen smartwatch with stainless steel bezel, 100+ sports tracking modes, 14-day battery life.",
       specifications: {
         "Display": "1.43\" AMOLED 466x466",
@@ -1697,8 +1699,8 @@ ${METFA_AI_SAFETY_SYSTEM_INSTRUCTION}`;
         isFree: true,
         estimatedDelivery: "7-14 business days"
       },
-      productUrl: "https://shop.metfaai.com/products/4k-gps-drone",
-      affiliateUrl: "https://shop.metfaai.com/products/4k-gps-drone?ref=metfa_social",
+      productUrl: "https://sellme-copy-975fc0cd.base44.app/products/4k-gps-drone",
+      affiliateUrl: "https://sellme-copy-975fc0cd.base44.app/products/4k-gps-drone?ref=metfa_social",
       description: "Professional brushless aerial drone equipped with a 4K 60fps stabilized wide-angle camera, 5GHz FPV transmission up to 3km.",
       specifications: {
         "Camera": "4K HDR 60fps CMOS",
@@ -1729,8 +1731,8 @@ ${METFA_AI_SAFETY_SYSTEM_INSTRUCTION}`;
         isFree: true,
         estimatedDelivery: "6-12 business days"
       },
-      productUrl: "https://shop.metfaai.com/products/rgb-light-wand",
-      affiliateUrl: "https://shop.metfaai.com/products/rgb-light-wand?ref=metfa_social",
+      productUrl: "https://sellme-copy-975fc0cd.base44.app/products/rgb-light-wand",
+      affiliateUrl: "https://sellme-copy-975fc0cd.base44.app/products/rgb-light-wand?ref=metfa_social",
       description: "Handheld 360-color RGB LED lighting tube with CRI 95+, 2500K-9000K bi-color temperature, 20 special scene effects.",
       specifications: {
         "Color Temperature": "2500K - 9000K",
@@ -1761,8 +1763,8 @@ ${METFA_AI_SAFETY_SYSTEM_INSTRUCTION}`;
         isFree: true,
         estimatedDelivery: "7-12 business days"
       },
-      productUrl: "https://shop.metfaai.com/products/retro-mechanical-keyboard",
-      affiliateUrl: "https://shop.metfaai.com/products/retro-mechanical-keyboard?ref=metfa_social",
+      productUrl: "https://sellme-copy-975fc0cd.base44.app/products/retro-mechanical-keyboard",
+      affiliateUrl: "https://sellme-copy-975fc0cd.base44.app/products/retro-mechanical-keyboard?ref=metfa_social",
       description: "75% compact layout wireless mechanical keyboard with triple-mode connectivity (2.4G / BT 5.0 / USB-C), south-facing per-key RGB backlighting.",
       specifications: {
         "Layout": "75% (84 Keys)",
@@ -1793,8 +1795,8 @@ ${METFA_AI_SAFETY_SYSTEM_INSTRUCTION}`;
         isFree: true,
         estimatedDelivery: "6-11 business days"
       },
-      productUrl: "https://shop.metfaai.com/products/anti-theft-backpack",
-      affiliateUrl: "https://shop.metfaai.com/products/anti-theft-backpack?ref=metfa_social",
+      productUrl: "https://sellme-copy-975fc0cd.base44.app/products/anti-theft-backpack",
+      affiliateUrl: "https://sellme-copy-975fc0cd.base44.app/products/anti-theft-backpack?ref=metfa_social",
       description: "Ergonomic business and travel backpack crafted from high-density Oxford water-repellent fabric. Fits up to 15.6\" laptops.",
       specifications: {
         "Capacity": "25 Liters",
@@ -1825,8 +1827,8 @@ ${METFA_AI_SAFETY_SYSTEM_INSTRUCTION}`;
         isFree: true,
         estimatedDelivery: "6-10 business days"
       },
-      productUrl: "https://shop.metfaai.com/products/pocket-thermal-printer",
-      affiliateUrl: "https://shop.metfaai.com/products/pocket-thermal-printer?ref=metfa_social",
+      productUrl: "https://sellme-copy-975fc0cd.base44.app/products/pocket-thermal-printer",
+      affiliateUrl: "https://sellme-copy-975fc0cd.base44.app/products/pocket-thermal-printer?ref=metfa_social",
       description: "Inkless wireless pocket photo and memo printer connecting via Bluetooth.",
       specifications: {
         "Print Technology": "Thermal Zero-Ink (ZINK)",
@@ -1857,8 +1859,8 @@ ${METFA_AI_SAFETY_SYSTEM_INSTRUCTION}`;
         isFree: true,
         estimatedDelivery: "7-12 business days"
       },
-      productUrl: "https://shop.metfaai.com/products/flame-aroma-diffuser",
-      affiliateUrl: "https://shop.metfaai.com/products/flame-aroma-diffuser?ref=metfa_social",
+      productUrl: "https://sellme-copy-975fc0cd.base44.app/products/flame-aroma-diffuser",
+      affiliateUrl: "https://sellme-copy-975fc0cd.base44.app/products/flame-aroma-diffuser?ref=metfa_social",
       description: "Realistic flame lighting effect aromatherapy humidifier with 250ml water capacity.",
       specifications: {
         "Capacity": "250ml Water Tank",
@@ -1889,8 +1891,8 @@ ${METFA_AI_SAFETY_SYSTEM_INSTRUCTION}`;
         isFree: true,
         estimatedDelivery: "7-14 business days"
       },
-      productUrl: "https://shop.metfaai.com/products/bone-conduction-sports-headphones",
-      affiliateUrl: "https://shop.metfaai.com/products/bone-conduction-sports-headphones?ref=metfa_social",
+      productUrl: "https://sellme-copy-975fc0cd.base44.app/products/bone-conduction-sports-headphones",
+      affiliateUrl: "https://sellme-copy-975fc0cd.base44.app/products/bone-conduction-sports-headphones?ref=metfa_social",
       description: "Open-ear bone conduction headset engineered for swimming, running, and cycling.",
       specifications: {
         "Sound Tech": "Bone Conduction Open-Ear Transducer",
@@ -1921,8 +1923,8 @@ ${METFA_AI_SAFETY_SYSTEM_INSTRUCTION}`;
         isFree: true,
         estimatedDelivery: "6-11 business days"
       },
-      productUrl: "https://shop.metfaai.com/products/magnetic-car-mount-charger",
-      affiliateUrl: "https://shop.metfaai.com/products/magnetic-car-mount-charger?ref=metfa_social",
+      productUrl: "https://sellme-copy-975fc0cd.base44.app/products/magnetic-car-mount-charger",
+      affiliateUrl: "https://sellme-copy-975fc0cd.base44.app/products/magnetic-car-mount-charger?ref=metfa_social",
       description: "Ultra-strong N52 neodymium magnetic air vent car holder with 15W fast wireless charging.",
       specifications: {
         "Magnets": "16x N52 Industrial Neodymium Ring",
@@ -2706,6 +2708,39 @@ Output strictly in JSON: {"replies": ["reply 1", "reply 2", "reply 3"]}`;
         promptUsed: "Avatar Profile",
         modelUsed: "Metfa Avatar Engine",
       });
+    }
+  });
+
+  // =========================================================================
+  // METFA V2: PHASE 13-A TRUSTED BACKEND AUTHORITY FOUNDATION
+  // =========================================================================
+
+  // 1. Session verification endpoint (cryptographic JWT verification + authoritative v2_user_roles lookup)
+  app.get("/api/v2/auth/verify-session", requireAuth, (req, res) => {
+    res.json({
+      authenticated: true,
+      user_id: req.v2Auth!.userId,
+      email: req.v2Auth!.email,
+      roles: req.v2Auth!.roles,
+    });
+  });
+
+  // 2. Role-restricted test endpoint (verifies requireV2Role rejection of spoofed headers/body)
+  app.get("/api/v2/auth/operator-check", requireAuth, requireV2Role(["SUPER_ADMIN", "ADMIN", "OPERATOR"]), (req, res) => {
+    res.json({
+      authorized: true,
+      user_id: req.v2Auth!.userId,
+      roles: req.v2Auth!.roles,
+    });
+  });
+
+  // 3. Automated Authority Verification Suite (Phase 13-A)
+  app.get("/api/v2/auth/run-tests", async (_req, res) => {
+    try {
+      const summary = await runV2BackendAuthorityVerification();
+      res.json(summary);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || "Authority test execution error." });
     }
   });
 

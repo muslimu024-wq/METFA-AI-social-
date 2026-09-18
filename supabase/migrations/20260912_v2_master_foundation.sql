@@ -710,11 +710,7 @@ WITH CHECK (auth.uid() = user_id);
 CREATE TABLE IF NOT EXISTS public.v2_risk_signals (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   user_id UUID REFERENCES public.profiles(id) ON DELETE CASCADE,
-  signal_type TEXT NOT NULL CHECK (signal_type IN (
-    'VELOCITY_ANOMALY', 'ENGAGEMENT_ANOMALY', 'REPEATED_VIEWS', 'CONTENT_SIMILARITY',
-    'REFERRAL_ANOMALY', 'TRANSACTION_ANOMALY', 'NETWORK_ANOMALY', 'DEVICE_ANOMALY',
-    'AUDIO_ABUSE', 'PAYOUT_ANOMALY'
-  )),
+  signal_type TEXT NOT NULL,
   severity TEXT NOT NULL DEFAULT 'NOTICE' CHECK (severity IN ('INFO', 'NOTICE', 'WARNING', 'HIGH', 'CRITICAL')),
   risk_score INTEGER NOT NULL DEFAULT 0,
   affected_module TEXT NOT NULL,
@@ -892,7 +888,7 @@ BEGIN
 
   RETURN NEW;
 END;
-$$ LANGUAGE plpgsql;
+$$;
 
 DROP TRIGGER IF EXISTS trg_v2_protect_audio_track_accounting ON public.v2_audio_economy_tracks;
 CREATE TRIGGER trg_v2_protect_audio_track_accounting

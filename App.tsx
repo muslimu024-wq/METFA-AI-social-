@@ -52,7 +52,7 @@ export function App() {
   // Keep URL search query aligned with active tab
   const handleNavigateTab = useCallback((tab: string) => {
     if (tab === 'marketplace') {
-      window.open('https://shop.metfaai.com', '_blank', 'noopener,noreferrer');
+      window.open('https://sellme-copy-975fc0cd.base44.app', '_blank', 'noopener,noreferrer');
       return;
     }
     // Opening normal tabs (including profile tab) clears viewed profile to show authenticated user's profile
@@ -185,7 +185,7 @@ export function App() {
           rawHash.replace('#', '').toLowerCase() === 'marketplace' ||
           urlParams.get('source') === 'sellme'
         ) {
-          window.open('https://shop.metfaai.com', '_blank', 'noopener,noreferrer');
+          window.open('https://sellme-copy-975fc0cd.base44.app', '_blank', 'noopener,noreferrer');
           setActiveTab('feed');
         }
       } catch {}
@@ -195,7 +195,7 @@ export function App() {
     window.addEventListener('hashchange', handleCheckHashRoute);
 
     const handleOpenMarketplace = () => {
-      window.open('https://shop.metfaai.com', '_blank', 'noopener,noreferrer');
+      window.open('https://sellme-copy-975fc0cd.base44.app', '_blank', 'noopener,noreferrer');
     };
     window.addEventListener('metfa_open_marketplace', handleOpenMarketplace);
 

@@ -20,7 +20,6 @@ import {
   CheckCircle2,
   ExternalLink,
   Download,
-  ShoppingBag,
   MessageSquare,
   LayoutGrid,
 } from 'lucide-react';
@@ -28,6 +27,7 @@ import { DailyCreditsData } from '../utils/creditManager';
 import { getPages, getGroups } from '../utils/socialStore';
 import { useAuth } from '../context/AuthContext';
 import { getSellmeShopUrl } from '../services/marketplaceService';
+import { SellmeLogo } from './SellmeLogo';
 import GlobalSearchBar from './GlobalSearchBar';
 import BrandTitle, { BrandService } from './BrandTitle';
 
@@ -185,7 +185,7 @@ export const Header: React.FC<HeaderProps> = ({
             {/* [Search Icon] (Opens Global Search Dialog with speech dictation, tags & group filters) */}
             <GlobalSearchBar onNavigateTab={onNavigateTab} />
 
-            {/* [METFA Marketplace Navigation Button - Direct to SellMe App Home Page shop.metfaai.com] */}
+            {/* [METFA Marketplace Navigation Button - Direct to Sellme App https://sellme-copy-975fc0cd.base44.app] */}
             <button
               type="button"
               id="header-sellme-marketplace-btn"
@@ -193,11 +193,11 @@ export const Header: React.FC<HeaderProps> = ({
                 const sellmeHomeUrl = getSellmeShopUrl();
                 window.open(sellmeHomeUrl, '_blank', 'noopener,noreferrer');
               }}
-              className="w-9 h-9 sm:w-10 sm:h-10 rounded-2xl flex items-center justify-center transition shrink-0 active:scale-95 shadow-xs group cursor-pointer border bg-white hover:bg-slate-50 border-slate-200 text-slate-700 hover:text-purple-600"
-              title="Sellme App (shop.metfaai.com)"
-              aria-label="Sellme App Store"
+              className="w-9 h-9 sm:w-10 sm:h-10 rounded-2xl flex items-center justify-center transition shrink-0 active:scale-95 shadow-xs group cursor-pointer border bg-white hover:bg-slate-50 border-slate-200 text-slate-700 hover:border-blue-400 p-1"
+              title="Sellme App"
+              aria-label="Sellme App"
             >
-              <ShoppingBag className="w-4 h-4 sm:w-4.5 sm:h-4.5 group-hover:scale-110 transition-transform text-purple-600 group-hover:text-teal-600" />
+              <SellmeLogo className="w-5 h-5 sm:w-5.5 sm:h-5.5 rounded-lg group-hover:scale-110 transition-transform object-contain" />
             </button>
 
             {/* [Direct Messages Navigation Button] - Hidden on METFA AI tab since METFA AI has its own complete AI conversation system */}
@@ -438,19 +438,20 @@ export const Header: React.FC<HeaderProps> = ({
 
                 <button
                   type="button"
+                  id="menu-drawer-sellme-marketplace-btn"
                   onClick={() => {
                     const sellmeHomeUrl = getSellmeShopUrl();
                     window.open(sellmeHomeUrl, '_blank', 'noopener,noreferrer');
                     setIsSideDrawerOpen(false);
                   }}
-                  className="w-full p-2.5 rounded-xl flex items-center justify-between text-xs font-bold transition cursor-pointer text-slate-700 hover:bg-slate-100 hover:text-teal-600"
-                  title="Sellme App (shop.metfaai.com)"
+                  className="w-full p-2.5 rounded-xl flex items-center justify-between text-xs font-bold transition cursor-pointer text-slate-700 hover:bg-slate-100 hover:text-blue-600 group"
+                  title="Sellme App"
                 >
                   <div className="flex items-center gap-3">
-                    <ShoppingBag className="w-4 h-4 text-teal-600" />
-                    <span>Sellme App (shop.metfaai.com)</span>
+                    <SellmeLogo className="w-5 h-5 rounded-md shrink-0 shadow-2xs group-hover:scale-105 transition-transform" />
+                    <span>Sellme App</span>
                   </div>
-                  <span className="text-[10px] bg-gradient-to-r from-teal-500 to-purple-600 text-white px-2 py-0.5 rounded-full font-bold shadow-xs">
+                  <span className="text-[10px] bg-gradient-to-r from-blue-600 to-indigo-600 text-white px-2 py-0.5 rounded-full font-bold shadow-xs">
                     🛒 Open
                   </span>
                 </button>
