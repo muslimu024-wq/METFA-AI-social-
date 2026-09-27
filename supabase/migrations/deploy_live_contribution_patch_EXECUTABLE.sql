@@ -804,11 +804,12 @@ FOR SELECT USING (
 );
 
 -- =====================================================================
--- 16. TARGETED SERVICE-ROLE DATABASE PRIVILEGES
+-- 16. TARGETED DATABASE PRIVILEGES & LEAST-PRIVILEGE DATA API GRANTS
 -- =====================================================================
 
 GRANT USAGE ON SCHEMA public TO service_role, authenticated, anon;
 
+-- A. Backend / Service Role: Full administrative privileges
 GRANT SELECT, INSERT, UPDATE, DELETE ON
   public.v2_user_roles,
   public.v2_admin_policies,
@@ -838,6 +839,49 @@ GRANT SELECT, INSERT, UPDATE, DELETE ON
 TO service_role;
 
 GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO service_role;
+
+-- B. Authenticated Users: Least-privilege SELECT access (row visibility strictly governed by RLS)
+-- Note: Direct client INSERT/UPDATE/DELETE on financial & contribution ledgers remain strictly forbidden.
+GRANT SELECT ON
+  public.v2_user_roles,
+  public.v2_admin_policies,
+  public.v2_feature_flags,
+  public.v2_kill_switches,
+  public.v2_approval_items,
+  public.v2_audit_logs,
+  public.v2_revenue_periods,
+  public.v2_revenue_ledger,
+  public.v2_contribution_policies,
+  public.v2_contribution_ledger,
+  public.v2_reward_settlements,
+  public.v2_reward_allocations,
+  public.v2_wallet_accounts,
+  public.v2_wallet_ledger,
+  public.v2_payout_requests,
+  public.v2_ads_campaigns,
+  public.v2_ads_creatives,
+  public.v2_ads_targeting,
+  public.v2_ads_events,
+  public.v2_verification_requests,
+  public.v2_risk_signals,
+  public.v2_risk_holds,
+  public.v2_ai_health_events,
+  public.v2_signals,
+  public.v2_audio_economy_tracks
+TO authenticated;
+
+-- C. Explicit client write privileges strictly permitted by corresponding RLS policies:
+GRANT INSERT ON public.v2_payout_requests TO authenticated;
+GRANT INSERT ON public.v2_verification_requests TO authenticated;
+GRANT UPDATE ON public.v2_audio_economy_tracks TO authenticated;
+
+-- D. Anonymous Users: Strictly read-only for public catalog, policies, and system status
+GRANT SELECT ON
+  public.v2_feature_flags,
+  public.v2_kill_switches,
+  public.v2_contribution_policies,
+  public.v2_audio_economy_tracks
+TO anon;
 
 -- End of METFA V2 Master Database Foundation
 
