@@ -1,11 +1,30 @@
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
-import { Images, Undo2, RotateCcw, Download, Check } from 'lucide-react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import {
+  Images,
+  Undo2,
+  RotateCcw,
+  Download,
+  Check,
+  Video,
+  Sparkles,
+  Maximize2,
+  Trash2,
+  Layers,
+} from 'lucide-react';
 import GeminiChatView from '../../components/GeminiChatView';
 import StudioSettingsDrawer from '../../components/StudioSettingsDrawer';
 import RewardedAdModal from '../../components/RewardedAdModal';
 import { RecentImagesDrawer } from './components/RecentImagesDrawer';
 import { SideBySideComparisonView } from './components/SideBySideComparisonView';
-import { addRecentPrompt } from './utils/promptHistoryStore';
+import {
+  addRecentPrompt,
+  getRecentPrompts,
+  clearAllRecentPrompts,
+  togglePinRecentPrompt,
+  renameRecentPrompt,
+  deleteRecentPrompt,
+  RecentPromptItem,
+} from './utils/promptHistoryStore';
 import { downloadTransformedImageLocally } from './utils/downloadUtils';
 import { ChatMessage, ChatAttachment, StudioSettings } from '../../types/chat';
 import { GeneratedImageRecord } from './types';
@@ -126,7 +145,7 @@ const loadSessionImages = (): GeneratedImageRecord[] => {
 export const AIStudioModule: React.FC<AIStudioProps> = ({
   onShareToSocialFeed,
 }) => {
-  const { userProfile } = useAuth();
+  const { userProfile, isAuthenticated } = useAuth();
 
   // Chat History & Inference State (Isolated from Social Feed)
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -139,6 +158,103 @@ export const AIStudioModule: React.FC<AIStudioProps> = ({
   const [isRewardedAdOpen, setIsRewardedAdOpen] = useState(false);
   const [isRecentImagesOpen, setIsRecentImagesOpen] = useState(false);
   const [selectedComparisonImage, setSelectedComparisonImage] = useState<GeneratedImageRecord | null>(null);
+
+  // Top Bar Drawer Menu, Recent Prompts, and Media Tab State
+  const [isDrawerOpen, setIsDrawerOpen] = useState(false);
+  const [showAllPrompts, setShowAllPrompts] = useState(false);
+  const [drawerTab, setDrawerTab] = useState<'prompts' | 'images' | 'videos'>('prompts');
+  const [recentPrompts, setRecentPrompts] = useState<RecentPromptItem[]>(() => {
+    if (typeof window !== 'undefined') {
+      return getRecentPrompts();
+    }
+    return [];
+  });
+
+  // Long-press Context Menu for Prompts
+  const [selectedPrompt, setSelectedPrompt] = useState<RecentPromptItem | null>(null);
+  const longPressTimer = useRef<NodeJS.Timeout | null>(null);
+  const isLongPressTriggered = useRef<boolean>(false);
+
+  const handlePromptTouchStart = (item: RecentPromptItem) => {
+    isLongPressTriggered.current = false;
+    longPressTimer.current = setTimeout(() => {
+      isLongPressTriggered.current = true;
+      setSelectedPrompt(item);
+    }, 500); // 500ms long press
+  };
+
+  const handlePromptTouchEnd = () => {
+    if (longPressTimer.current) {
+      clearTimeout(longPressTimer.current);
+      longPressTimer.current = null;
+    }
+  };
+
+  const handlePinPrompt = (id: string) => {
+    const updated = togglePinRecentPrompt(id);
+    setRecentPrompts(updated);
+    setSelectedPrompt(null);
+  };
+
+  const handleDeletePrompt = (id: string) => {
+    const updated = deleteRecentPrompt(id);
+    setRecentPrompts(updated);
+    setSelectedPrompt(null);
+  };
+
+  const handleRenamePrompt = (id: string) => {
+    const currentText = selectedPrompt?.prompt || '';
+    const newTitle = prompt('নতুন নাম লিখুন:', currentText);
+    if (newTitle && newTitle.trim()) {
+      const updated = renameRecentPrompt(id, newTitle.trim());
+      setRecentPrompts(updated);
+    }
+    setSelectedPrompt(null);
+  };
+
+  const handleSharePrompt = (text: string) => {
+    if (typeof navigator !== 'undefined' && navigator.share) {
+      navigator.share({ title: 'Metfa AI Prompt', text }).catch(() => {});
+    } else if (typeof navigator !== 'undefined' && navigator.clipboard) {
+      navigator.clipboard.writeText(text);
+      alert('প্রম্পটটি কপি করা হয়েছে!');
+    }
+    setSelectedPrompt(null);
+  };
+
+  // Extract actual video attachments from messages (Zero-Dummy enforcement)
+  const actualVideos = useMemo(() => {
+    const list: { id: string; name: string; url?: string; prompt?: string; timestamp?: string }[] = [];
+    for (const msg of messages) {
+      if (msg.attachments && Array.isArray(msg.attachments)) {
+        for (const att of msg.attachments) {
+          if (att.type === 'video') {
+            list.push({
+              id: att.id || `vid_${list.length}`,
+              name: att.name,
+              url: att.previewUrl,
+              prompt: msg.content,
+              timestamp: msg.timestamp,
+            });
+          }
+        }
+      }
+    }
+    return list;
+  }, [messages]);
+
+  // Sync recent prompts from store events
+  useEffect(() => {
+    const handlePromptsUpdate = (e: any) => {
+      if (e.detail?.prompts) {
+        setRecentPrompts(e.detail.prompts);
+      } else {
+        setRecentPrompts(getRecentPrompts());
+      }
+    };
+    window.addEventListener('metfa_ai_recent_prompts_updated', handlePromptsUpdate);
+    return () => window.removeEventListener('metfa_ai_recent_prompts_updated', handlePromptsUpdate);
+  }, []);
 
   // Local Session State for Last 10 Generated Images (No Supabase Persistence)
   const [recentImages, setRecentImages] = useState<GeneratedImageRecord[]>(() => loadSessionImages());
@@ -451,7 +567,7 @@ export const AIStudioModule: React.FC<AIStudioProps> = ({
       console.error('Inference execution error:', err);
       let displayMsg = err?.message || 'Unable to connect to AI server. Please try again.';
       if (displayMsg.includes('limit: 0') || displayMsg.includes('free_tier') || displayMsg.includes('quota') && displayMsg.includes('image')) {
-        displayMsg = 'Direct AI image generation requires a Gemini API key with billing enabled (or an OpenAI / Grok key in Settings > API Keys), as image models have a quota limit of 0 on Google\'s free tier.';
+        displayMsg = 'Direct AI image generation requires a Gemini API key with billing enabled, as image models have a quota limit of 0 on Google\'s free tier.';
       } else if (displayMsg.includes('503') || displayMsg.includes('high demand') || displayMsg.includes('overloaded')) {
         displayMsg = 'Google Gemini models are currently experiencing temporary high demand. Please click "Try Again" in a few moments.';
       }
@@ -787,94 +903,41 @@ export const AIStudioModule: React.FC<AIStudioProps> = ({
 
   const handleShareToFeed = useCallback(
     (postData: { prompt: string; imageSrc: string; stylePreset?: string }) => {
+      if (!isAuthenticated) {
+        if (typeof window !== 'undefined') {
+          window.dispatchEvent(new CustomEvent('metfa_open_auth_modal'));
+        }
+        return;
+      }
       if (onShareToSocialFeed) {
         onShareToSocialFeed(postData);
       }
     },
-    [onShareToSocialFeed]
+    [isAuthenticated, onShareToSocialFeed]
   );
 
   return (
     <div className="w-full h-full flex flex-col relative overflow-hidden bg-[#04060C]">
-      {/* Top Left Floating Brand Identity: METFA AI */}
-      <div className="absolute top-3.5 left-3.5 sm:top-4 sm:left-4 z-20 hidden sm:flex items-center pointer-events-none">
-        <div className="flex items-center px-3 py-1.5 rounded-2xl bg-slate-900/90 border border-purple-500/30 backdrop-blur-md shadow-xl">
+      {/* Top Left Floating Brand Identity: METFA AI & Top Bar Three-Line Menu Button */}
+      <div className="absolute top-3.5 left-3.5 sm:top-4 sm:left-4 z-20 flex items-center gap-2">
+        {/* Top Bar - Three-Line Menu Button (Opens Drawer with Recent Prompts, Images, Videos) */}
+        <button
+          type="button"
+          id="ai-studio-top-drawer-menu-btn"
+          onClick={() => {
+            setRecentPrompts(getRecentPrompts());
+            setIsDrawerOpen(true);
+          }}
+          className="p-2 text-white bg-slate-900/90 hover:bg-slate-800 border border-purple-500/30 rounded-2xl shadow-xl backdrop-blur-md transition-all active:scale-95 cursor-pointer flex items-center justify-center text-lg leading-none"
+          title="Menu (Recent Prompts, Images, Videos)"
+          aria-label="Open Menu"
+        >
+          ☰
+        </button>
+
+        <div className="hidden sm:flex items-center px-3 py-1.5 rounded-2xl bg-slate-900/90 border border-purple-500/30 backdrop-blur-md shadow-xl pointer-events-none">
           <BrandTitle service="AI" size="sm" theme="dark" asHeading={true} />
         </div>
-      </div>
-
-      {/* Top Floating Action Controls: Undo, Download & Recent Visuals */}
-      <div className="absolute top-3.5 right-3.5 sm:top-4 sm:right-4 z-20 flex items-center gap-2">
-        {/* Undo Transformation Button */}
-        <button
-          type="button"
-          id="ai-studio-undo-btn"
-          onClick={handleUndoTransformation}
-          disabled={!canUndo || isLoading}
-          className={`flex items-center gap-1.5 px-3 py-1.5 sm:px-3.5 sm:py-2 rounded-2xl shadow-xl backdrop-blur-md transition-all active:scale-95 cursor-pointer border ${
-            canUndo && !isLoading
-              ? 'bg-slate-900/95 hover:bg-slate-800 text-amber-300 hover:text-amber-200 border-amber-500/40 hover:border-amber-400'
-              : 'bg-slate-900/60 text-slate-500 border-slate-800 cursor-not-allowed opacity-50'
-          }`}
-          title="Undo Last Transformation: Revert to previous visual & prompt (Ctrl+Z)"
-        >
-          <Undo2 className={`w-4 h-4 transition-transform ${canUndo ? 'hover:-rotate-45' : ''}`} />
-          <span className="text-xs font-semibold hidden sm:inline">Undo</span>
-          {undoCount > 0 && (
-            <span className="flex items-center justify-center px-1.5 py-0.2 text-[9px] font-bold rounded-full bg-amber-500/20 text-amber-300 border border-amber-500/30">
-              {undoCount}
-            </span>
-          )}
-        </button>
-
-        {/* Download Current Transformed Image Button */}
-        {currentTransformedImage && (
-          <button
-            type="button"
-            id="ai-studio-download-btn"
-            onClick={handleDownloadCurrent}
-            disabled={isDownloading}
-            className={`flex items-center gap-1.5 px-3 py-1.5 sm:px-3.5 sm:py-2 rounded-2xl shadow-xl backdrop-blur-md transition-all active:scale-95 cursor-pointer border ${
-              downloadSuccess
-                ? 'bg-teal-950/90 text-teal-300 border-teal-500/50'
-                : 'bg-slate-900/90 hover:bg-slate-800 text-teal-400 hover:text-teal-300 border-teal-500/40 hover:border-teal-400'
-            }`}
-            title="Download current transformed visual directly to your device"
-          >
-            {downloadSuccess ? (
-              <Check className="w-4 h-4 text-teal-300" />
-            ) : (
-              <Download className={`w-4 h-4 text-teal-400 ${isDownloading ? 'animate-bounce' : ''}`} />
-            )}
-            <span className="text-xs font-semibold hidden sm:inline">
-              {downloadSuccess ? 'Saved' : isDownloading ? 'Saving...' : 'Download'}
-            </span>
-          </button>
-        )}
-
-        {/* Quick Access Slide-Over Trigger for Last 10 Generated Images */}
-        <button
-          type="button"
-          id="ai-studio-recent-images-btn"
-          onClick={() => setIsRecentImagesOpen(true)}
-          className="flex items-center gap-2 px-3 py-1.5 sm:px-3.5 sm:py-2 bg-slate-900/90 hover:bg-slate-800 border border-purple-500/40 hover:border-purple-400 text-white rounded-2xl shadow-xl backdrop-blur-md transition-all active:scale-95 cursor-pointer group"
-          title="Recent Visuals (Last 10 Generated Images in Session)"
-        >
-          <div className="relative flex items-center justify-center">
-            <Images className="w-4 h-4 text-purple-400 group-hover:text-purple-300 transition-colors" />
-            {recentImages.length > 0 && (
-              <span className="absolute -top-1.5 -right-1.5 flex items-center justify-center w-3.5 h-3.5 text-[9px] font-black bg-gradient-to-r from-purple-600 to-teal-500 text-white rounded-full ring-2 ring-slate-900">
-                {recentImages.length}
-              </span>
-            )}
-          </div>
-          <span className="text-xs font-semibold text-slate-200 group-hover:text-white hidden sm:inline">
-            Recent Visuals
-          </span>
-          <span className="text-[10px] font-mono text-purple-300 hidden md:inline">
-            ({recentImages.length}/10)
-          </span>
-        </button>
       </div>
 
       <GeminiChatView
@@ -956,6 +1019,387 @@ export const AIStudioModule: React.FC<AIStudioProps> = ({
           <div className="flex items-center gap-2.5 px-4 py-2 bg-slate-900/95 border border-amber-500/50 shadow-2xl rounded-2xl backdrop-blur-md text-amber-200 text-xs font-medium max-w-md">
             <Undo2 className="w-4 h-4 text-amber-400 shrink-0" />
             <span className="truncate">{undoToast}</span>
+          </div>
+        </div>
+      )}
+
+      {/* Three-Line Navigation Drawer Menu */}
+      {isDrawerOpen && (
+        <div className="fixed inset-0 z-50 flex">
+          {/* Backdrop */}
+          <div 
+            className="fixed inset-0 bg-black/40 backdrop-blur-xs transition-opacity" 
+            onClick={() => setIsDrawerOpen(false)} 
+          />
+
+          {/* Drawer Content */}
+          <div className="relative bg-white w-80 sm:w-96 h-full p-4 z-10 flex flex-col shadow-2xl animate-slideRight">
+            <div className="flex justify-between items-center pb-3 border-b border-gray-200">
+              <div className="flex items-center gap-2">
+                <span className="text-base text-gray-700">☰</span>
+                <h3 className="font-bold text-gray-800 text-base">Menu</h3>
+              </div>
+              <button 
+                type="button"
+                onClick={() => setIsDrawerOpen(false)} 
+                className="text-gray-500 hover:text-gray-800 text-base p-1 rounded-lg hover:bg-gray-100 transition cursor-pointer"
+                aria-label="Close Menu"
+              >
+                ✕
+              </button>
+            </div>
+
+            {/* Quick Active Artwork Actions if an image is loaded */}
+            {(currentTransformedImage || canUndo) && (
+              <div className="mt-3 p-2.5 bg-purple-50/70 border border-purple-100 rounded-xl flex items-center justify-between gap-2">
+                <div className="flex items-center gap-1.5 min-w-0">
+                  <Sparkles className="w-3.5 h-3.5 text-purple-600 shrink-0" />
+                  <span className="text-xs font-semibold text-purple-900 truncate">
+                    Active Artwork
+                  </span>
+                </div>
+                <div className="flex items-center gap-1.5 shrink-0">
+                  {canUndo && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        handleUndoTransformation();
+                        setIsDrawerOpen(false);
+                      }}
+                      className="px-2 py-1 bg-white hover:bg-amber-50 text-amber-800 border border-amber-300 rounded-lg text-xs font-semibold flex items-center gap-1 transition cursor-pointer"
+                      title="Undo transformation"
+                    >
+                      <Undo2 className="w-3 h-3 text-amber-700" />
+                      <span>Undo {undoCount > 0 ? `(${undoCount})` : ''}</span>
+                    </button>
+                  )}
+                  {currentTransformedImage && (
+                    <button
+                      type="button"
+                      onClick={handleDownloadCurrent}
+                      disabled={isDownloading}
+                      className="px-2 py-1 bg-purple-600 hover:bg-purple-700 text-white rounded-lg text-xs font-semibold flex items-center gap-1 transition cursor-pointer"
+                      title="Download active visual"
+                    >
+                      {downloadSuccess ? (
+                        <Check className="w-3 h-3 text-white" />
+                      ) : (
+                        <Download className="w-3 h-3 text-white" />
+                      )}
+                      <span>{downloadSuccess ? 'Saved' : 'Download'}</span>
+                    </button>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {/* Media Navigation Tabs: Recent Prompts, Images, Videos */}
+            <div className="mt-3 flex items-center bg-gray-100 p-1 rounded-xl gap-1 text-xs">
+              <button
+                type="button"
+                onClick={() => setDrawerTab('prompts')}
+                className={`flex-1 py-1.5 rounded-lg font-medium transition flex items-center justify-center gap-1 cursor-pointer ${
+                  drawerTab === 'prompts'
+                    ? 'bg-white text-purple-700 font-bold shadow-xs'
+                    : 'text-gray-600 hover:text-gray-900'
+                }`}
+              >
+                <span>Prompts</span>
+                <span className="text-[10px] px-1.5 py-0.2 rounded-full bg-purple-100 text-purple-800 font-bold">
+                  {recentPrompts.length}
+                </span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setDrawerTab('images')}
+                className={`flex-1 py-1.5 rounded-lg font-medium transition flex items-center justify-center gap-1 cursor-pointer ${
+                  drawerTab === 'images'
+                    ? 'bg-white text-purple-700 font-bold shadow-xs'
+                    : 'text-gray-600 hover:text-gray-900'
+                }`}
+              >
+                <span>Images</span>
+                <span className="text-[10px] px-1.5 py-0.2 rounded-full bg-purple-100 text-purple-800 font-bold">
+                  {recentImages.length}
+                </span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setDrawerTab('videos')}
+                className={`flex-1 py-1.5 rounded-lg font-medium transition flex items-center justify-center gap-1 cursor-pointer ${
+                  drawerTab === 'videos'
+                    ? 'bg-white text-purple-700 font-bold shadow-xs'
+                    : 'text-gray-600 hover:text-gray-900'
+                }`}
+              >
+                <span>Videos</span>
+                <span className="text-[10px] px-1.5 py-0.2 rounded-full bg-purple-100 text-purple-800 font-bold">
+                  {actualVideos.length}
+                </span>
+              </button>
+            </div>
+
+            {/* Tab 1: Recent Prompts with Long-Press Action (Pin, Share, Rename, Delete) */}
+            {drawerTab === 'prompts' && (
+              <div className="mt-3 flex-1 flex flex-col min-h-0">
+                <div className="flex justify-between items-center text-xs text-gray-500 mb-2 px-1">
+                  <span className="font-semibold text-gray-600">
+                    RECENT PROMPTS ({recentPrompts.length})
+                  </span>
+                  {recentPrompts.length > 4 && (
+                    <button 
+                      type="button"
+                      onClick={() => setShowAllPrompts(!showAllPrompts)}
+                      className="text-purple-600 hover:underline text-xs font-medium cursor-pointer"
+                    >
+                      {showAllPrompts ? 'Show less' : 'View all'}
+                    </button>
+                  )}
+                </div>
+
+                <div className="space-y-1.5 overflow-y-auto flex-1 pr-1 scrollbar-thin">
+                  <span className="text-[10px] text-gray-400 font-bold uppercase tracking-wider block mb-1">
+                    Recent Prompts (Long press for options)
+                  </span>
+                  {recentPrompts.length === 0 ? (
+                    <div className="text-center py-10 text-xs text-gray-400">
+                      No recent prompts yet. Start chatting to build your prompt history!
+                    </div>
+                  ) : (
+                    (showAllPrompts ? recentPrompts : recentPrompts.slice(0, 20)).map((item, idx) => (
+                      <div
+                        key={item.id || idx}
+                        onTouchStart={() => handlePromptTouchStart(item)}
+                        onTouchEnd={handlePromptTouchEnd}
+                        onMouseDown={() => handlePromptTouchStart(item)}
+                        onMouseUp={handlePromptTouchEnd}
+                        onClick={() => {
+                          if (isLongPressTriggered.current) return;
+                          window.dispatchEvent(
+                            new CustomEvent('metfa_ai_restore_prompt', {
+                              detail: {
+                                prompt: item.prompt,
+                                stylePreset: item.stylePreset,
+                              },
+                            })
+                          );
+                          setIsDrawerOpen(false);
+                        }}
+                        className={`w-full text-left p-2.5 text-xs rounded-xl truncate transition flex items-center justify-between gap-2 cursor-pointer select-none ${
+                          item.isPinned
+                            ? 'bg-purple-100 text-purple-900 font-semibold border border-purple-200'
+                            : 'bg-purple-50/70 hover:bg-purple-100 text-purple-800 border border-purple-100/60'
+                        }`}
+                        title={item.prompt}
+                      >
+                        <div className="flex items-center gap-2 truncate flex-1 min-w-0">
+                          <span className="text-purple-600 shrink-0">✨</span>
+                          <span className="truncate flex-1 font-medium">{item.prompt}</span>
+                        </div>
+                        {item.isPinned && (
+                          <span className="text-xs shrink-0 ml-1" title="Pinned to top">
+                            📌
+                          </span>
+                        )}
+                      </div>
+                    ))
+                  )}
+                </div>
+
+                {recentPrompts.length > 0 && (
+                  <div className="pt-3 border-t border-gray-100 mt-2 flex justify-between items-center text-xs">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        clearAllRecentPrompts();
+                        setRecentPrompts([]);
+                      }}
+                      className="text-gray-400 hover:text-rose-600 transition cursor-pointer"
+                    >
+                      Clear history
+                    </button>
+                    <span className="text-[10px] text-gray-400">Tap to load, hold for options</span>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Tab 2: Generated Images */}
+            {drawerTab === 'images' && (
+              <div className="mt-3 flex-1 flex flex-col min-h-0">
+                <div className="flex justify-between items-center text-xs text-gray-500 mb-2 px-1">
+                  <span className="font-semibold text-gray-600">
+                    GENERATED IMAGES ({recentImages.length})
+                  </span>
+                  {recentImages.length > 0 && (
+                    <button
+                      type="button"
+                      onClick={handleClearRecentImages}
+                      className="text-gray-400 hover:text-rose-600 text-xs transition cursor-pointer"
+                    >
+                      Clear images
+                    </button>
+                  )}
+                </div>
+
+                <div className="space-y-2.5 overflow-y-auto flex-1 pr-1 scrollbar-thin">
+                  {recentImages.length === 0 ? (
+                    <div className="text-center py-10 text-xs text-gray-400">
+                      No generated images in this session yet.
+                    </div>
+                  ) : (
+                    recentImages.map((img) => (
+                      <div
+                        key={img.id}
+                        className="p-2 bg-gray-50 hover:bg-purple-50/40 rounded-xl border border-gray-200 transition flex gap-2.5 items-center group"
+                      >
+                        <img
+                          src={img.imageSrc}
+                          alt="AI Artwork"
+                          className="w-16 h-16 rounded-lg object-cover bg-gray-200 shrink-0 border border-gray-200"
+                        />
+                        <div className="min-w-0 flex-1 flex flex-col justify-between">
+                          <p className="text-xs text-gray-800 font-medium line-clamp-2 leading-snug">
+                            {img.prompt}
+                          </p>
+                          <div className="flex items-center gap-1.5 mt-2">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setSelectedComparisonImage(img);
+                                setIsDrawerOpen(false);
+                              }}
+                              className="px-2 py-0.5 bg-white hover:bg-purple-100 text-purple-700 border border-purple-200 rounded-md text-[11px] font-semibold transition cursor-pointer"
+                            >
+                              Compare
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                handleUpscaleFromDrawer(img);
+                                setIsDrawerOpen(false);
+                              }}
+                              className="px-2 py-0.5 bg-white hover:bg-purple-100 text-purple-700 border border-purple-200 rounded-md text-[11px] font-semibold transition cursor-pointer"
+                            >
+                              Upscale
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => downloadTransformedImageLocally(img.imageSrc, img.prompt)}
+                              className="p-1 bg-white hover:bg-gray-100 text-gray-600 rounded-md border border-gray-200 transition cursor-pointer"
+                              title="Download"
+                            >
+                              <Download className="w-3 h-3" />
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    ))
+                  )}
+                </div>
+              </div>
+            )}
+
+            {/* Tab 3: Generated Videos */}
+            {drawerTab === 'videos' && (
+              <div className="mt-3 flex-1 flex flex-col min-h-0">
+                <div className="flex justify-between items-center text-xs text-gray-500 mb-2 px-1">
+                  <span className="font-semibold text-gray-600">
+                    GENERATED VIDEOS ({actualVideos.length})
+                  </span>
+                </div>
+
+                <div className="space-y-2 overflow-y-auto flex-1 pr-1 scrollbar-thin">
+                  {actualVideos.length === 0 ? (
+                    <div className="text-center py-10 text-xs text-gray-400">
+                      No video media in this session yet.
+                    </div>
+                  ) : (
+                    actualVideos.map((vid) => (
+                      <div
+                        key={vid.id}
+                        className="p-2.5 bg-gray-50 rounded-xl border border-gray-200 flex flex-col gap-1.5"
+                      >
+                        <div className="flex items-center gap-2 text-xs font-semibold text-gray-800">
+                          <Video className="w-4 h-4 text-purple-600 shrink-0" />
+                          <span className="truncate">{vid.name || 'Video Media'}</span>
+                        </div>
+                        {vid.prompt && (
+                          <p className="text-[11px] text-gray-600 line-clamp-2 italic">
+                            "{vid.prompt}"
+                          </p>
+                        )}
+                        {vid.url && (
+                          <video
+                            src={vid.url}
+                            controls
+                            className="w-full max-h-36 rounded-lg bg-black object-cover mt-1"
+                          />
+                        )}
+                      </div>
+                    ))
+                  )}
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Floating Gemini-Style Context Menu Modal for Long-Pressed Prompt */}
+      {selectedPrompt && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-xs p-4 animate-fadeIn"
+          onClick={() => setSelectedPrompt(null)}
+        >
+          <div
+            className="bg-white rounded-2xl p-4 w-72 max-w-full shadow-2xl space-y-3 border border-gray-100"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h4 className="text-xs font-bold text-gray-500 truncate border-b pb-2">
+              "{selectedPrompt.prompt}"
+            </h4>
+            <button
+              type="button"
+              onClick={() => handleSharePrompt(selectedPrompt.prompt)}
+              className="w-full text-left py-1.5 px-2 rounded-lg hover:bg-purple-50 text-sm flex items-center gap-2.5 text-gray-700 hover:text-purple-700 transition cursor-pointer"
+            >
+              <span>🔗</span>
+              <span>Share</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => handlePinPrompt(selectedPrompt.id)}
+              className="w-full text-left py-1.5 px-2 rounded-lg hover:bg-purple-50 text-sm flex items-center gap-2.5 text-gray-700 hover:text-purple-700 transition cursor-pointer"
+            >
+              <span>📌</span>
+              <span>{selectedPrompt.isPinned ? 'Unpin' : 'Pin to Top'}</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => handleRenamePrompt(selectedPrompt.id)}
+              className="w-full text-left py-1.5 px-2 rounded-lg hover:bg-purple-50 text-sm flex items-center gap-2.5 text-gray-700 hover:text-purple-700 transition cursor-pointer"
+            >
+              <span>✏️</span>
+              <span>Rename</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => handleDeletePrompt(selectedPrompt.id)}
+              className="w-full text-left py-1.5 px-2 rounded-lg hover:bg-red-50 text-sm flex items-center gap-2.5 text-red-600 font-medium transition cursor-pointer"
+            >
+              <span>🗑️</span>
+              <span>Delete</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setSelectedPrompt(null)}
+              className="w-full text-center mt-2 text-xs text-gray-400 hover:text-gray-600 pt-2 border-t cursor-pointer"
+            >
+              Cancel
+            </button>
           </div>
         </div>
       )}

@@ -33,6 +33,8 @@ import {
   MessageSquare,
   Play,
   Loader2,
+  UserPlus,
+  UserCheck,
 } from 'lucide-react';
 import { UserProfile, CommunityPost, ReelHighlight } from '../types/community';
 import { DailyCreditsData } from '../utils/creditManager';
@@ -43,6 +45,13 @@ import { fileToBase64, saveMediaItem } from '../utils/mediaStorage';
 import { generateCustomAIAvatar } from '../services/aiAssistantService';
 import { compressImageDataUrl } from '../utils/storageUtils';
 import { fetchSupabaseProfile } from '../services/authService';
+import {
+  followUser,
+  unfollowUser,
+  fetchFollowStatus,
+  isValidProfileUuid,
+} from '../services/followService';
+import { syncFollowCache, isUserFollowed } from '../utils/followStore';
 import {
   getSavedPostsList,
   getSavedReelsList,
@@ -102,6 +111,8 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
   // Real-time Supabase profile fetch for viewed profile user when targeting another member
   const [fetchedProfile, setFetchedProfile] = useState<UserProfile | null>(null);
   const [isStartingChat, setIsStartingChat] = useState(false);
+  const [isFollowingProfile, setIsFollowingProfile] = useState<boolean>(false);
+  const [isFollowLoading, setIsFollowLoading] = useState<boolean>(false);
 
   useEffect(() => {
     let isMounted = true;
@@ -111,8 +122,20 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
           setFetchedProfile(prof);
         }
       });
+
+      // Authoritative follow status query from Supabase
+      if (isValidProfileUuid(viewedProfileUserId)) {
+        fetchFollowStatus(viewedProfileUserId).then(({ isFollowing }) => {
+          if (isMounted) {
+            setIsFollowingProfile(isFollowing);
+          }
+        });
+      } else {
+        setIsFollowingProfile(isUserFollowed(viewedProfileUserId));
+      }
     } else {
       setFetchedProfile(null);
+      setIsFollowingProfile(false);
     }
     return () => {
       isMounted = false;
@@ -414,20 +437,28 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
 
             {/* SSO / Unified ID Badges */}
             <div className="flex items-center gap-2 flex-wrap sm:mb-2">
-              <span className="text-[10px] px-2.5 py-1 rounded-full bg-purple-50 border border-purple-200 text-purple-700 font-mono font-semibold">
-                Unified ID: {isOwnProfile ? (authUser.metfaId || authUser.id) : displayProfile.id}
-              </span>
-              {isOwnProfile && (
-                authUser.authType !== 'guest' ? (
-                  <span className="text-[10px] px-2.5 py-1 rounded-full bg-teal-50 border border-teal-200 text-teal-800 font-semibold flex items-center gap-1">
-                    <CheckCircle2 className="w-3 h-3 text-teal-600" />
-                    SSO Active
-                  </span>
+              {isOwnProfile ? (
+                isAuthenticated ? (
+                  <>
+                    <span className="text-[10px] px-2.5 py-1 rounded-full bg-purple-50 border border-purple-200 text-purple-700 font-mono font-semibold">
+                      Unified ID: {authUser.metfaId || authUser.id}
+                    </span>
+                    <span className="text-[10px] px-2.5 py-1 rounded-full bg-teal-50 border border-teal-200 text-teal-800 font-semibold flex items-center gap-1">
+                      <CheckCircle2 className="w-3 h-3 text-teal-600" />
+                      SSO Active
+                    </span>
+                  </>
                 ) : (
                   <span className="text-[10px] px-2.5 py-1 rounded-full bg-slate-100 border border-slate-200 text-slate-600 font-medium">
-                    Guest Mode
+                    Visitor (Sign in to activate account)
                   </span>
                 )
+              ) : (
+                displayProfile.id ? (
+                  <span className="text-[10px] px-2.5 py-1 rounded-full bg-purple-50 border border-purple-200 text-purple-700 font-mono font-semibold">
+                    Profile ID: {displayProfile.id}
+                  </span>
+                ) : null
               )}
             </div>
           </div>
@@ -603,6 +634,95 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
                   </button>
                 </div>
               )
+            )}
+
+            {/* Follow / Following Button - ONLY when viewing another user's profile (!isOwnProfile) */}
+            {!isOwnProfile && (
+              <button
+                type="button"
+                id="profile-follow-toggle-btn"
+                disabled={isFollowLoading}
+                onClick={async () => {
+                  const targetUserId = displayProfile.id || viewedProfileUserId;
+                  if (!targetUserId) {
+                    showToast('Target user could not be identified.');
+                    return;
+                  }
+
+                  if (targetUserId === authUser?.id) return;
+
+                  if (isValidProfileUuid(targetUserId)) {
+                    setIsFollowLoading(true);
+                    if (!isFollowingProfile) {
+                      const { success, error } = await followUser(targetUserId);
+                      setIsFollowLoading(false);
+                      if (success) {
+                        setIsFollowingProfile(true);
+                        syncFollowCache(
+                          { id: targetUserId, name: displayProfile.name, username: displayProfile.username, avatar: displayProfile.avatar },
+                          true
+                        );
+                        // Refresh profile stats to reflect updated counters from database trigger
+                        fetchSupabaseProfile(targetUserId).then((prof) => {
+                          if (prof) setFetchedProfile(prof);
+                        });
+                        showToast(`You are now following ${displayProfile.name}`);
+                      } else {
+                        showToast(error || 'Failed to follow user.');
+                      }
+                    } else {
+                      const { success, error } = await unfollowUser(targetUserId);
+                      setIsFollowLoading(false);
+                      if (success) {
+                        setIsFollowingProfile(false);
+                        syncFollowCache(
+                          { id: targetUserId, name: displayProfile.name, username: displayProfile.username, avatar: displayProfile.avatar },
+                          false
+                        );
+                        // Refresh profile stats to reflect updated counters from database trigger
+                        fetchSupabaseProfile(targetUserId).then((prof) => {
+                          if (prof) setFetchedProfile(prof);
+                        });
+                        showToast(`Unfollowed ${displayProfile.name}`);
+                      } else {
+                        showToast(error || 'Failed to unfollow user.');
+                      }
+                    }
+                  } else {
+                    // Non-UUID local fallback
+                    const next = !isFollowingProfile;
+                    setIsFollowingProfile(next);
+                    syncFollowCache(
+                      { id: targetUserId, name: displayProfile.name, username: displayProfile.username, avatar: displayProfile.avatar },
+                      next
+                    );
+                    showToast(next ? `You are now following ${displayProfile.name}` : `Unfollowed ${displayProfile.name}`);
+                  }
+                }}
+                className={`px-4 py-2 text-xs font-bold rounded-xl flex items-center gap-1.5 shadow-xs transition active:scale-95 cursor-pointer ${
+                  isFollowLoading ? 'opacity-70 cursor-wait' : ''
+                } ${
+                  isFollowingProfile
+                    ? 'bg-slate-100 hover:bg-rose-50 text-slate-800 hover:text-rose-600 border border-slate-200 hover:border-rose-200'
+                    : 'bg-purple-600 hover:bg-purple-700 text-white'
+                }`}
+                title={isFollowingProfile ? 'Following (Click to Unfollow)' : `Follow ${displayProfile.name}`}
+              >
+                {isFollowLoading ? (
+                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                ) : isFollowingProfile ? (
+                  <UserCheck className="w-3.5 h-3.5 text-emerald-600" />
+                ) : (
+                  <UserPlus className="w-3.5 h-3.5" />
+                )}
+                <span>
+                  {isFollowLoading
+                    ? 'Updating...'
+                    : isFollowingProfile
+                    ? 'Following'
+                    : 'Follow'}
+                </span>
+              </button>
             )}
 
             {/* Messages Button: Opens conversation with target user via existing get_or_create_direct_conversation RPC */}

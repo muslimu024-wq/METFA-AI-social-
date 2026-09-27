@@ -208,6 +208,287 @@ EXECUTE FUNCTION public.handle_updated_at();
 ALTER TABLE public.posts ADD COLUMN IF NOT EXISTS video_title TEXT;
 ALTER TABLE public.posts ADD COLUMN IF NOT EXISTS video_thumbnail TEXT;
 
+-- =====================================================================
+-- 8B. POST COMMENTS & POST REACTIONS TABLES, INDEXES & RLS
+-- =====================================================================
+
+CREATE TABLE IF NOT EXISTS public.post_comments (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  post_id UUID NOT NULL REFERENCES public.posts(id) ON DELETE CASCADE,
+  user_id UUID NOT NULL REFERENCES public.profiles(id) ON DELETE CASCADE,
+  content TEXT NOT NULL,
+  audio_url TEXT NULL,
+  audio_duration NUMERIC NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  CONSTRAINT chk_post_comments_content CHECK (char_length(trim(content)) > 0 AND char_length(content) <= 3000)
+);
+
+CREATE TABLE IF NOT EXISTS public.post_reactions (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  post_id UUID NOT NULL REFERENCES public.posts(id) ON DELETE CASCADE,
+  user_id UUID NOT NULL REFERENCES public.profiles(id) ON DELETE CASCADE,
+  reaction_type TEXT NOT NULL DEFAULT 'like',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  CONSTRAINT chk_post_reactions_type CHECK (reaction_type IN ('like', 'love', 'haha', 'wow', 'sad', 'fire')),
+  CONSTRAINT uq_post_reactions_post_user UNIQUE (post_id, user_id)
+);
+
+-- Indexes for performance
+CREATE INDEX IF NOT EXISTS idx_post_comments_post_created ON public.post_comments(post_id, created_at ASC);
+CREATE INDEX IF NOT EXISTS idx_post_comments_user_id ON public.post_comments(user_id);
+CREATE INDEX IF NOT EXISTS idx_post_reactions_post_id ON public.post_reactions(post_id);
+CREATE INDEX IF NOT EXISTS idx_post_reactions_post_type ON public.post_reactions(post_id, reaction_type);
+CREATE INDEX IF NOT EXISTS idx_post_reactions_user_post ON public.post_reactions(user_id, post_id);
+
+-- RLS
+ALTER TABLE public.post_comments ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.post_reactions ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS "Users can view comments on visible posts" ON public.post_comments;
+CREATE POLICY "Users can view comments on visible posts"
+ON public.post_comments FOR SELECT
+USING (
+  EXISTS (
+    SELECT 1 FROM public.posts p
+    WHERE p.id = post_comments.post_id
+      AND (p.visibility = 'public' OR p.visibility IS NULL OR p.author_id = auth.uid())
+  )
+);
+
+DROP POLICY IF EXISTS "Authenticated users can insert their own comments" ON public.post_comments;
+CREATE POLICY "Authenticated users can insert their own comments"
+ON public.post_comments FOR INSERT
+WITH CHECK (
+  auth.uid() = user_id
+  AND EXISTS (
+    SELECT 1 FROM public.posts p
+    WHERE p.id = post_comments.post_id
+      AND (p.visibility = 'public' OR p.visibility IS NULL OR p.author_id = auth.uid())
+  )
+);
+
+DROP POLICY IF EXISTS "Users can update their own comments" ON public.post_comments;
+CREATE POLICY "Users can update their own comments"
+ON public.post_comments FOR UPDATE
+USING (auth.uid() = user_id)
+WITH CHECK (auth.uid() = user_id);
+
+DROP POLICY IF EXISTS "Users and post owners can delete comments" ON public.post_comments;
+CREATE POLICY "Users and post owners can delete comments"
+ON public.post_comments FOR DELETE
+USING (
+  auth.uid() = user_id
+  OR auth.uid() IN (SELECT author_id FROM public.posts WHERE id = post_comments.post_id)
+);
+
+DROP POLICY IF EXISTS "Users can view reactions on visible posts" ON public.post_reactions;
+CREATE POLICY "Users can view reactions on visible posts"
+ON public.post_reactions FOR SELECT
+USING (
+  EXISTS (
+    SELECT 1 FROM public.posts p
+    WHERE p.id = post_reactions.post_id
+      AND (p.visibility = 'public' OR p.visibility IS NULL OR p.author_id = auth.uid())
+  )
+);
+
+DROP POLICY IF EXISTS "Authenticated users can insert their own reactions" ON public.post_reactions;
+CREATE POLICY "Authenticated users can insert their own reactions"
+ON public.post_reactions FOR INSERT
+WITH CHECK (
+  auth.uid() = user_id
+  AND EXISTS (
+    SELECT 1 FROM public.posts p
+    WHERE p.id = post_reactions.post_id
+      AND (p.visibility = 'public' OR p.visibility IS NULL OR p.author_id = auth.uid())
+  )
+);
+
+DROP POLICY IF EXISTS "Users can update their own reaction" ON public.post_reactions;
+CREATE POLICY "Users can update their own reaction"
+ON public.post_reactions FOR UPDATE
+USING (auth.uid() = user_id)
+WITH CHECK (auth.uid() = user_id);
+
+DROP POLICY IF EXISTS "Users can delete their own reaction" ON public.post_reactions;
+CREATE POLICY "Users can delete their own reaction"
+ON public.post_reactions FOR DELETE
+USING (auth.uid() = user_id);
+
+-- Counter Synchronization Triggers
+CREATE OR REPLACE FUNCTION public.handle_post_comments_count()
+RETURNS TRIGGER AS $$
+BEGIN
+  IF (TG_OP = 'INSERT') THEN
+    UPDATE public.posts
+    SET comments_count = COALESCE(comments_count, 0) + 1
+    WHERE id = NEW.post_id;
+    RETURN NEW;
+  ELSIF (TG_OP = 'DELETE') THEN
+    UPDATE public.posts
+    SET comments_count = GREATEST(0, COALESCE(comments_count, 1) - 1)
+    WHERE id = OLD.post_id;
+    RETURN OLD;
+  END IF;
+  RETURN NULL;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+DROP TRIGGER IF EXISTS on_post_comment_count_change ON public.post_comments;
+CREATE TRIGGER on_post_comment_count_change
+AFTER INSERT OR DELETE ON public.post_comments
+FOR EACH ROW
+EXECUTE FUNCTION public.handle_post_comments_count();
+
+CREATE OR REPLACE FUNCTION public.handle_post_reactions_count()
+RETURNS TRIGGER AS $$
+BEGIN
+  IF (TG_OP = 'INSERT') THEN
+    UPDATE public.posts
+    SET likes_count = COALESCE(likes_count, 0) + 1
+    WHERE id = NEW.post_id;
+    RETURN NEW;
+  ELSIF (TG_OP = 'DELETE') THEN
+    UPDATE public.posts
+    SET likes_count = GREATEST(0, COALESCE(likes_count, 1) - 1)
+    WHERE id = OLD.post_id;
+    RETURN OLD;
+  END IF;
+  RETURN NULL;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+DROP TRIGGER IF EXISTS on_post_reaction_count_change ON public.post_reactions;
+CREATE TRIGGER on_post_reaction_count_change
+AFTER INSERT OR DELETE ON public.post_reactions
+FOR EACH ROW
+EXECUTE FUNCTION public.handle_post_reactions_count();
+
+DROP TRIGGER IF EXISTS on_post_comments_updated ON public.post_comments;
+CREATE TRIGGER on_post_comments_updated
+BEFORE UPDATE ON public.post_comments
+FOR EACH ROW
+EXECUTE FUNCTION public.handle_updated_at();
+
+-- =====================================================================
+-- 8C. USER FOLLOWS (SOCIAL GRAPH) TABLE, INDEXES, RLS & COUNTER TRIGGERS
+-- =====================================================================
+
+CREATE TABLE IF NOT EXISTS public.user_follows (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  follower_id UUID NOT NULL REFERENCES public.profiles(id) ON DELETE CASCADE,
+  following_id UUID NOT NULL REFERENCES public.profiles(id) ON DELETE CASCADE,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  CONSTRAINT uq_user_follows_follower_following UNIQUE (follower_id, following_id),
+  CONSTRAINT chk_no_self_follow CHECK (follower_id <> following_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_user_follows_following_id ON public.user_follows(following_id);
+CREATE INDEX IF NOT EXISTS idx_user_follows_follower_id ON public.user_follows(follower_id);
+
+ALTER TABLE public.user_follows ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS "Follow relationships are viewable by everyone" ON public.user_follows;
+CREATE POLICY "Follow relationships are viewable by everyone"
+ON public.user_follows FOR SELECT
+USING (true);
+
+DROP POLICY IF EXISTS "Authenticated users can create follow relationships" ON public.user_follows;
+CREATE POLICY "Authenticated users can create follow relationships"
+ON public.user_follows FOR INSERT
+WITH CHECK (
+  auth.uid() = follower_id
+  AND follower_id <> following_id
+  AND EXISTS (SELECT 1 FROM public.profiles WHERE id = following_id)
+);
+
+DROP POLICY IF EXISTS "Users can delete their own follow relationships" ON public.user_follows;
+CREATE POLICY "Users can delete their own follow relationships"
+ON public.user_follows FOR DELETE
+USING (auth.uid() = follower_id);
+
+CREATE OR REPLACE FUNCTION public.handle_user_follows_count()
+RETURNS TRIGGER AS $$
+DECLARE
+  current_follower_stats JSONB;
+  current_following_stats JSONB;
+  follower_cnt INT;
+  following_cnt INT;
+BEGIN
+  IF (TG_OP = 'INSERT') THEN
+    SELECT COALESCE(stats, '{}'::jsonb) INTO current_following_stats
+    FROM public.profiles WHERE id = NEW.following_id;
+
+    follower_cnt := COALESCE((current_following_stats->>'followersCount')::int, 0) + 1;
+
+    UPDATE public.profiles
+    SET stats = jsonb_set(
+      COALESCE(stats, '{"postsCount":0,"followersCount":0,"followingCount":0,"totalLikes":0,"reelsCount":0}'::jsonb),
+      '{followersCount}',
+      to_jsonb(follower_cnt)
+    )
+    WHERE id = NEW.following_id;
+
+    SELECT COALESCE(stats, '{}'::jsonb) INTO current_follower_stats
+    FROM public.profiles WHERE id = NEW.follower_id;
+
+    following_cnt := COALESCE((current_follower_stats->>'followingCount')::int, 0) + 1;
+
+    UPDATE public.profiles
+    SET stats = jsonb_set(
+      COALESCE(stats, '{"postsCount":0,"followersCount":0,"followingCount":0,"totalLikes":0,"reelsCount":0}'::jsonb),
+      '{followingCount}',
+      to_jsonb(following_cnt)
+    )
+    WHERE id = NEW.follower_id;
+
+    RETURN NEW;
+
+  ELSIF (TG_OP = 'DELETE') THEN
+    SELECT COALESCE(stats, '{}'::jsonb) INTO current_following_stats
+    FROM public.profiles WHERE id = OLD.following_id;
+
+    follower_cnt := GREATEST(0, COALESCE((current_following_stats->>'followersCount')::int, 1) - 1);
+
+    UPDATE public.profiles
+    SET stats = jsonb_set(
+      COALESCE(stats, '{"postsCount":0,"followersCount":0,"followingCount":0,"totalLikes":0,"reelsCount":0}'::jsonb),
+      '{followersCount}',
+      to_jsonb(follower_cnt)
+    )
+    WHERE id = OLD.following_id;
+
+    SELECT COALESCE(stats, '{}'::jsonb) INTO current_follower_stats
+    FROM public.profiles WHERE id = OLD.follower_id;
+
+    following_cnt := GREATEST(0, COALESCE((current_follower_stats->>'followingCount')::int, 1) - 1);
+
+    UPDATE public.profiles
+    SET stats = jsonb_set(
+      COALESCE(stats, '{"postsCount":0,"followersCount":0,"followingCount":0,"totalLikes":0,"reelsCount":0}'::jsonb),
+      '{followingCount}',
+      to_jsonb(following_cnt)
+    )
+    WHERE id = OLD.follower_id;
+
+    RETURN OLD;
+  END IF;
+
+  RETURN NULL;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER SET search_path = public;
+
+DROP TRIGGER IF EXISTS on_user_follow_change ON public.user_follows;
+CREATE TRIGGER on_user_follow_change
+AFTER INSERT OR DELETE ON public.user_follows
+FOR EACH ROW
+EXECUTE FUNCTION public.handle_user_follows_count();
+
+GRANT SELECT ON public.user_follows TO anon;
+GRANT SELECT, INSERT, DELETE ON public.user_follows TO authenticated;
+GRANT ALL ON public.user_follows TO service_role;
+
 -- =========================================================================
 -- Supabase Storage Configuration for Posts & Media
 -- =========================================================================

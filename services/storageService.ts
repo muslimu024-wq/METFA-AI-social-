@@ -1,4 +1,4 @@
-import { supabase, isSupabaseConfigured } from './supabaseClient';
+import { supabase, isSupabaseConfigured, getClientAuthToken } from './supabaseClient';
 import { saveMediaItem } from '../utils/mediaStorage';
 
 export interface UploadResult {
@@ -124,9 +124,15 @@ export async function uploadMediaItem(
           reader.readAsDataURL(blob);
         });
 
+    const token = await getClientAuthToken();
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
+
     const response = await fetch('/api/storage/upload', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers,
       body: JSON.stringify({
         fileBase64: base64Data,
         fileName: sanitizedFileName,
@@ -163,7 +169,7 @@ export async function uploadMediaItem(
         });
 
     const saved = await saveMediaItem({
-      userId: options.userId || 'guest',
+      userId: options.userId || '',
       type: determinedType,
       dataUrl,
       name: sanitizedFileName,

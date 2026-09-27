@@ -34,6 +34,7 @@ import {
   V2ContributionAction,
 } from '../../../types/v2Contribution';
 import { V2ContributionTestSuiteSummary } from '../../../tests/v2ContributionVerification';
+import { getClientAuthToken } from '../../../services/supabaseClient';
 
 interface V2ContributionModuleProps {
   currentRole?: string;
@@ -52,6 +53,14 @@ export const V2ContributionModule: React.FC<V2ContributionModuleProps> = ({
   const [loading, setLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
+
+  const getAuthHeaders = async (extra?: Record<string, string>): Promise<Record<string, string>> => {
+    const token = await getClientAuthToken();
+    return {
+      ...(extra || {}),
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    };
+  };
 
   // Test Suite State
   const [testResults, setTestResults] = useState<V2ContributionTestSuiteSummary | null>(null);
@@ -74,11 +83,12 @@ export const V2ContributionModule: React.FC<V2ContributionModuleProps> = ({
     setLoading(true);
     setErrorMsg(null);
     try {
+      const headers = await getAuthHeaders();
       const [hRes, pRes, lRes, uRes] = await Promise.all([
-        fetch('/api/v2/contribution/health'),
-        fetch('/api/v2/contribution/policies'),
-        fetch('/api/v2/contribution/ledger'),
-        fetch(`/api/v2/contribution/user/${currentUserId}/summary`),
+        fetch('/api/v2/contribution/health', { headers }),
+        fetch('/api/v2/contribution/policies', { headers }),
+        fetch('/api/v2/contribution/ledger', { headers }),
+        fetch(`/api/v2/contribution/user/${currentUserId}/summary`, { headers }),
       ]);
 
       if (hRes.ok) setHealth(await hRes.json());
@@ -99,12 +109,10 @@ export const V2ContributionModule: React.FC<V2ContributionModuleProps> = ({
   const handleToggleFeatureFlag = async () => {
     if (!health) return;
     try {
+      const headers = await getAuthHeaders({ 'Content-Type': 'application/json' });
       const res = await fetch('/api/v2/contribution/feature-flag', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-metfa-role': currentRole,
-        },
+        headers,
         body: JSON.stringify({ enabled: !health.feature_flag_enabled }),
       });
       if (!res.ok) {
@@ -139,9 +147,10 @@ export const V2ContributionModule: React.FC<V2ContributionModuleProps> = ({
     }
 
     try {
+      const headers = await getAuthHeaders({ 'Content-Type': 'application/json' });
       const res = await fetch('/api/v2/contribution/process', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers,
         body: JSON.stringify({
           user_id: currentUserId,
           action: simAction,
@@ -166,17 +175,13 @@ export const V2ContributionModule: React.FC<V2ContributionModuleProps> = ({
   const handleExecuteReversal = async () => {
     if (!showReversalModal || !reversalReason) return;
     try {
+      const headers = await getAuthHeaders({ 'Content-Type': 'application/json' });
       const res = await fetch('/api/v2/contribution/reverse', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-metfa-role': currentRole,
-        },
+        headers,
         body: JSON.stringify({
           original_entry_id: showReversalModal,
           reason: reversalReason,
-          actor_id: currentUserId,
-          actor_role: currentRole,
         }),
       });
       const data = await res.json();
@@ -196,9 +201,8 @@ export const V2ContributionModule: React.FC<V2ContributionModuleProps> = ({
     setTestsRunning(true);
     setErrorMsg(null);
     try {
-      const res = await fetch('/api/v2/contribution/run-tests', {
-        headers: { 'x-metfa-role': currentRole },
-      });
+      const headers = await getAuthHeaders();
+      const res = await fetch('/api/v2/contribution/run-tests', { headers });
       if (!res.ok) {
         const err = await res.json();
         throw new Error(err.error || 'Verification suite failed');

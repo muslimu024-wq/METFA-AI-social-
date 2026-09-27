@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Share2, X, Sparkles, Wand2, Check } from 'lucide-react';
 import { CommunityPost, PostingIdentity, UserProfile } from '../types/community';
 import { getPages, getGroups } from '../utils/socialStore';
@@ -24,10 +24,16 @@ export const ShareToFeedModal: React.FC<ShareToFeedModalProps> = ({
   userProfile,
   onPostCreated,
 }) => {
-  const [caption, setCaption] = useState('');
+  const [caption, setCaption] = useState(postData?.prompt || '');
   const [tagsInput, setTagsInput] = useState('MetfaAI, DigitalArt, GeminiVision');
   const [selectedIdentity, setSelectedIdentity] = useState<'personal' | string>('personal');
   const [isGeneratingCaption, setIsGeneratingCaption] = useState(false);
+
+  useEffect(() => {
+    if (postData?.prompt) {
+      setCaption(postData.prompt);
+    }
+  }, [postData?.prompt]);
 
   if (!isOpen) return null;
 
@@ -49,6 +55,14 @@ export const ShareToFeedModal: React.FC<ShareToFeedModalProps> = ({
   };
 
   const handleSubmit = async () => {
+    if (!userProfile?.id) {
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent('metfa_open_auth_modal'));
+      }
+      onClose();
+      return;
+    }
+
     let postingIdentity: PostingIdentity = {
       type: 'personal',
       id: userProfile.id,
@@ -113,7 +127,7 @@ export const ShareToFeedModal: React.FC<ShareToFeedModalProps> = ({
       groupId,
       groupName,
       prompt: postData.prompt,
-      caption: caption.trim() || 'Created with Metfa Social Studio.',
+      caption: caption.trim() || postData.prompt || 'Created with Metfa Social Studio.',
       stylePreset: postData.stylePreset,
       imageSrc: optimizedImage,
       tags: tags.length > 0 ? tags : ['MetfaSocial', 'GeminiVision'],

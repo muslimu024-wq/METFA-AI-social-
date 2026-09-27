@@ -221,3 +221,15 @@ export function mapSupabaseRowToUserProfile(row: Partial<SupabaseProfileRow>): U
     },
   };
 }
+
+/**
+ * Returns the current active Supabase session access token for authenticated API requests.
+ */
+export async function getClientAuthToken(): Promise<string | null> {
+  try {
+    const { data } = await supabase.auth.getSession();
+    return data?.session?.access_token || null;
+  } catch {
+    return null;
+  }
+}

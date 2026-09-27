@@ -16,12 +16,20 @@ import {
   clearStaleAuthCache,
   getDefaultAvatar,
   sanitizeAvatarUrl,
+  resendConfirmationEmail,
 } from '../services/authService';
 import type { Session } from '@supabase/supabase-js';
 import { supabase, isSupabaseConfigured } from '../services/supabaseClient';
 import { UserProfile, PostingIdentity } from '../types/community';
 import { getUserProfile, saveUserProfile as doSaveUserProfile } from '../utils/communityStore';
 import { getActiveIdentity, setActiveIdentity as doSetActiveIdentity } from '../utils/socialStore';
+
+export interface AuthNotification {
+  type: 'error' | 'success' | 'info';
+  title: string;
+  message: string;
+  action?: 'signin';
+}
 
 interface AuthContextType {
   user: AuthUser;
@@ -31,6 +39,9 @@ interface AuthContextType {
   isSupabaseConnected: boolean;
   sessionToken: string | null;
   metfaId: string;
+  authNotification: AuthNotification | null;
+  clearAuthNotification: () => void;
+  resendConfirmation: (email: string) => Promise<{ success: boolean; error?: string }>;
   loginPhone: (phoneNumber: string, name: string, customUsername?: string, customAvatar?: string) => Promise<{ user: AuthUser; profile: UserProfile; error?: string }>;
   loginGmail: (email: string, name: string, customAvatar?: string, customUsername?: string) => Promise<{ user: AuthUser; profile: UserProfile; error?: string }>;
   saveProfileAndEnter: (params: {
@@ -40,7 +51,14 @@ interface AuthContextType {
     username?: string;
     avatar: string;
     password?: string;
-  }) => Promise<{ user: AuthUser; profile: UserProfile; error?: string }>;
+  }) => Promise<{
+    user: AuthUser;
+    profile: UserProfile;
+    error?: string;
+    isPendingConfirmation?: boolean;
+    email?: string;
+    message?: string;
+  }>;
   signInUser: (params: {
     authMethod: 'gmail' | 'phone';
     identifier: string;
@@ -108,6 +126,16 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     }
     return getActiveIdentity();
   });
+
+  const [authNotification, setAuthNotification] = useState<AuthNotification | null>(null);
+
+  const clearAuthNotification = useCallback(() => {
+    setAuthNotification(null);
+  }, []);
+
+  const resendConfirmation = useCallback(async (email: string) => {
+    return resendConfirmationEmail(email);
+  }, []);
 
   const refreshAuth = useCallback(() => {
     if (isSupabaseConnected) {
@@ -236,15 +264,157 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
 
     let isMounted = true;
 
-    // A. Start with authentication unresolved / guest state (initialized in useState)
-    // B. Call supabase.auth.getSession()
-    supabase.auth.getSession().then(({ data: { session }, error }) => {
-      if (!isMounted) return;
-      if (error) {
-        console.warn('[METFA AUTH] Get session error:', error.message);
+    // Check for callback or error parameters in URL (search params or hash)
+    if (typeof window !== 'undefined') {
+      try {
+        const url = new URL(window.location.href);
+        const searchParams = url.searchParams;
+        const rawHash = window.location.hash || '';
+        const hashParams = new URLSearchParams(
+          rawHash.startsWith('#') ? rawHash.slice(1) : rawHash
+        );
+
+        const error = searchParams.get('error') || hashParams.get('error');
+        const errorCode = searchParams.get('error_code') || hashParams.get('error_code');
+        const errorDesc = searchParams.get('error_description') || hashParams.get('error_description');
+
+        const code = searchParams.get('code');
+        const tokenHash = searchParams.get('token_hash');
+        const otpType = searchParams.get('type') || 'email';
+
+        // 1. Handle error in URL (access_denied, otp_expired, etc.)
+        if (error || errorCode) {
+          console.warn(`[METFA AUTH] URL auth error detected: error=${error}, code=${errorCode}, desc=${errorDesc}`);
+          let title = 'Confirmation Link Invalid or Expired';
+          let message = 'The email confirmation link is invalid, expired, or has already been used. Please sign in or request a new confirmation link.';
+
+          if (errorCode === 'otp_expired' || (errorDesc && errorDesc.toLowerCase().includes('expired'))) {
+            title = 'Confirmation Link Expired';
+            message = 'This email confirmation link has expired or has already been used. Please sign in to your account or request a new link.';
+          } else if (error === 'access_denied') {
+            title = 'Access Denied';
+            message = 'The confirmation request was denied. Please sign in or request a new confirmation link.';
+          }
+
+          setAuthNotification({
+            type: 'error',
+            title,
+            message,
+            action: 'signin',
+          });
+
+          // Clean error parameters from URL without page reload
+          searchParams.delete('error');
+          searchParams.delete('error_code');
+          searchParams.delete('error_description');
+          if (url.hash && (url.hash.includes('error=') || url.hash.includes('error_code='))) {
+            url.hash = '';
+          }
+          window.history.replaceState(window.history.state, '', url.toString());
+
+          // Still check for any existing session
+          supabase.auth.getSession().then(({ data: { session }, error: sessError }) => {
+            if (!isMounted) return;
+            if (sessError) console.warn('[METFA AUTH] Get session error:', sessError.message);
+            resolveSupabaseSession(session);
+          });
+        }
+        // 2. Handle PKCE code parameter
+        else if (code) {
+          console.log('[METFA AUTH] Authorization code detected in URL, exchanging for session...');
+          // Clean the code parameter from the browser URL immediately to prevent re-processing
+          searchParams.delete('code');
+          window.history.replaceState(window.history.state, '', url.toString());
+
+          supabase.auth.exchangeCodeForSession(code).then(async ({ data, error: exchangeError }) => {
+            if (!isMounted) return;
+            if (exchangeError) {
+              console.warn('[METFA AUTH] exchangeCodeForSession failed:', exchangeError.message);
+              const lowerErr = exchangeError.message.toLowerCase();
+              if (lowerErr.includes('code verifier') || lowerErr.includes('validation_failed')) {
+                setAuthNotification({
+                  type: 'info',
+                  title: 'Confirmation Link Opened in Different Context',
+                  message: 'Your email confirmation link was received, but because it was opened in a different browser/application than where you signed up, please sign in with your email and password to access your account.',
+                  action: 'signin',
+                });
+              } else {
+                setAuthNotification({
+                  type: 'error',
+                  title: 'Verification Failed',
+                  message: 'Unable to verify confirmation code. The link may have expired or already been used. Please sign in.',
+                  action: 'signin',
+                });
+              }
+              resolveSupabaseSession(null);
+            } else if (data?.session) {
+              console.log('[METFA AUTH] Session successfully established via code exchange!');
+              setAuthNotification({
+                type: 'success',
+                title: 'Email Confirmed',
+                message: 'Your email address has been verified successfully. Welcome to METFA Social!',
+              });
+              await resolveSupabaseSession(data.session);
+            } else {
+              resolveSupabaseSession(null);
+            }
+          });
+        }
+        // 3. Handle token_hash / verifyOtp flow (if present in callback)
+        else if (tokenHash) {
+          console.log('[METFA AUTH] token_hash detected in URL, verifying OTP...');
+          searchParams.delete('token_hash');
+          searchParams.delete('type');
+          window.history.replaceState(window.history.state, '', url.toString());
+
+          supabase.auth.verifyOtp({
+            token_hash: tokenHash,
+            type: otpType as any,
+          }).then(async ({ data, error: otpError }) => {
+            if (!isMounted) return;
+            if (otpError) {
+              console.warn('[METFA AUTH] verifyOtp failed:', otpError.message);
+              setAuthNotification({
+                type: 'error',
+                title: 'Verification Failed',
+                message: otpError.message || 'The verification link is invalid or expired. Please sign in or request a new link.',
+                action: 'signin',
+              });
+              resolveSupabaseSession(null);
+            } else if (data?.session) {
+              console.log('[METFA AUTH] Session successfully established via verifyOtp!');
+              setAuthNotification({
+                type: 'success',
+                title: 'Email Confirmed',
+                message: 'Your email address has been verified successfully. Welcome to METFA Social!',
+              });
+              await resolveSupabaseSession(data.session);
+            } else {
+              resolveSupabaseSession(null);
+            }
+          });
+        }
+        // 4. Normal startup: get existing session
+        else {
+          supabase.auth.getSession().then(({ data: { session }, error: sessErr }) => {
+            if (!isMounted) return;
+            if (sessErr) {
+              console.warn('[METFA AUTH] Get session error:', sessErr.message);
+            }
+            resolveSupabaseSession(session);
+          });
+        }
+      } catch (e) {
+        console.error('[METFA AUTH] Exception processing URL callback:', e);
+        supabase.auth.getSession().then(({ data: { session } }) => {
+          if (isMounted) resolveSupabaseSession(session);
+        });
       }
-      resolveSupabaseSession(session);
-    });
+    } else {
+      supabase.auth.getSession().then(({ data: { session } }) => {
+        if (isMounted) resolveSupabaseSession(session);
+      });
+    }
 
     // Subscribe to auth state changes
     const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
@@ -544,6 +714,9 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         isSupabaseConnected,
         sessionToken: user.sessionToken || null,
         metfaId: user.metfaId || '',
+        authNotification,
+        clearAuthNotification,
+        resendConfirmation,
         loginPhone,
         loginGmail,
         saveProfileAndEnter,

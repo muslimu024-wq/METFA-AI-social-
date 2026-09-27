@@ -13,6 +13,8 @@ import {
   Loader2,
   Lock,
   UserPlus,
+  CheckCircle2,
+  Send,
 } from 'lucide-react';
 import { AuthUser } from '../services/authService';
 import { useAuth } from '../context/AuthContext';
@@ -47,6 +49,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
     signInUser,
     signInWithGoogle,
     isSupabaseConnected,
+    resendConfirmation,
   } = useAuth();
 
   const [authMode, setAuthMode] = useState<'signin' | 'signup'>(initialMode);
@@ -61,6 +64,10 @@ export const AuthModal: React.FC<AuthModalProps> = ({
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isGoogleLoading, setIsGoogleLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
+  const [pendingConfirmation, setPendingConfirmation] = useState<{ email: string; message: string } | null>(null);
+  const [isResending, setIsResending] = useState(false);
+  const [resendSuccess, setResendSuccess] = useState(false);
+  const [resendError, setResendError] = useState('');
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   // If user is ALREADY AUTHENTICATED, immediately bypass modal & go directly into METFA Social
@@ -76,8 +83,29 @@ export const AuthModal: React.FC<AuthModalProps> = ({
     if (isOpen) {
       setAuthMode(initialMode);
       setErrorMsg('');
+      setPendingConfirmation(null);
+      setResendSuccess(false);
+      setResendError('');
     }
   }, [isOpen, initialMode]);
+
+  const handleResend = async () => {
+    if (!pendingConfirmation?.email || isResending) return;
+    setIsResending(true);
+    setResendError('');
+    try {
+      const res = await resendConfirmation(pendingConfirmation.email);
+      setIsResending(false);
+      if (res.success) {
+        setResendSuccess(true);
+      } else {
+        setResendError(res.error || 'Failed to resend confirmation link.');
+      }
+    } catch (e: any) {
+      setIsResending(false);
+      setResendError(e?.message || 'Failed to resend confirmation link.');
+    }
+  };
 
   if (!isOpen || isAuthenticated) return null;
 
@@ -157,6 +185,14 @@ export const AuthModal: React.FC<AuthModalProps> = ({
         setIsSubmitting(false);
         if (result.error) {
           setErrorMsg(result.error);
+          return;
+        }
+
+        if (result.isPendingConfirmation) {
+          setPendingConfirmation({
+            email: result.email || identifier,
+            message: result.message || `Account created for ${result.email || identifier}! Please check your email inbox to confirm registration.`,
+          });
           return;
         }
 
@@ -241,8 +277,75 @@ export const AuthModal: React.FC<AuthModalProps> = ({
           </button>
         </div>
 
-        {/* Mode Switcher: Sign In vs Sign Up */}
-        <div className="grid grid-cols-2 gap-2 bg-slate-100 p-1.5 rounded-2xl border border-slate-200 mb-4">
+        {/* Verification Pending Screen */}
+        {pendingConfirmation ? (
+          <div className="py-4 px-1 text-center flex flex-col items-center animate-fadeIn">
+            <div className="w-16 h-16 rounded-2xl bg-teal-50 border border-teal-200 flex items-center justify-center text-teal-600 mb-4 shadow-sm">
+              <Mail className="w-8 h-8" />
+            </div>
+            <h3 className="text-lg font-bold text-slate-900 mb-1">Check Your Email</h3>
+            <p className="text-xs text-slate-600 max-w-sm mb-4 leading-relaxed">
+              An activation email was sent to <span className="font-bold text-slate-900">{pendingConfirmation.email}</span>. Please click the confirmation link in the email to activate your account.
+            </p>
+            <div className="p-3 bg-slate-50 rounded-xl border border-slate-200 text-xs text-slate-600 mb-5 text-left w-full space-y-2">
+              <div className="flex items-start gap-2">
+                <CheckCircle2 className="w-4 h-4 text-teal-600 shrink-0 mt-0.5" />
+                <span>Open your inbox (or spam/junk folder) and click <strong>Confirm your email</strong>.</span>
+              </div>
+              <div className="flex items-start gap-2">
+                <CheckCircle2 className="w-4 h-4 text-teal-600 shrink-0 mt-0.5" />
+                <span>After confirming, return here to sign in with your email and password.</span>
+              </div>
+            </div>
+
+            {/* Resend button & feedback */}
+            <div className="w-full flex flex-col gap-2 mb-2">
+              <button
+                type="button"
+                onClick={handleResend}
+                disabled={isResending || resendSuccess}
+                className="w-full py-2.5 px-4 rounded-xl text-xs font-semibold bg-slate-100 text-slate-700 hover:bg-slate-200 transition disabled:opacity-50 flex items-center justify-center gap-2 cursor-pointer"
+              >
+                {isResending ? (
+                  <>
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    <span>Resending confirmation email...</span>
+                  </>
+                ) : resendSuccess ? (
+                  <>
+                    <CheckCircle2 className="w-3.5 h-3.5 text-teal-600" />
+                    <span>Confirmation email resent!</span>
+                  </>
+                ) : (
+                  <>
+                    <Send className="w-3.5 h-3.5" />
+                    <span>Resend Confirmation Email</span>
+                  </>
+                )}
+              </button>
+
+              {resendError && (
+                <p className="text-xs text-rose-500 font-medium">{resendError}</p>
+              )}
+
+              <button
+                type="button"
+                onClick={() => {
+                  setPendingConfirmation(null);
+                  setAuthMode('signin');
+                  setErrorMsg('');
+                }}
+                className="w-full py-2.5 px-4 rounded-xl text-xs font-bold bg-purple-600 text-white hover:bg-purple-700 transition flex items-center justify-center gap-2 shadow-md shadow-purple-500/20 cursor-pointer"
+              >
+                <LogIn className="w-3.5 h-3.5" />
+                <span>Go to Sign In</span>
+              </button>
+            </div>
+          </div>
+        ) : (
+          <>
+            {/* Mode Switcher: Sign In vs Sign Up */}
+            <div className="grid grid-cols-2 gap-2 bg-slate-100 p-1.5 rounded-2xl border border-slate-200 mb-4">
           <button
             type="button"
             id="auth-tab-signin"
@@ -575,6 +678,8 @@ export const AuthModal: React.FC<AuthModalProps> = ({
             )}
           </button>
         </form>
+          </>
+        )}
 
         <div className="mt-4 pt-3 border-t border-slate-100 flex items-center justify-center gap-2 text-[11px] text-slate-500">
           <ShieldCheck className="w-3.5 h-3.5 text-teal-600" />

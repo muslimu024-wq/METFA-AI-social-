@@ -1,27 +1,9 @@
 import React, { useState, useRef, useEffect } from 'react';
-import {
-  Send,
-  Paperclip,
-  Mic,
-  MicOff,
-  Sparkles,
-  X,
-  FileText,
-  Video,
-  Layers,
-  Wand2,
-  AlertCircle,
-  Radio,
-  Undo2,
-  RotateCcw,
-  Download,
-  ScanText,
-} from 'lucide-react';
+import { X, ArrowUp } from 'lucide-react';
 import { ChatAttachment, StudioSettings } from '../types/chat';
 import { fileToAttachment } from '../utils/fileUtils';
 import AttachmentModal from './AttachmentModal';
 import ImageTextScannerModal from './ImageTextScannerModal';
-import { RecentPromptHistoryList } from '../features/ai-studio/components/RecentPromptHistoryList';
 import { addRecentPrompt } from '../features/ai-studio/utils/promptHistoryStore';
 
 export interface MultimodalInputBarProps {
@@ -31,7 +13,7 @@ export interface MultimodalInputBarProps {
   onUpdateSettings?: (settings: Partial<StudioSettings>) => void;
   onOpenSettings?: () => void;
   onEnhancePrompt?: (prompt: string) => Promise<string>;
-  creditsCount: number;
+  creditsCount?: number;
   onWatchAdClick?: () => void;
   canUndo?: boolean;
   canRedo?: boolean;
@@ -41,50 +23,22 @@ export interface MultimodalInputBarProps {
   onDownload?: () => void;
 }
 
-const STYLE_PRESETS = [
-  'None',
-  'Cyberpunk 2088',
-  'Anime Studio Ghibli',
-  'Photorealistic 8K',
-  'Cinematic Sci-Fi',
-  'Fantasy Oil Painting',
-  'Surrealist Dream',
-  'Vibrant 3D Render',
-];
-
 export const MultimodalInputBar: React.FC<MultimodalInputBarProps> = ({
   onSendMessage,
   isLoading,
   settings,
   onUpdateSettings,
-  onEnhancePrompt,
-  onWatchAdClick,
-  canUndo = false,
-  canRedo = false,
-  onUndo,
-  onRedo,
-  canDownload = false,
-  onDownload,
 }) => {
   const [inputText, setInputText] = useState('');
   const [attachments, setAttachments] = useState<ChatAttachment[]>([]);
   const [isRecording, setIsRecording] = useState(false);
   const [interimFeedback, setInterimFeedback] = useState<string>('');
-  const [isEnhancing, setIsEnhancing] = useState(false);
-  const [showPresets, setShowPresets] = useState(false);
   const [speechError, setSpeechError] = useState<string | null>(null);
   const [isActionModalOpen, setIsActionModalOpen] = useState(false);
   const [isScannerModalOpen, setIsScannerModalOpen] = useState(false);
   const [scannerInitialImage, setScannerInitialImage] = useState<string | undefined>(undefined);
-  const [speechLanguage, setSpeechLanguage] = useState<'en-US' | 'bn-BD'>(() => {
-    if (typeof window !== 'undefined') {
-      const saved = localStorage.getItem('metfa_speech_lang');
-      if (saved === 'bn-BD' || saved === 'en-US') return saved;
-    }
-    return 'en-US';
-  });
 
-  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const photoCameraInputRef = useRef<HTMLInputElement>(null);
   const videoCameraInputRef = useRef<HTMLInputElement>(null);
@@ -93,18 +47,14 @@ export const MultimodalInputBar: React.FC<MultimodalInputBarProps> = ({
   const baseTextRef = useRef<string>('');
   const isSubmittingRef = useRef<boolean>(false);
 
-  // Gemini-style auto-expanding textarea: starts single line (40px), auto-expands up to max-h-36 (144px), then scrolls
-  useEffect(() => {
-    if (textareaRef.current) {
-      textareaRef.current.style.height = 'auto';
-      const scrollHeight = textareaRef.current.scrollHeight;
-      // Single line starts at 40px, caps at max-h-36 (144px)
-      const targetHeight = Math.min(Math.max(40, scrollHeight), 144);
-      textareaRef.current.style.height = `${targetHeight}px`;
-    }
-  }, [inputText]);
+  // Helper to join voice chunks cleanly
+  const joinWithSpacing = (a: string, b: string): string => {
+    if (!a) return b;
+    if (!b) return a;
+    return `${a.trim()} ${b.trim()}`;
+  };
 
-  // Listen to prompt restoration events (e.g., when Undo is triggered to restore previous prompt/state)
+  // Listen to prompt restoration events (e.g. from Recent Prompts Drawer or Undo)
   useEffect(() => {
     const handleRestorePrompt = (
       e: CustomEvent<{
@@ -122,9 +72,9 @@ export const MultimodalInputBar: React.FC<MultimodalInputBarProps> = ({
           setAttachments(e.detail.attachments);
         }
         setTimeout(() => {
-          if (textareaRef.current) {
-            textareaRef.current.focus();
-            textareaRef.current.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+          if (inputRef.current) {
+            inputRef.current.focus();
+            inputRef.current.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
           }
         }, 50);
       }
@@ -133,7 +83,7 @@ export const MultimodalInputBar: React.FC<MultimodalInputBarProps> = ({
     return () => window.removeEventListener('metfa_ai_restore_prompt', handleRestorePrompt as EventListener);
   }, [onUpdateSettings]);
 
-  // Clean up recognition on unmount
+  // Clean up speech recognition on unmount
   useEffect(() => {
     return () => {
       if (recognitionRef.current) {
@@ -177,7 +127,6 @@ export const MultimodalInputBar: React.FC<MultimodalInputBarProps> = ({
       e.stopPropagation();
     }
 
-    // Prevent duplicate triggers if currently loading or submitting
     if (isLoading || isSubmittingRef.current) return;
 
     if (isRecording && recognitionRef.current) {
@@ -199,15 +148,10 @@ export const MultimodalInputBar: React.FC<MultimodalInputBarProps> = ({
     isSubmittingRef.current = true;
     const currentAttachments = [...attachments];
 
-    // Clear UI state cleanly and snap back to single-line default
     setInputText('');
     setAttachments([]);
     setInterimFeedback('');
-    if (textareaRef.current) {
-      textareaRef.current.style.height = '40px';
-    }
 
-    // Call callback once
     try {
       onSendMessage(trimmed, currentAttachments);
     } finally {
@@ -217,46 +161,19 @@ export const MultimodalInputBar: React.FC<MultimodalInputBarProps> = ({
     }
   };
 
-  const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'Enter') {
       e.preventDefault();
       e.stopPropagation();
       handleSend(e);
     }
   };
 
-  const handleEnhanceClick = async () => {
-    if (!inputText.trim() || isEnhancing || !onEnhancePrompt) return;
-    try {
-      setIsEnhancing(true);
-      const enhanced = await onEnhancePrompt(inputText);
-      if (enhanced) {
-        setInputText(enhanced);
-      }
-    } catch (err) {
-      console.error('Failed to enhance prompt:', err);
-    } finally {
-      setIsEnhancing(false);
-    }
-  };
-
   const handleTakePhoto = () => {
-    try {
-      localStorage.setItem('has_granted_permissions', 'true');
-      localStorage.setItem('metfa_media_permissions_granted', 'granted');
-    } catch {
-      // ignore
-    }
     photoCameraInputRef.current?.click();
   };
 
   const handleRecordVideo = () => {
-    try {
-      localStorage.setItem('has_granted_permissions', 'true');
-      localStorage.setItem('metfa_media_permissions_granted', 'granted');
-    } catch {
-      // ignore
-    }
     videoCameraInputRef.current?.click();
   };
 
@@ -268,35 +185,67 @@ export const MultimodalInputBar: React.FC<MultimodalInputBarProps> = ({
     fileInputRef.current?.click();
   };
 
-  const joinWithSpacing = (base: string, addition: string): string => {
-    const b = (base || '').trim();
-    const a = (addition || '').trim();
-    if (!b) return a;
-    if (!a) return b;
-    if (/^[.,!?;:।\)\]]/.test(a)) {
-      return `${b}${a}`;
-    }
-    return `${b} ${a}`;
-  };
-
-  const handleLanguageChange = (lang: 'en-US' | 'bn-BD') => {
-    setSpeechLanguage(lang);
-    try {
-      localStorage.setItem('metfa_speech_lang', lang);
-    } catch {
-      // ignore
-    }
-  };
-
-  const toggleSpeechRecognition = () => {
+  // Internal Web Speech API runner once microphone permission is verified
+  const startSpeechRecognition = () => {
     const SpeechRecognition =
       (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
 
     if (!SpeechRecognition) {
-      setSpeechError('Speech recognition is not supported in this browser. Please use Chrome or Edge.');
+      alert('আপনার ব্রাউজারে স্পিচ রিকগনিশন সাপোর্ট করে না। অনুগ্রহ করে Google Chrome ব্যবহার করুন।');
       return;
     }
 
+    try {
+      const recognition = new SpeechRecognition();
+      recognition.continuous = false;
+      recognition.interimResults = false;
+
+      // Auto language detection: default to Bengali (bn-BD) with auto detection
+      const userLocale = typeof navigator !== 'undefined' ? (navigator.language || 'bn-BD') : 'bn-BD';
+      recognition.lang = userLocale.startsWith('bn') ? 'bn-BD' : userLocale;
+      recognition.maxAlternatives = 1;
+
+      baseTextRef.current = inputText;
+
+      recognition.onstart = () => {
+        setIsRecording(true);
+        setSpeechError(null);
+        setInterimFeedback('Listening...');
+      };
+
+      recognition.onresult = (event: any) => {
+        const transcript = event.results?.[0]?.[0]?.transcript || '';
+        if (transcript) {
+          setInputText((prev) => (prev ? `${prev} ${transcript}` : transcript));
+        }
+        setIsRecording(false);
+        setInterimFeedback('');
+      };
+
+      recognition.onerror = (event: any) => {
+        console.error('Speech Recognition Error:', event.error);
+        setIsRecording(false);
+        setInterimFeedback('');
+        alert('মাইক্রোফোন পারমিশন দিন অথবা ব্রাউজার সেটিংসে মাইক অ্যালাউ করুন।');
+      };
+
+      recognition.onend = () => {
+        setIsRecording(false);
+        setInterimFeedback('');
+      };
+
+      recognitionRef.current = recognition;
+      recognition.start();
+    } catch (err: any) {
+      console.error('Failed to start speech recognition:', err);
+      setSpeechError(err?.message || 'Failed to start speech recognition');
+      setIsRecording(false);
+      setInterimFeedback('');
+    }
+  };
+
+  // Direct Voice Mic Recognition: Triggers native getUserMedia permission prompt on click
+  const toggleSpeechRecognition = () => {
     if (isRecording) {
       if (recognitionRef.current) {
         try {
@@ -310,88 +259,31 @@ export const MultimodalInputBar: React.FC<MultimodalInputBarProps> = ({
       return;
     }
 
-    try {
-      const recognition = new SpeechRecognition();
-      recognition.continuous = true;
-      recognition.interimResults = true;
-      recognition.lang = speechLanguage;
-      recognition.maxAlternatives = 1;
-
-      // Save the base text buffer before this speech session started
-      baseTextRef.current = inputText;
-
-      recognition.onstart = () => {
-        try {
-          localStorage.setItem('has_granted_permissions', 'true');
-          localStorage.setItem('metfa_media_permissions_granted', 'granted');
-        } catch {
-          // ignore
-        }
-        setIsRecording(true);
-        setSpeechError(null);
-        setInterimFeedback(
-          speechLanguage === 'bn-BD'
-            ? '🎙️ শুনছি (বাংলা)...'
-            : '🎙️ Listening (English)...'
-        );
-      };
-
-      recognition.onresult = (event: any) => {
-        let finalizedTranscript = '';
-        let interimTranscript = '';
-
-        // Process each result index in the current session
-        for (let i = 0; i < event.results.length; i++) {
-          const result = event.results[i];
-          const chunk = result[0]?.transcript || '';
-          if (!chunk) continue;
-
-          if (result.isFinal) {
-            finalizedTranscript = joinWithSpacing(finalizedTranscript, chunk);
-          } else {
-            interimTranscript = joinWithSpacing(interimTranscript, chunk);
-          }
-        }
-
-        // Maintain clear separation between:
-        // BASE TEXT + FINALIZED VOICE TRANSCRIPT + CURRENT INTERIM TRANSCRIPT
-        const sessionVoiceText = joinWithSpacing(finalizedTranscript, interimTranscript);
-        const updated = joinWithSpacing(baseTextRef.current, sessionVoiceText);
-
-        setInputText(updated);
-        setInterimFeedback(interimTranscript || finalizedTranscript || '');
-      };
-
-      recognition.onerror = (event: any) => {
-        console.warn('Speech recognition error:', event.error);
-        if (event.error === 'not-allowed' || event.error === 'service-not-allowed') {
-          setSpeechError('Microphone permission required for voice typing.');
-        } else if (event.error === 'no-speech') {
-          // Benign timeout
-        } else {
-          setSpeechError(`Voice recognition: ${event.error}`);
-        }
-        setIsRecording(false);
-        setInterimFeedback('');
-      };
-
-      recognition.onend = () => {
-        setIsRecording(false);
-        setInterimFeedback('');
-      };
-
-      recognitionRef.current = recognition;
-      recognition.start();
-    } catch (err) {
-      console.warn('Could not start speech recognition:', err);
-      setIsRecording(false);
+    if (typeof navigator !== 'undefined' && navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
+      navigator.mediaDevices
+        .getUserMedia({ audio: true })
+        .then((stream) => {
+          // Release the initial permission-check stream tracks immediately
+          try {
+            stream.getTracks().forEach((track) => track.stop());
+          } catch {}
+          // Start Web Speech API / Voice Input
+          startSpeechRecognition();
+        })
+        .catch((err) => {
+          console.warn('Microphone permission check failed:', err);
+          alert('Please allow microphone access in your browser settings.');
+        });
+    } else {
+      startSpeechRecognition();
     }
   };
 
+  const hasContent = Boolean(inputText.trim() || attachments.length > 0);
+
   return (
-    <div className="w-full flex flex-col items-center">
-      {/* Hidden file inputs configured with distinct target modes */}
-      {/* 1. Direct Photo Capture */}
+    <div className="w-full">
+      {/* Hidden File Inputs */}
       <input
         ref={photoCameraInputRef}
         type="file"
@@ -400,8 +292,6 @@ export const MultimodalInputBar: React.FC<MultimodalInputBarProps> = ({
         className="hidden"
         onChange={(e) => handleFileUpload(e.target.files)}
       />
-
-      {/* 2. Direct Video Recording */}
       <input
         ref={videoCameraInputRef}
         type="file"
@@ -410,18 +300,14 @@ export const MultimodalInputBar: React.FC<MultimodalInputBarProps> = ({
         className="hidden"
         onChange={(e) => handleFileUpload(e.target.files)}
       />
-
-      {/* 3. Media Gallery (Photos & Videos) */}
       <input
         ref={galleryInputRef}
         type="file"
-        accept="image/*,video/*"
         multiple
+        accept="image/*,video/*"
         className="hidden"
         onChange={(e) => handleFileUpload(e.target.files)}
       />
-
-      {/* 4. Documents & General Code/Files */}
       <input
         ref={fileInputRef}
         type="file"
@@ -431,7 +317,7 @@ export const MultimodalInputBar: React.FC<MultimodalInputBarProps> = ({
         onChange={(e) => handleFileUpload(e.target.files)}
       />
 
-      {/* Choose an Action Bottom Modal / Action Sheet (Includes Camera as 1st option, Scan Text as 4th) */}
+      {/* Choose an Action Bottom Modal / Action Sheet */}
       <AttachmentModal
         isOpen={isActionModalOpen}
         onClose={() => setIsActionModalOpen(false)}
@@ -455,320 +341,121 @@ export const MultimodalInputBar: React.FC<MultimodalInputBarProps> = ({
         initialImageSrc={scannerInitialImage}
       />
 
-      {/* Style Presets Bar (collapsible / toggleable) */}
-      {showPresets && (
-        <div className="w-full max-w-5xl xl:max-w-6xl px-3 mb-2 flex items-center gap-1.5 overflow-x-auto pb-1.5 scrollbar-thin animate-fadeIn">
-          <span className="text-[11px] font-bold text-purple-700 uppercase tracking-wider shrink-0 flex items-center gap-1">
-            <Sparkles className="w-3 h-3 text-purple-600" /> Preset:
-          </span>
-          {STYLE_PRESETS.map((preset) => {
-            const isSelected =
-              settings?.stylePreset === preset || (!settings?.stylePreset && preset === 'None');
-            return (
-              <button
-                key={preset}
-                type="button"
-                onClick={() => {
-                  onUpdateSettings?.({ stylePreset: preset === 'None' ? '' : preset });
-                }}
-                className={`text-xs px-3 py-1 rounded-xl whitespace-nowrap font-medium transition border ${
-                  isSelected
-                    ? 'bg-purple-600 text-white border-purple-600 shadow-sm'
-                    : 'bg-white text-gray-700 border-gray-200 hover:border-purple-300 hover:text-purple-700'
-                }`}
-              >
-                {preset}
-              </button>
-            );
-          })}
+      {/* Speech Error Banner if any */}
+      {speechError && (
+        <div className="max-w-4xl mx-auto mb-2 flex items-center justify-between px-3 py-1.5 text-xs text-amber-800 bg-amber-50 rounded-lg border border-amber-200">
+          <span className="truncate">{speechError}</span>
+          <button
+            type="button"
+            onClick={() => setSpeechError(null)}
+            className="text-gray-500 hover:text-gray-800 text-xs ml-2 cursor-pointer"
+          >
+            ✕
+          </button>
         </div>
       )}
 
-      {/* Live Voice Recording Status Bar if active */}
-      {isRecording && (
-        <div className="w-full max-w-5xl xl:max-w-6xl mb-2 px-3 flex items-center justify-between bg-rose-50 border border-rose-200 rounded-2xl py-1.5 px-3 animate-fadeIn text-xs shadow-sm gap-2">
-          <div className="flex items-center gap-2 text-rose-800 min-w-0">
-            <Radio className="w-4 h-4 text-rose-600 animate-spin shrink-0" />
-            <span className="font-bold shrink-0">
-              🎙️ Listening ({speechLanguage === 'bn-BD' ? 'বাংলা' : 'English'})...
-            </span>
-            {interimFeedback && (
-              <span className="text-rose-950 font-medium italic truncate max-w-[200px] sm:max-w-md">
-                "{interimFeedback}"
-              </span>
-            )}
-          </div>
+      {/* Attachments Preview if any */}
+      {attachments.length > 0 && (
+        <div className="max-w-4xl mx-auto flex items-center gap-2 overflow-x-auto pb-2 px-1">
+          {attachments.map((att) => (
+            <div
+              key={att.id}
+              className="relative group shrink-0 rounded-xl overflow-hidden bg-gray-50 border border-gray-200 h-14 w-16 flex items-center justify-center shadow-xs"
+            >
+              {att.type === 'image' && att.previewUrl ? (
+                <img src={att.previewUrl} alt={att.name} className="w-full h-full object-cover" />
+              ) : (
+                <span className="text-[10px] text-gray-600 truncate px-1">📎 {att.name}</span>
+              )}
+              <button
+                type="button"
+                onClick={() => handleRemoveAttachment(att.id)}
+                className="absolute top-1 right-1 p-0.5 bg-black/70 hover:bg-red-600 text-white rounded-full transition cursor-pointer"
+              >
+                <X className="w-3 h-3" />
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
 
+      {/* Live Voice Recording Status */}
+      {isRecording && (
+        <div className="max-w-4xl mx-auto mb-2 flex items-center justify-between bg-rose-50 border border-rose-200 text-rose-800 rounded-full px-4 py-1.5 text-xs animate-fadeIn shadow-xs">
+          <span className="flex items-center gap-2 font-medium">
+            <span className="text-base animate-pulse">🎙️</span> Listening (Auto-detect)... {interimFeedback ? `"${interimFeedback}"` : ''}
+          </span>
           <button
             type="button"
             onClick={toggleSpeechRecognition}
-            className="px-3 py-1 bg-rose-600 hover:bg-rose-500 text-white font-bold rounded-lg text-xs shadow-sm shrink-0 transition"
+            className="px-2.5 py-0.5 bg-rose-600 hover:bg-rose-700 text-white rounded-full text-xs font-semibold cursor-pointer transition"
           >
             Done
           </button>
         </div>
       )}
 
-      {/* Main Light / Book Reading Theme Input Card */}
-      <div className="w-full max-w-5xl xl:max-w-6xl bg-white border border-gray-300 hover:border-gray-400 focus-within:border-purple-600 focus-within:ring-2 focus-within:ring-purple-500/20 rounded-2xl p-2.5 sm:p-3 shadow-sm transition-all relative">
-        {/* Attachments Preview Carousel */}
-        {attachments.length > 0 && (
-          <div className="flex items-center gap-2 overflow-x-auto pb-2.5 mb-2 border-b border-gray-100">
-            {attachments.map((att) => (
-              <div
-                key={att.id}
-                className="relative group shrink-0 rounded-xl overflow-hidden bg-gray-50 border border-gray-200 h-16 w-20 flex items-center justify-center shadow-xs"
-              >
-                {att.type === 'image' && att.previewUrl ? (
-                  <>
-                    <img src={att.previewUrl} alt={att.name} className="w-full h-full object-cover" />
-                    <button
-                      type="button"
-                      title="Scan text from this image (OCR)"
-                      onClick={() => {
-                        setScannerInitialImage(att.previewUrl);
-                        setIsScannerModalOpen(true);
-                      }}
-                      className="absolute bottom-1 left-1 p-1 bg-black/70 hover:bg-purple-600 text-white rounded-md transition opacity-90 group-hover:opacity-100 shadow-xs"
-                      aria-label="Scan image text"
-                    >
-                      <ScanText className="w-3 h-3" />
-                    </button>
-                  </>
-                ) : att.type === 'video' ? (
-                  <div className="flex flex-col items-center justify-center p-1 text-center">
-                    <Video className="w-5 h-5 text-indigo-600" />
-                    <span className="text-[9px] text-gray-600 truncate max-w-[64px]">{att.name}</span>
-                  </div>
-                ) : (
-                  <div className="flex flex-col items-center justify-center p-1 text-center">
-                    <FileText className="w-5 h-5 text-teal-600" />
-                    <span className="text-[9px] text-gray-600 truncate max-w-[64px]">{att.name}</span>
-                  </div>
-                )}
-                <button
-                  type="button"
-                  onClick={() => handleRemoveAttachment(att.id)}
-                  className="absolute top-1 right-1 p-1 bg-black/70 hover:bg-red-600 text-white rounded-full transition opacity-90 group-hover:opacity-100"
-                >
-                  <X className="w-3 h-3" />
-                </button>
-              </div>
-            ))}
-          </div>
-        )}
+      {/* Clean Single-Line Input Bar without Language Selector */}
+      <div className="p-3 bg-white border-t border-gray-200 w-full">
+        <div className="max-w-4xl mx-auto flex items-center gap-2 bg-gray-100 rounded-full px-3.5 sm:px-4 py-1.5 sm:py-2 border border-gray-200 focus-within:border-purple-500 focus-within:bg-white focus-within:ring-2 focus-within:ring-purple-500/20 transition-all">
+          {/* Attachment Icon */}
+          <button
+            type="button"
+            id="chat-attach-btn"
+            onClick={() => setIsActionModalOpen(true)}
+            className="text-gray-500 hover:text-purple-600 p-1 text-base leading-none transition cursor-pointer shrink-0"
+            title="Attach"
+            aria-label="Attach file"
+          >
+            📎
+          </button>
 
-        {/* Gemini-Style Auto-Expanding Single-to-Multiline Textarea */}
-        <textarea
-          ref={textareaRef}
-          value={inputText}
-          onChange={(e) => setInputText(e.target.value)}
-          onKeyDown={handleKeyDown}
-          placeholder="Ask Metfa Social, speak in any language, describe ideas or paste details..."
-          rows={1}
-          className="w-full bg-transparent text-gray-900 placeholder-gray-400 text-sm md:text-base resize-none focus:outline-none px-2 py-1.5 min-h-[40px] max-h-36 overflow-y-auto leading-relaxed scrollbar-thin"
-        />
+          {/* Clean Input with 'Ask Metfa AI...' */}
+          <input
+            ref={inputRef}
+            type="text"
+            value={inputText}
+            onChange={(e) => setInputText(e.target.value)}
+            onKeyDown={handleKeyDown}
+            placeholder="Ask Metfa AI..."
+            className="flex-1 bg-transparent border-none outline-none text-sm text-gray-800 placeholder-gray-400 py-1"
+          />
 
-        {/* Speech Error Banner */}
-        {speechError && (
-          <div className="flex items-center justify-between px-3 py-1.5 mb-2 text-xs text-amber-800 bg-amber-50 rounded-lg border border-amber-200">
-            <div className="flex items-center gap-1.5 min-w-0">
-              <AlertCircle className="w-3.5 h-3.5 shrink-0 text-amber-600" />
-              <span className="truncate">{speechError}</span>
-            </div>
-            <button
-              type="button"
-              onClick={() => setSpeechError(null)}
-              className="text-gray-500 hover:text-gray-900 text-xs ml-2"
-            >
-              ✕
-            </button>
-          </div>
-        )}
+          {/* Compact Small Microphone Icon */}
+          <button
+            type="button"
+            id="chat-voice-btn"
+            onClick={toggleSpeechRecognition}
+            className={`p-1.5 rounded-full transition text-xs flex items-center justify-center cursor-pointer shrink-0 ${
+              isRecording
+                ? 'bg-red-500 text-white animate-pulse shadow-xs'
+                : 'text-gray-500 hover:text-purple-600'
+            }`}
+            title="Voice Typing"
+            aria-label="Voice input"
+          >
+            🎙️
+          </button>
 
-        {/* Toolbar Footer Actions (In-Bar Camera Removed, Preserving Attach, Voice, Styles, Ad Badge, Send) */}
-        <div className="flex items-center justify-between pt-2 border-t border-gray-100 mt-1">
-          {/* Left Action Buttons */}
-          <div className="flex items-center gap-1 sm:gap-1.5 flex-wrap">
-            {/* 1. Attachment / Paperclip Button (Opens "Choose an Action" Action Sheet) */}
-            <button
-              type="button"
-              id="chat-attach-action-btn"
-              onClick={() => setIsActionModalOpen(true)}
-              className="p-2 text-gray-600 hover:text-gray-900 rounded-xl hover:bg-gray-100 transition flex items-center gap-1 text-xs font-medium"
-              title="Attach Camera, Video, Photos & Videos, or Documents"
-            >
-              <Paperclip className="w-4 h-4 text-purple-600" />
-              <span className="hidden sm:inline">Attach</span>
-            </button>
-
-            {/* 2. Voice Recognition Button with Language Selector */}
-            <div className="flex items-center gap-1 bg-gray-50 border border-gray-200 rounded-xl p-0.5">
-              <button
-                type="button"
-                id="chat-voice-btn"
-                onClick={toggleSpeechRecognition}
-                className={`px-2.5 py-1.5 rounded-lg transition flex items-center gap-1.5 text-xs font-medium ${
-                  isRecording
-                    ? 'bg-rose-600 text-white font-bold animate-pulse shadow-sm'
-                    : 'text-gray-700 hover:text-gray-900 hover:bg-gray-100'
-                }`}
-                title={
-                  isRecording
-                    ? 'Stop Recording'
-                    : `Voice Input (${speechLanguage === 'bn-BD' ? 'বাংলা' : 'English'})`
-                }
-              >
-                {isRecording ? (
-                  <MicOff className="w-3.5 h-3.5 text-white" />
-                ) : (
-                  <Mic className="w-3.5 h-3.5 text-indigo-600" />
-                )}
-                <span>{isRecording ? 'Listening...' : 'Voice'}</span>
-              </button>
-
-              <select
-                aria-label="Voice input language"
-                value={speechLanguage}
-                onChange={(e) => handleLanguageChange(e.target.value as 'en-US' | 'bn-BD')}
-                disabled={isRecording}
-                className="text-[11px] font-semibold bg-transparent text-gray-700 hover:text-gray-900 px-1.5 py-1 rounded cursor-pointer focus:outline-none"
-                title="Speech recognition language (English / বাংলা)"
-              >
-                <option value="en-US">EN</option>
-                <option value="bn-BD">বাংলা</option>
-              </select>
-            </div>
-
-            {/* 3. Layers / Style Presets Button */}
-            <button
-              type="button"
-              id="chat-styles-btn"
-              onClick={() => setShowPresets(!showPresets)}
-              className={`p-2 rounded-xl transition flex items-center gap-1 text-xs font-medium ${
-                showPresets
-                  ? 'bg-purple-100 text-purple-800 border border-purple-300'
-                  : 'text-gray-600 hover:text-gray-900 hover:bg-gray-100'
-              }`}
-              title="Choose style presets"
-            >
-              <Layers className="w-4 h-4 text-amber-600" />
-              <span className="hidden md:inline">Styles</span>
-            </button>
-
-            {/* Optional AI Enhance Prompt Button */}
-            {inputText.trim().length > 5 && onEnhancePrompt && (
-              <button
-                type="button"
-                disabled={isEnhancing}
-                onClick={handleEnhanceClick}
-                className="p-2 text-xs font-semibold text-purple-700 hover:text-purple-900 bg-purple-50 hover:bg-purple-100 border border-purple-200 rounded-xl transition flex items-center gap-1"
-                title="Enhance prompt with AI"
-              >
-                <Wand2 className={`w-3.5 h-3.5 ${isEnhancing ? 'animate-spin text-purple-600' : 'text-purple-600'}`} />
-                <span>{isEnhancing ? 'Enhancing...' : 'Enhance'}</span>
-              </button>
-            )}
-
-            {/* Quick Undo Transformation Button */}
-            {canUndo && onUndo && (
-              <button
-                type="button"
-                id="chat-undo-toolbar-btn"
-                onClick={onUndo}
-                disabled={isLoading}
-                className="px-2 sm:px-2.5 py-1.5 rounded-xl transition flex items-center gap-1 text-xs font-semibold bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-300 active:scale-95 disabled:opacity-50 cursor-pointer shadow-xs"
-                title="Undo last transformation: Revert to previous visual & prompt (Ctrl+Z)"
-              >
-                <Undo2 className="w-3.5 h-3.5 text-amber-700" />
-                <span className="hidden sm:inline">Undo</span>
-              </button>
-            )}
-
-            {/* Optional Redo Button */}
-            {canRedo && onRedo && (
-              <button
-                type="button"
-                id="chat-redo-toolbar-btn"
-                onClick={onRedo}
-                disabled={isLoading}
-                className="px-2 sm:px-2.5 py-1.5 rounded-xl transition flex items-center gap-1 text-xs font-semibold bg-gray-50 hover:bg-gray-100 text-gray-700 border border-gray-200 active:scale-95 disabled:opacity-50 cursor-pointer"
-                title="Redo transformation (Ctrl+Shift+Z)"
-              >
-                <RotateCcw className="w-3.5 h-3.5 text-gray-600 scale-x-[-1]" />
-                <span className="hidden sm:inline">Redo</span>
-              </button>
-            )}
-
-            {/* Quick Download Button for Current Transformed Visual */}
-            {canDownload && onDownload && (
-              <button
-                type="button"
-                id="chat-download-toolbar-btn"
-                onClick={onDownload}
-                disabled={isLoading}
-                className="px-2 sm:px-2.5 py-1.5 rounded-xl transition flex items-center gap-1 text-xs font-semibold bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-300 active:scale-95 disabled:opacity-50 cursor-pointer shadow-xs"
-                title="Download: Save current transformed image to your device"
-              >
-                <Download className="w-3.5 h-3.5 text-emerald-700" />
-                <span className="hidden sm:inline">Download</span>
-              </button>
-            )}
-          </div>
-
-          {/* Right Action Buttons */}
-          <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
-            {/* 4. Rewarded Video Ad Badge (+2 Free Coins / Credits) */}
-            {onWatchAdClick && (
-              <button
-                type="button"
-                id="chat-input-reward-ad-btn"
-                onClick={onWatchAdClick}
-                className="px-2.5 sm:px-3 py-1.5 sm:py-2 rounded-xl font-bold text-xs flex items-center gap-1.5 bg-amber-50 hover:bg-amber-100 border border-amber-300 text-amber-800 shadow-xs transition transform active:scale-95 cursor-pointer shrink-0"
-                title="Watch 5-second Video Ad to earn +2 Free Prompt Credits"
-              >
-                <Video className="w-3.5 h-3.5 text-amber-600 animate-pulse" />
-                <span className="font-black tracking-tight">+2</span>
-                <span className="hidden sm:inline text-[10px] text-amber-700 font-semibold">Coins</span>
-              </button>
-            )}
-
-            {/* 5. Send Button */}
-            <button
-              type="button"
-              id="chat-input-send-btn"
-              disabled={(!inputText.trim() && attachments.length === 0) || isLoading}
-              onClick={handleSend}
-              className={`py-1.5 sm:py-2 px-3.5 sm:px-4 rounded-xl sm:rounded-2xl font-bold text-xs flex items-center gap-1.5 shadow-sm transition transform active:scale-95 shrink-0 cursor-pointer ${
-                (!inputText.trim() && attachments.length === 0) || isLoading
-                  ? 'bg-gray-100 text-gray-400 border border-gray-200 cursor-not-allowed'
-                  : 'bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-700 hover:to-indigo-700 text-white shadow-purple-500/20'
-              }`}
-            >
-              <span>{isLoading ? 'Generating...' : 'Send'}</span>
-              <Send className="w-3.5 h-3.5" />
-            </button>
-          </div>
+          {/* High-Contrast Gemini-Style Send Button (⬆ Arrow) */}
+          <button
+            type="button"
+            id="chat-send-btn"
+            disabled={!hasContent || isLoading}
+            onClick={handleSend}
+            className={`w-8 h-8 rounded-full flex items-center justify-center transition font-bold text-sm shrink-0 ${
+              hasContent && !isLoading
+                ? 'bg-purple-600 text-white shadow-md hover:bg-purple-700 cursor-pointer active:scale-95'
+                : 'bg-gray-300 text-gray-500 cursor-not-allowed'
+            }`}
+            title="Send"
+            aria-label="Send"
+          >
+            ⬆
+          </button>
         </div>
       </div>
-
-      {/* Recent Transformation Prompt History List below the input field */}
-      <RecentPromptHistoryList
-        currentInput={inputText}
-        onSelectPrompt={(promptText, stylePreset) => {
-          setInputText(promptText);
-          if (stylePreset && onUpdateSettings) {
-            onUpdateSettings({ stylePreset });
-          }
-          // Focus input textarea and ensure it resizes
-          setTimeout(() => {
-            if (textareaRef.current) {
-              textareaRef.current.focus();
-              textareaRef.current.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-            }
-          }, 50);
-        }}
-      />
     </div>
   );
 };

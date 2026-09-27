@@ -29,6 +29,7 @@ import {
   Sparkles,
 } from 'lucide-react';
 import { V2RevenuePeriodRecord, V2RevenueLedgerRecord, V2RevenueHealthSummary } from '../../../types/v2Revenue';
+import { getClientAuthToken } from '../../../services/supabaseClient';
 
 interface V2RevenueModuleProps {
   currentRole?: string;
@@ -46,6 +47,14 @@ export const V2RevenueModule: React.FC<V2RevenueModuleProps> = ({
   const [loading, setLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
+
+  const getAuthHeaders = async (extra?: Record<string, string>): Promise<Record<string, string>> => {
+    const token = await getClientAuthToken();
+    return {
+      ...(extra || {}),
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    };
+  };
 
   // New Period Form Modal State
   const [showNewPeriod, setShowNewPeriod] = useState(false);
@@ -74,11 +83,8 @@ export const V2RevenueModule: React.FC<V2RevenueModuleProps> = ({
     setLoading(true);
     setErrorMsg(null);
     try {
-      const res = await fetch('/api/v2/revenue/periods', {
-        headers: {
-          'x-metfa-role': currentRole,
-        },
-      });
+      const headers = await getAuthHeaders();
+      const res = await fetch('/api/v2/revenue/periods', { headers });
       if (!res.ok) throw new Error(`HTTP ${res.status}: Failed to fetch revenue periods`);
       const data = await res.json();
       const loadedPeriods: V2RevenuePeriodRecord[] = data.periods || [];
@@ -92,9 +98,7 @@ export const V2RevenueModule: React.FC<V2RevenueModuleProps> = ({
       }
 
       // Fetch health summary
-      const healthRes = await fetch('/api/v2/revenue/health', {
-        headers: { 'x-metfa-role': currentRole },
-      });
+      const healthRes = await fetch('/api/v2/revenue/health', { headers });
       if (healthRes.ok) {
         const healthData = await healthRes.json();
         setHealth(healthData.health);
@@ -108,9 +112,8 @@ export const V2RevenueModule: React.FC<V2RevenueModuleProps> = ({
 
   const fetchPeriodDetail = async (id: string) => {
     try {
-      const res = await fetch(`/api/v2/revenue/periods/${id}`, {
-        headers: { 'x-metfa-role': currentRole },
-      });
+      const headers = await getAuthHeaders();
+      const res = await fetch(`/api/v2/revenue/periods/${id}`, { headers });
       if (res.ok) {
         const data = await res.json();
         setLedgerEntries(data.ledger || []);
@@ -145,19 +148,15 @@ export const V2RevenueModule: React.FC<V2RevenueModuleProps> = ({
     setErrorMsg(null);
     setSuccessMsg(null);
     try {
+      const headers = await getAuthHeaders({ 'Content-Type': 'application/json' });
       const res = await fetch('/api/v2/revenue/periods', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-metfa-role': currentRole,
-        },
+        headers,
         body: JSON.stringify({
           period_name: periodName || `Period ${new Date().toISOString().substring(0, 7)}`,
           period_start: new Date(periodStart).toISOString(),
           period_end: new Date(periodEnd).toISOString(),
           currency: 'USD',
-          actor_id: actorId,
-          actor_role: currentRole,
         }),
       });
       const data = await res.json();
@@ -182,12 +181,10 @@ export const V2RevenueModule: React.FC<V2RevenueModuleProps> = ({
       if (isNaN(cents) || cents <= 0) {
         throw new Error('Please enter a valid positive dollar amount.');
       }
+      const headers = await getAuthHeaders({ 'Content-Type': 'application/json' });
       const res = await fetch('/api/v2/revenue/entries', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-metfa-role': currentRole,
-        },
+        headers,
         body: JSON.stringify({
           period_id: selectedPeriodId,
           source: ingestSource,
@@ -196,8 +193,6 @@ export const V2RevenueModule: React.FC<V2RevenueModuleProps> = ({
           currency: 'USD',
           reference_id: ingestRefId || `TX-${Date.now()}`,
           description: ingestDesc,
-          actor_id: actorId,
-          actor_role: currentRole,
           auto_verify: true, // Defaulting auto-verify in test/dashboard for immediate visibility
         }),
       });
@@ -219,13 +214,11 @@ export const V2RevenueModule: React.FC<V2RevenueModuleProps> = ({
   // Verify Single Entry
   const handleVerifyEntry = async (entryId: string) => {
     try {
+      const headers = await getAuthHeaders({ 'Content-Type': 'application/json' });
       const res = await fetch(`/api/v2/revenue/entries/${entryId}/verify`, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-metfa-role': currentRole,
-        },
-        body: JSON.stringify({ actor_id: actorId, actor_role: currentRole }),
+        headers,
+        body: JSON.stringify({}),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Failed to verify entry');
@@ -245,15 +238,11 @@ export const V2RevenueModule: React.FC<V2RevenueModuleProps> = ({
       // Send sample source report matching current period internal gross
       const targetPeriod = periods.find((p) => p.id === selectedPeriodId);
       const gross = targetPeriod?.gross_revenue_cents || 0;
+      const headers = await getAuthHeaders({ 'Content-Type': 'application/json' });
       const res = await fetch(`/api/v2/revenue/periods/${selectedPeriodId}/reconcile`, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-metfa-role': currentRole,
-        },
+        headers,
         body: JSON.stringify({
-          actor_id: actorId,
-          actor_role: currentRole,
           source_reports: [
             {
               source: 'ADS',
@@ -286,13 +275,11 @@ export const V2RevenueModule: React.FC<V2RevenueModuleProps> = ({
   const handleLock = async () => {
     if (!selectedPeriodId) return;
     try {
+      const headers = await getAuthHeaders({ 'Content-Type': 'application/json' });
       const res = await fetch(`/api/v2/revenue/periods/${selectedPeriodId}/lock`, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-metfa-role': currentRole,
-        },
-        body: JSON.stringify({ actor_id: actorId, actor_role: currentRole }),
+        headers,
+        body: JSON.stringify({}),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Failed to lock period');
@@ -307,13 +294,11 @@ export const V2RevenueModule: React.FC<V2RevenueModuleProps> = ({
   const handleFinalize = async () => {
     if (!selectedPeriodId) return;
     try {
+      const headers = await getAuthHeaders({ 'Content-Type': 'application/json' });
       const res = await fetch(`/api/v2/revenue/periods/${selectedPeriodId}/finalize`, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-metfa-role': 'SUPER_ADMIN', // Use authoritative elevated role
-        },
-        body: JSON.stringify({ actor_id: actorId, actor_role: 'SUPER_ADMIN' }),
+        headers,
+        body: JSON.stringify({}),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Finalization rejected');
@@ -329,9 +314,8 @@ export const V2RevenueModule: React.FC<V2RevenueModuleProps> = ({
     setRunningTests(true);
     setTestResult(null);
     try {
-      const res = await fetch('/api/v2/revenue/run-tests', {
-        headers: { 'x-metfa-role': currentRole },
-      });
+      const headers = await getAuthHeaders();
+      const res = await fetch('/api/v2/revenue/run-tests', { headers });
       const data = await res.json();
       setTestResult(data);
     } catch (err: any) {
@@ -347,12 +331,10 @@ export const V2RevenueModule: React.FC<V2RevenueModuleProps> = ({
     setGeneratingBrief(true);
     setAiBrief(null);
     try {
+      const headers = await getAuthHeaders({ 'Content-Type': 'application/json' });
       const res = await fetch('/api/v2/revenue/ai-brief', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-metfa-role': currentRole,
-        },
+        headers,
         body: JSON.stringify({ period_id: selectedPeriodId }),
       });
       const data = await res.json();

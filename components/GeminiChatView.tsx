@@ -579,8 +579,8 @@ export const GeminiChatView: React.FC<GeminiChatViewProps> = ({
         </div>
       </div>
 
-      {/* Input Section (Gemini Minimalist Input without unnecessary footer) */}
-      <div className="shrink-0 w-full px-1.5 sm:px-3 md:px-4 pt-1.5 pb-2 sm:pb-3 bg-gradient-to-t from-[#FAFAFB] via-[#FAFAFB]/95 to-transparent">
+      {/* Input Section (Clean Single-Line Input Bar) */}
+      <div className="shrink-0 w-full bg-white">
         <MultimodalInputBar
           onSendMessage={onSendMessage}
           isLoading={isLoading}

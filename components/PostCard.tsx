@@ -31,12 +31,21 @@ import {
 import { CommunityPost, UserProfile } from '../types/community';
 import { AudioTrack } from '../types/audio';
 import { isContentOwner } from '../utils/communityStore';
-import { isUserFollowed, toggleFollowUser } from '../utils/followStore';
+import { isUserFollowed, syncFollowCache } from '../utils/followStore';
+import { followUser, unfollowUser, isValidProfileUuid } from '../services/followService';
 import { isPostSaved, toggleSavePost } from '../utils/bookmarkStore';
 import { formatDuration } from '../utils/audioStore';
 import { AiRecipeBox } from './AiRecipeBox';
 import AudioLicenseInfoModal from './AudioLicenseInfoModal';
 import { PostContent } from './PostContent';
+import {
+  createComment as createCommentRemote,
+  deleteComment as deleteCommentRemote,
+  toggleReaction,
+  fetchComments,
+  ReactionType,
+} from '../services/engagementService';
+import { checkContentSafety } from '../utils/contentSafety';
 
 const GRADIENT_PRESETS: { [key: string]: string } = {
   sunset: 'bg-gradient-to-br from-orange-500 via-rose-500 to-purple-600',
@@ -61,6 +70,7 @@ export interface PostCardProps {
   onUpdatePost?: (updatedPost: CommunityPost) => void;
   onDeletePost?: (postId: string) => void;
   onToggleLike?: (postId: string) => void;
+  onSelectReaction?: (postId: string, reactionType: ReactionType) => void;
   onToggleSave?: (postId: string) => void;
   onRemixPrompt?: (prompt: string, stylePreset?: string) => void;
   onSharePost?: (post: CommunityPost) => void;
@@ -73,6 +83,8 @@ export interface PostCardProps {
   isHighlighted?: boolean;
   onShowToast?: (message: string) => void;
   priority?: boolean;
+  isAuthorFollowed?: boolean;
+  onToggleAuthorFollow?: (author: { id?: string; name?: string; username?: string; avatar?: string }) => void;
 }
 
 export const PostCard: React.FC<PostCardProps> = ({
@@ -81,6 +93,7 @@ export const PostCard: React.FC<PostCardProps> = ({
   onUpdatePost,
   onDeletePost,
   onToggleLike,
+  onSelectReaction,
   onToggleSave,
   onRemixPrompt,
   onSharePost,
@@ -93,12 +106,31 @@ export const PostCard: React.FC<PostCardProps> = ({
   isHighlighted,
   onShowToast,
   priority = false,
+  isAuthorFollowed,
+  onToggleAuthorFollow,
 }) => {
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const [showComments, setShowComments] = useState(false);
   const [showAiRecipe, setShowAiRecipe] = useState(false);
   const [commentText, setCommentText] = useState('');
   const [showReactionPicker, setShowReactionPicker] = useState(false);
+
+  // Load persistent comments from Supabase when comment section is expanded
+  useEffect(() => {
+    if (!showComments) return;
+    const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(post.id);
+    if (isUuid && onUpdatePost) {
+      fetchComments(post.id).then(({ comments, error }) => {
+        if (!error && comments) {
+          onUpdatePost({
+            ...post,
+            comments,
+            commentsCount: Math.max(post.commentsCount || 0, comments.length),
+          });
+        }
+      });
+    }
+  }, [showComments, post.id]);
 
   // Local inline caption edit state
   const [isInlineEditing, setIsInlineEditing] = useState(false);
@@ -162,19 +194,60 @@ export const PostCard: React.FC<PostCardProps> = ({
   }, []);
 
   const isOwner = isContentOwner(post.author, userProfile, undefined, post.postingIdentity, post.id);
-  const [isFollowed, setIsFollowed] = useState(
-    isUserFollowed(post.author?.id) || isUserFollowed(post.author?.username)
+  const [isFollowed, setIsFollowed] = useState<boolean>(
+    isAuthorFollowed !== undefined
+      ? isAuthorFollowed
+      : isUserFollowed(post.author?.id) || isUserFollowed(post.author?.username)
   );
+  const [isFollowLoading, setIsFollowLoading] = useState(false);
 
-  const handleToggleFollow = (e: React.MouseEvent) => {
+  useEffect(() => {
+    if (isAuthorFollowed !== undefined) {
+      setIsFollowed(isAuthorFollowed);
+    }
+  }, [isAuthorFollowed]);
+
+  const handleToggleFollow = async (e: React.MouseEvent) => {
     e.stopPropagation();
-    const res = toggleFollowUser(post.author);
-    setIsFollowed(res.isFollowing);
+    if (isFollowLoading) return;
+
+    if (onToggleAuthorFollow) {
+      onToggleAuthorFollow(post.author);
+      return;
+    }
+
+    const targetAuthorId = post.author?.id;
     const authorName = post.author?.name || `@${post.author?.username || 'user'}`;
-    if (res.isFollowing) {
-      onShowToast?.(`You are now following ${authorName}`);
+
+    if (targetAuthorId && isValidProfileUuid(targetAuthorId)) {
+      setIsFollowLoading(true);
+      if (!isFollowed) {
+        const { success, error } = await followUser(targetAuthorId);
+        setIsFollowLoading(false);
+        if (success) {
+          setIsFollowed(true);
+          syncFollowCache(post.author, true);
+          onShowToast?.(`You are now following ${authorName}`);
+        } else {
+          onShowToast?.(error || 'Failed to follow user.');
+        }
+      } else {
+        const { success, error } = await unfollowUser(targetAuthorId);
+        setIsFollowLoading(false);
+        if (success) {
+          setIsFollowed(false);
+          syncFollowCache(post.author, false);
+          onShowToast?.(`Unfollowed ${authorName}`);
+        } else {
+          onShowToast?.(error || 'Failed to unfollow user.');
+        }
+      }
     } else {
-      onShowToast?.(`Unfollowed ${authorName}`);
+      // Non-UUID local fallback
+      const next = !isFollowed;
+      setIsFollowed(next);
+      syncFollowCache(post.author, next);
+      onShowToast?.(next ? `You are now following ${authorName}` : `Unfollowed ${authorName}`);
     }
   };
 
@@ -234,13 +307,124 @@ export const PostCard: React.FC<PostCardProps> = ({
     onShowToast?.('Post updated successfully!');
   };
 
-  const handleCommentSubmit = (e: React.FormEvent) => {
+  const handleCommentSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!commentText.trim()) return;
-    if (onAddComment) {
-      onAddComment(post.id, commentText.trim());
+    const cleanText = commentText.trim();
+    if (!cleanText) return;
+
+    const safety = checkContentSafety(cleanText);
+    if (!safety.isSafe) {
+      onShowToast?.(safety.politeResponse || 'Comment violates community safety guidelines.');
+      return;
     }
-    setCommentText('');
+
+    if (onAddComment) {
+      onAddComment(post.id, cleanText);
+      setCommentText('');
+      return;
+    }
+
+    const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(post.id);
+    if (isUuid) {
+      const { comment, error } = await createCommentRemote(post.id, cleanText);
+      if (error || !comment) {
+        if (error?.toLowerCase().includes('authentication required')) {
+          window.dispatchEvent(new CustomEvent('metfa_open_auth_modal'));
+        }
+        onShowToast?.(error || 'Failed to post comment.');
+        return;
+      }
+      if (onUpdatePost) {
+        onUpdatePost({
+          ...post,
+          commentsCount: (post.commentsCount || 0) + 1,
+          comments: [...(post.comments || []), comment],
+        });
+      }
+      setCommentText('');
+      onShowToast?.('Comment posted');
+    }
+  };
+
+  const handleDeleteCommentInternal = async (commentId: string) => {
+    if (onDeleteComment) {
+      onDeleteComment(post.id, commentId);
+      return;
+    }
+    const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(commentId);
+    if (isUuid) {
+      const { success, error } = await deleteCommentRemote(commentId);
+      if (!success) {
+        onShowToast?.(error || 'Failed to delete comment.');
+        return;
+      }
+      if (onUpdatePost) {
+        onUpdatePost({
+          ...post,
+          comments: (post.comments || []).filter((c) => c.id !== commentId),
+          commentsCount: Math.max(0, (post.commentsCount || 1) - 1),
+        });
+      }
+      onShowToast?.('Comment deleted');
+    }
+  };
+
+  const handleReactionSelectInternal = async (reactionType: ReactionType) => {
+    if (onSelectReaction) {
+      onSelectReaction(post.id, reactionType);
+      setShowReactionPicker(false);
+      return;
+    }
+
+    const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(post.id);
+    if (isUuid) {
+      const { action, error } = await toggleReaction(post.id, reactionType);
+      if (error) {
+        if (error.toLowerCase().includes('authentication required')) {
+          window.dispatchEvent(new CustomEvent('metfa_open_auth_modal'));
+        }
+        onShowToast?.(error || 'Failed to update reaction.');
+        return;
+      }
+      if (onUpdatePost) {
+        const prevReaction = post.userReaction;
+        const currentCounts = { ...(post.reactionCounts || {}) };
+
+        if (prevReaction && currentCounts[prevReaction]) {
+          currentCounts[prevReaction] = Math.max(0, (currentCounts[prevReaction] || 1) - 1);
+        }
+
+        if (action === 'removed') {
+          onUpdatePost({
+            ...post,
+            userReaction: undefined,
+            isLiked: false,
+            reactionCounts: currentCounts,
+            likesCount: Math.max(0, (post.likesCount || 1) - 1),
+          });
+        } else if (action === 'updated') {
+          currentCounts[reactionType] = (currentCounts[reactionType] || 0) + 1;
+          onUpdatePost({
+            ...post,
+            userReaction: reactionType,
+            isLiked: true,
+            reactionCounts: currentCounts,
+          });
+        } else {
+          currentCounts[reactionType] = (currentCounts[reactionType] || 0) + 1;
+          onUpdatePost({
+            ...post,
+            userReaction: reactionType,
+            isLiked: true,
+            reactionCounts: currentCounts,
+            likesCount: (post.likesCount || 0) + 1,
+          });
+        }
+      }
+    } else {
+      onToggleLike?.(post.id);
+    }
+    setShowReactionPicker(false);
   };
 
   // Voice Playback handler
@@ -840,20 +1024,46 @@ export const PostCard: React.FC<PostCardProps> = ({
       {/* 4. Action Bar (Single horizontal row with no wrap) */}
       <div className="px-4 py-2 border-t border-slate-100 flex items-center justify-between gap-1 sm:gap-1.5 flex-nowrap w-full overflow-x-auto no-scrollbar text-xs text-slate-600">
         {/* 1. Like + count */}
-        <div className="relative shrink-0" data-reaction-container={post.id}>
+        <div
+          className="relative shrink-0"
+          data-reaction-container={post.id}
+          onMouseLeave={() => setShowReactionPicker(false)}
+        >
+          {showReactionPicker && (
+            <div className="absolute -top-12 left-0 z-30 bg-white border border-slate-200 rounded-full px-2 py-1.5 shadow-xl flex items-center gap-1.5 animate-fadeIn">
+              {Object.entries(REACTION_ICONS).map(([key, item]) => (
+                <button
+                  key={key}
+                  type="button"
+                  onClick={() => handleReactionSelectInternal(key as any)}
+                  className="text-lg hover:scale-125 transform transition duration-150 p-1 cursor-pointer"
+                  title={item.label}
+                >
+                  {item.emoji}
+                </button>
+              ))}
+            </div>
+          )}
+
           <button
             type="button"
             id={`like-post-${post.id}`}
-            onClick={() => onToggleLike?.(post.id)}
+            onClick={() => onToggleLike ? onToggleLike(post.id) : handleReactionSelectInternal('like')}
             onMouseEnter={() => setShowReactionPicker(true)}
             className={`px-1.5 py-1 rounded-lg flex items-center gap-1 text-xs font-semibold transition cursor-pointer shrink-0 whitespace-nowrap ${
-              post.isLiked
+              post.userReaction
+                ? `${REACTION_ICONS[post.userReaction]?.color || 'text-rose-600'} font-bold`
+                : post.isLiked
                 ? 'bg-rose-50 text-rose-600 border border-rose-200'
                 : 'hover:bg-slate-100 text-slate-700'
             }`}
             title="Like"
           >
-            <Heart className={`w-3.5 h-3.5 sm:w-4 sm:h-4 ${post.isLiked ? 'fill-current text-rose-600' : ''}`} />
+            {post.userReaction && REACTION_ICONS[post.userReaction] ? (
+              <span className="text-sm leading-none">{REACTION_ICONS[post.userReaction].emoji}</span>
+            ) : (
+              <Heart className={`w-3.5 h-3.5 sm:w-4 sm:h-4 ${post.isLiked ? 'fill-current text-rose-600' : ''}`} />
+            )}
             <span>{post.likesCount}</span>
           </button>
         </div>
@@ -869,7 +1079,7 @@ export const PostCard: React.FC<PostCardProps> = ({
           title="Comments"
         >
           <MessageCircle className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
-          <span>{(post.comments?.length || 0) + (post.voiceComments?.length || 0)}</span>
+          <span>{Math.max(post.commentsCount || 0, (post.comments?.length || 0) + (post.voiceComments?.length || 0))}</span>
         </button>
 
         {/* 3. Repost + count */}
@@ -1029,10 +1239,10 @@ export const PostCard: React.FC<PostCardProps> = ({
                     </div>
                   </div>
 
-                  {isContentOwner(c.author.id, userProfile.id) && onDeleteComment && (
+                  {isContentOwner(c.author.id, userProfile.id) && (
                     <button
                       type="button"
-                      onClick={() => onDeleteComment(post.id, c.id)}
+                      onClick={() => handleDeleteCommentInternal(c.id)}
                       className="p-1 text-slate-400 hover:text-rose-600 transition shrink-0 cursor-pointer"
                     >
                       <Trash2 className="w-3.5 h-3.5" />

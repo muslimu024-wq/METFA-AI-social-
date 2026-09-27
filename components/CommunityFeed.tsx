@@ -52,13 +52,28 @@ import {
   deleteVoiceComment,
   matchesPostId,
 } from '../utils/communityStore';
-import { isUserFollowed, toggleFollowUser } from '../utils/followStore';
+import { isUserFollowed, syncFollowCache } from '../utils/followStore';
+import {
+  followUser,
+  unfollowUser,
+  fetchFollowedUserIds,
+  isValidProfileUuid,
+} from '../services/followService';
 import { toggleSavePost, isPostSaved } from '../utils/bookmarkStore';
 import { executeNativeShare, SharePayload } from '../utils/shareUtils';
 import { generateQuickAIReply } from '../services/aiAssistantService';
 import { AiRecipeBox } from './AiRecipeBox';
 import { PostContent } from './PostContent';
 import { useAuth } from '../context/AuthContext';
+import {
+  createComment as createCommentRemote,
+  updateComment as updateCommentRemote,
+  deleteComment as deleteCommentRemote,
+  toggleReaction,
+  fetchComments,
+  ReactionType,
+} from '../services/engagementService';
+import { checkContentSafety } from '../utils/contentSafety';
 
 // Lazy-load non-initial action modals
 const SocialShareModal = lazy(() => import('./SocialShareModal'));
@@ -106,6 +121,8 @@ export const CommunityFeed: React.FC<CommunityFeedProps> = ({
   const { user: authUser, activeIdentity } = useAuth();
   const [activeFilter, setActiveFilter] = useState<'all' | 'trending' | 'for_you' | 'following'>('all');
   const [, setFollowingTick] = useState(0);
+  const [followedUserIds, setFollowedUserIds] = useState<Set<string>>(new Set());
+  const [isFollowActionLoading, setIsFollowActionLoading] = useState<string | null>(null);
   const [commentInputs, setCommentInputs] = useState<{ [postId: string]: string }>({});
   const [activeCommentsPostId, setActiveCommentsPostId] = useState<string | null>(null);
 
@@ -129,6 +146,29 @@ export const CommunityFeed: React.FC<CommunityFeedProps> = ({
     setTimeout(() => setToastMessage(null), 3000);
   };
 
+  // Load persistent comments from Supabase when comments drawer is opened
+  useEffect(() => {
+    if (!activeCommentsPostId) return;
+    const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(activeCommentsPostId);
+    if (isUuid) {
+      fetchComments(activeCommentsPostId).then(({ comments, error }) => {
+        if (!error && comments) {
+          const updated = posts.map((p) =>
+            p.id === activeCommentsPostId
+              ? {
+                  ...p,
+                  comments,
+                  commentsCount: Math.max(p.commentsCount || 0, comments.length),
+                }
+              : p
+          );
+          onUpdatePosts(updated);
+          saveCommunityPosts(updated);
+        }
+      });
+    }
+  }, [activeCommentsPostId]);
+
   // Targeted shared post from URL deep-link (#post-{postId})
   const targetedPost = targetSharedPostId
     ? posts.find((p) => matchesPostId(p, targetSharedPostId))
@@ -149,7 +189,24 @@ export const CommunityFeed: React.FC<CommunityFeedProps> = ({
     }
   }, [targetedPost?.id, isLoadingPosts]);
 
-  // Listen to follow updates across the application
+  // Batch-load authoritative followed user IDs from Supabase in a single query
+  useEffect(() => {
+    let isMounted = true;
+    if (authUser?.id) {
+      fetchFollowedUserIds().then(({ followedIds, error }) => {
+        if (!error && isMounted && followedIds) {
+          setFollowedUserIds(followedIds);
+        }
+      });
+    } else {
+      setFollowedUserIds(new Set());
+    }
+    return () => {
+      isMounted = false;
+    };
+  }, [authUser?.id]);
+
+  // Listen to follow updates across the application (for UI sync / cache updates)
   useEffect(() => {
     const handleFollowUpdate = () => {
       setFollowingTick((prev) => prev + 1);
@@ -158,13 +215,57 @@ export const CommunityFeed: React.FC<CommunityFeedProps> = ({
     return () => window.removeEventListener('metfa_following_updated', handleFollowUpdate);
   }, []);
 
-  const handleToggleFollow = (author: { id?: string; name?: string; username?: string; avatar?: string }) => {
-    const res = toggleFollowUser(author);
+  const handleToggleFollow = async (author: { id?: string; name?: string; username?: string; avatar?: string }) => {
+    const authorId = author.id;
     const authorName = author.name || `@${author.username || 'user'}`;
-    if (res.isFollowing) {
-      showToast(`You are now following ${authorName}`);
+
+    if (!authorId) return;
+
+    if (isValidProfileUuid(authorId)) {
+      if (isFollowActionLoading === authorId) return;
+      setIsFollowActionLoading(authorId);
+
+      const currentlyFollowing = followedUserIds.has(authorId);
+
+      if (!currentlyFollowing) {
+        const { success, error } = await followUser(authorId);
+        setIsFollowActionLoading(null);
+        if (success) {
+          setFollowedUserIds((prev) => {
+            const next = new Set(prev);
+            next.add(authorId);
+            return next;
+          });
+          syncFollowCache(author, true);
+          showToast(`You are now following ${authorName}`);
+        } else {
+          showToast(error || 'Failed to follow user.');
+        }
+      } else {
+        const { success, error } = await unfollowUser(authorId);
+        setIsFollowActionLoading(null);
+        if (success) {
+          setFollowedUserIds((prev) => {
+            const next = new Set(prev);
+            next.delete(authorId);
+            return next;
+          });
+          syncFollowCache(author, false);
+          showToast(`Unfollowed ${authorName}`);
+        } else {
+          showToast(error || 'Failed to unfollow user.');
+        }
+      }
     } else {
-      showToast(`Unfollowed ${authorName}`);
+      // Local fallback for non-UUID legacy profiles
+      const currentlyFollowing = isUserFollowed(author.id) || isUserFollowed(author.username);
+      const nextFollowing = !currentlyFollowing;
+      syncFollowCache(author, nextFollowing);
+      if (nextFollowing) {
+        showToast(`You are now following ${authorName}`);
+      } else {
+        showToast(`Unfollowed ${authorName}`);
+      }
     }
   };
 
@@ -212,13 +313,44 @@ export const CommunityFeed: React.FC<CommunityFeedProps> = ({
     setActiveCommentMenuId(null);
   };
 
-  const handleSaveCommentEdit = (postId: string, commentId: string) => {
-    if (!editingCommentText.trim()) return;
-    const updated = updateComment(postId, commentId, editingCommentText.trim());
-    onUpdatePosts(updated);
-    setEditingCommentId(null);
-    setEditingCommentText('');
-    showToast('Comment updated');
+  const handleSaveCommentEdit = async (postId: string, commentId: string) => {
+    const trimmed = editingCommentText.trim();
+    if (!trimmed) return;
+
+    const safety = checkContentSafety(trimmed);
+    if (!safety.isSafe) {
+      showToast(safety.politeResponse || 'Comment violates community safety guidelines.');
+      return;
+    }
+
+    const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(commentId);
+    if (isUuid) {
+      const { comment, error } = await updateCommentRemote(commentId, trimmed);
+      if (error || !comment) {
+        showToast(error || 'Failed to update comment.');
+        return;
+      }
+      const updated = posts.map((p) => {
+        if (p.id === postId) {
+          return {
+            ...p,
+            comments: (p.comments || []).map((c) => (c.id === commentId ? comment : c)),
+          };
+        }
+        return p;
+      });
+      onUpdatePosts(updated);
+      saveCommunityPosts(updated);
+      setEditingCommentId(null);
+      setEditingCommentText('');
+      showToast('Comment updated');
+    } else {
+      const updated = updateComment(postId, commentId, trimmed);
+      onUpdatePosts(updated);
+      setEditingCommentId(null);
+      setEditingCommentText('');
+      showToast('Comment updated');
+    }
   };
 
   const handleDeleteComment = (postId: string, commentId: string) => {
@@ -226,7 +358,15 @@ export const CommunityFeed: React.FC<CommunityFeedProps> = ({
       isOpen: true,
       title: 'Delete Comment',
       message: 'Are you sure you want to delete this comment? It will be removed immediately.',
-      onConfirm: () => {
+      onConfirm: async () => {
+        const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(commentId);
+        if (isUuid) {
+          const { success, error } = await deleteCommentRemote(commentId);
+          if (!success) {
+            showToast(error || 'Failed to delete comment.');
+            return;
+          }
+        }
         const updated = deleteComment(postId, commentId);
         onUpdatePosts(updated);
         setActiveCommentMenuId(null);
@@ -353,6 +493,12 @@ export const CommunityFeed: React.FC<CommunityFeedProps> = ({
     if (activeFilter === 'trending') return (p.likesCount || 0) > 500;
     if (activeFilter === 'for_you') return p.feedType === 'for_you' || !p.feedType;
     if (activeFilter === 'following') {
+      const authorId = p.author?.id;
+      const identityId = p.postingIdentity?.id;
+      // Authoritative check against batch-loaded Supabase followed user IDs
+      if (authorId && followedUserIds.has(authorId)) return true;
+      if (identityId && followedUserIds.has(identityId)) return true;
+      // Fallback check for unmigrated local/offline cache
       return (
         isUserFollowed(p.author?.id) ||
         isUserFollowed(p.author?.username) ||
@@ -367,53 +513,112 @@ export const CommunityFeed: React.FC<CommunityFeedProps> = ({
     : filteredPosts;
 
   const handleLike = (postId: string) => {
-    const updated = toggleLikePost(postId);
-    onUpdatePosts(updated);
+    const post = posts.find((p) => p.id === postId);
+    const activeReaction = post?.userReaction || 'like';
+    handleReactionSelect(postId, activeReaction as any);
   };
 
-  const handleReactionSelect = (postId: string, reactionType: 'like' | 'love' | 'haha' | 'wow' | 'sad' | 'fire') => {
-    const updated = posts.map((p) => {
-      if (p.id === postId) {
-        const prevReaction = p.userReaction;
-        const currentCounts = { ...(p.reactionCounts || {}) };
+  const handleReactionSelect = async (postId: string, reactionType: 'like' | 'love' | 'haha' | 'wow' | 'sad' | 'fire') => {
+    const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(postId);
 
-        // Decrement previous reaction if any
-        if (prevReaction && currentCounts[prevReaction]) {
-          currentCounts[prevReaction] = Math.max(0, (currentCounts[prevReaction] || 1) - 1);
+    if (isUuid) {
+      const { action, error } = await toggleReaction(postId, reactionType);
+      if (error) {
+        showToast(error || 'Failed to update reaction.');
+        return;
+      }
+
+      const updated = posts.map((p) => {
+        if (p.id === postId) {
+          const prevReaction = p.userReaction;
+          const currentCounts = { ...(p.reactionCounts || {}) };
+
+          if (prevReaction && currentCounts[prevReaction]) {
+            currentCounts[prevReaction] = Math.max(0, (currentCounts[prevReaction] || 1) - 1);
+          }
+
+          if (action === 'removed') {
+            return {
+              ...p,
+              userReaction: undefined,
+              isLiked: false,
+              reactionCounts: currentCounts,
+              likesCount: Math.max(0, (p.likesCount || 1) - 1),
+            };
+          } else if (action === 'updated') {
+            currentCounts[reactionType] = (currentCounts[reactionType] || 0) + 1;
+            return {
+              ...p,
+              userReaction: reactionType,
+              isLiked: true,
+              reactionCounts: currentCounts,
+            };
+          } else {
+            // 'added'
+            currentCounts[reactionType] = (currentCounts[reactionType] || 0) + 1;
+            return {
+              ...p,
+              userReaction: reactionType,
+              isLiked: true,
+              reactionCounts: currentCounts,
+              likesCount: (p.likesCount || 0) + 1,
+            };
+          }
         }
+        return p;
+      });
 
-        // Toggle off if same reaction clicked
-        if (prevReaction === reactionType) {
+      onUpdatePosts(updated);
+      saveCommunityPosts(updated);
+      setActiveReactionPickerPostId(null);
+    } else {
+      const updated = posts.map((p) => {
+        if (p.id === postId) {
+          const prevReaction = p.userReaction;
+          const currentCounts = { ...(p.reactionCounts || {}) };
+
+          if (prevReaction && currentCounts[prevReaction]) {
+            currentCounts[prevReaction] = Math.max(0, (currentCounts[prevReaction] || 1) - 1);
+          }
+
+          if (prevReaction === reactionType) {
+            return {
+              ...p,
+              userReaction: undefined,
+              isLiked: false,
+              reactionCounts: currentCounts,
+              likesCount: Math.max(0, (p.likesCount || 1) - 1),
+            };
+          }
+
+          currentCounts[reactionType] = (currentCounts[reactionType] || 0) + 1;
           return {
             ...p,
-            userReaction: undefined,
-            isLiked: false,
+            userReaction: reactionType,
+            isLiked: true,
             reactionCounts: currentCounts,
-            likesCount: Math.max(0, (p.likesCount || 1) - 1),
+            likesCount: prevReaction ? p.likesCount : (p.likesCount || 0) + 1,
           };
         }
+        return p;
+      });
 
-        // Increment new reaction
-        currentCounts[reactionType] = (currentCounts[reactionType] || 0) + 1;
-        return {
-          ...p,
-          userReaction: reactionType,
-          isLiked: true,
-          reactionCounts: currentCounts,
-          likesCount: prevReaction ? p.likesCount : (p.likesCount || 0) + 1,
-        };
-      }
-      return p;
-    });
-
-    onUpdatePosts(updated);
-    saveCommunityPosts(updated);
-    setActiveReactionPickerPostId(null);
+      onUpdatePosts(updated);
+      saveCommunityPosts(updated);
+      setActiveReactionPickerPostId(null);
+    }
   };
 
-  const handleAddTextComment = (postId: string, textOverride?: string) => {
+  const handleAddTextComment = async (postId: string, textOverride?: string) => {
     const text = (textOverride || commentInputs[postId])?.trim();
     if (!text) return;
+
+    // Preserve existing content-safety check
+    const safety = checkContentSafety(text);
+    if (!safety.isSafe) {
+      showToast(safety.politeResponse || 'Comment violates community safety guidelines.');
+      return;
+    }
 
     if (dictatingPostId === postId && speechRecognitionRef.current) {
       try {
@@ -424,35 +629,61 @@ export const CommunityFeed: React.FC<CommunityFeedProps> = ({
       setDictatingPostId(null);
     }
 
-    const updated = posts.map((p) => {
-      if (p.id === postId) {
-        return {
-          ...p,
-          commentsCount: (p.commentsCount || 0) + 1,
-          comments: [
-            ...(p.comments || []),
-            {
-              id: `c_${Date.now()}_${Math.random().toString(36).substring(2, 5)}`,
-              author: {
-                id: userProfile.id,
-                name: userProfile.name,
-                username: userProfile.username,
-                avatar: userProfile.avatar,
-                isVerified: userProfile.isVerified,
-              },
-              text,
-              timestamp: 'Just now',
-              likesCount: 0,
-            },
-          ],
-        };
-      }
-      return p;
-    });
+    const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(postId);
 
-    onUpdatePosts(updated);
-    saveCommunityPosts(updated);
-    setCommentInputs((prev) => ({ ...prev, [postId]: '' }));
+    if (isUuid) {
+      const { comment, error } = await createCommentRemote(postId, text);
+      if (error || !comment) {
+        showToast(error || 'Failed to post comment. Please try again.');
+        return;
+      }
+
+      const updated = posts.map((p) => {
+        if (p.id === postId) {
+          return {
+            ...p,
+            commentsCount: (p.commentsCount || 0) + 1,
+            comments: [...(p.comments || []), comment],
+          };
+        }
+        return p;
+      });
+
+      onUpdatePosts(updated);
+      saveCommunityPosts(updated);
+      setCommentInputs((prev) => ({ ...prev, [postId]: '' }));
+      showToast('Comment posted');
+    } else {
+      const updated = posts.map((p) => {
+        if (p.id === postId) {
+          return {
+            ...p,
+            commentsCount: (p.commentsCount || 0) + 1,
+            comments: [
+              ...(p.comments || []),
+              {
+                id: `c_${Date.now()}_${Math.random().toString(36).substring(2, 5)}`,
+                author: {
+                  id: userProfile.id,
+                  name: userProfile.name,
+                  username: userProfile.username,
+                  avatar: userProfile.avatar,
+                  isVerified: userProfile.isVerified,
+                },
+                text,
+                timestamp: 'Just now',
+                likesCount: 0,
+              },
+            ],
+          };
+        }
+        return p;
+      });
+
+      onUpdatePosts(updated);
+      saveCommunityPosts(updated);
+      setCommentInputs((prev) => ({ ...prev, [postId]: '' }));
+    }
   };
 
   // Generate 3 Quick AI replies for a comment
@@ -914,7 +1145,8 @@ export const CommunityFeed: React.FC<CommunityFeedProps> = ({
 
         {displayPosts.map((post, postIdx) => {
           const isOwner = isContentOwner(post.author, userProfile, authUser, post.postingIdentity, post.id);
-          const isFollowed = isUserFollowed(post.author?.id) || isUserFollowed(post.author?.username);
+          const authorId = post.author?.id;
+          const isFollowed = (authorId && followedUserIds.has(authorId)) || isUserFollowed(post.author?.id) || isUserFollowed(post.author?.username);
           const isCommentsOpen = activeCommentsPostId === post.id;
           const isThisRecordingVoice = isRecordingVoiceClip === post.id;
           const isThisDictating = dictatingPostId === post.id;

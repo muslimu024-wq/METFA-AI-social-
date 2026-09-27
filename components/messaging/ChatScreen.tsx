@@ -24,6 +24,7 @@ import {
 } from '../../services/messagingService';
 import AudioMessagePlayer from './AudioMessagePlayer';
 import VoiceRecorder from './VoiceRecorder';
+import { GUEST_AVATAR, sanitizeAvatarUrl } from '../../services/authService';
 
 interface ChatScreenProps {
   conversationId: string;
@@ -316,8 +317,7 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
   const partnerName = partnerProfile?.name || 'Metfa Creator';
   const partnerUsername = partnerProfile?.username ? `@${partnerProfile.username}` : '';
   const partnerAvatar =
-    partnerProfile?.avatar ||
-    `https://api.dicebear.com/7.x/avataaars/svg?seed=${partnerId || 'partner'}`;
+    sanitizeAvatarUrl(partnerProfile?.avatar, partnerProfile?.username || partnerName) || GUEST_AVATAR;
 
   return (
     <div className="flex flex-col h-full bg-slate-50 relative overflow-hidden">
@@ -349,7 +349,7 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
                 alt={partnerName}
                 className="w-10 h-10 rounded-full object-cover border border-slate-200 shadow-xs"
                 onError={(e) => {
-                  (e.target as HTMLImageElement).src = `https://api.dicebear.com/7.x/avataaars/svg?seed=${partnerId || 'partner'}`;
+                  (e.target as HTMLImageElement).src = GUEST_AVATAR;
                 }}
               />
               <span className="absolute bottom-0 right-0 w-3 h-3 bg-emerald-500 border-2 border-white rounded-full" />

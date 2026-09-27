@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, Suspense, lazy } from 'react';
-import { RotateCw, Sparkles, X } from 'lucide-react';
+import { RotateCw, Sparkles, X, AlertCircle, CheckCircle2, Info } from 'lucide-react';
 import Header from './components/Header';
 import BottomNav from './components/BottomNav';
 import { SocialEcosystemModule, SocialSubTab } from './features/social';
@@ -17,7 +17,7 @@ const AISettingsModal = lazy(() => import('./components/AISettingsModal'));
 const V2Dashboard = lazy(() => import('./components/v2/V2Dashboard'));
 
 export function App() {
-  const { userProfile, isAuthenticated, metfaId } = useAuth();
+  const { userProfile, isAuthenticated, metfaId, authNotification, clearAuthNotification } = useAuth();
 
   // App Navigation: Social-First Architecture - Sync with PWA shortcuts and URL query params
   const [activeTab, setActiveTab] = useState<'chat' | 'v2' | SocialSubTab>(() => {
@@ -338,6 +338,53 @@ export function App() {
           onInstallPwa={handleInstallPwa}
           isStandalone={isStandalone}
         />
+      )}
+
+      {/* Auth Notification Banner (e.g. email confirmation status or link expiry) */}
+      {authNotification && (
+        <div
+          className={`w-full px-4 py-3 border-b flex items-center justify-between gap-3 text-xs z-30 transition animate-fadeIn ${
+            authNotification.type === 'error'
+              ? 'bg-rose-50 border-rose-200 text-rose-800'
+              : authNotification.type === 'success'
+              ? 'bg-teal-50 border-teal-200 text-teal-800'
+              : 'bg-blue-50 border-blue-200 text-blue-800'
+          }`}
+        >
+          <div className="flex items-center gap-2.5 min-w-0">
+            {authNotification.type === 'error' ? (
+              <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
+            ) : authNotification.type === 'success' ? (
+              <CheckCircle2 className="w-4 h-4 text-teal-600 shrink-0" />
+            ) : (
+              <Info className="w-4 h-4 text-blue-600 shrink-0" />
+            )}
+            <div className="min-w-0">
+              <strong className="font-semibold mr-1.5">{authNotification.title}:</strong>
+              <span className="text-slate-700">{authNotification.message}</span>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2 shrink-0">
+            {authNotification.action === 'signin' && !isAuthenticated && (
+              <button
+                type="button"
+                onClick={() => setIsAuthModalOpen(true)}
+                className="px-3 py-1 rounded-lg bg-white border border-slate-300 text-slate-800 font-bold hover:bg-slate-50 transition shadow-xs cursor-pointer"
+              >
+                Sign In
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={clearAuthNotification}
+              className="p-1 rounded-full text-slate-400 hover:text-slate-700 hover:bg-black/5 transition cursor-pointer"
+              title="Dismiss"
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
+          </div>
+        </div>
       )}
 
       {/* 2. Decoupled Feature Modules Viewport */}

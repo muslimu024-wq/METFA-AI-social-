@@ -63,7 +63,13 @@ export function getServerSupabaseClient(): SupabaseClient | null {
   }
 
   const url = (process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || '').trim();
-  const serviceRoleKey = (process.env.SUPABASE_SERVICE_ROLE_KEY || '').trim();
+  const serviceRoleKey = (
+    process.env.SUPABASE_SERVICE_ROLE_KEY ||
+    process.env.SUPABASE_ANON_KEY ||
+    process.env.VITE_SUPABASE_ANON_KEY ||
+    process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY ||
+    ''
+  ).trim();
 
   if (!url || !serviceRoleKey) {
     return null;
@@ -143,25 +149,44 @@ export async function verifySupabaseToken(
  */
 export async function getVerifiedUserRoles(
   supabase: SupabaseClient,
-  verifiedUserId: string
+  verifiedUserId: string,
+  user?: User | null
 ): Promise<V2UserRole[]> {
+  const roles = new Set<V2UserRole>();
+  const validRoleSet = new Set<string>(CANONICAL_V2_ROLES);
+
   try {
     const { data, error } = await supabase
       .from('v2_user_roles')
       .select('role')
       .eq('user_id', verifiedUserId);
 
-    if (error || !data || !Array.isArray(data)) {
-      return [];
+    if (!error && data && Array.isArray(data)) {
+      for (const row of data) {
+        if (validRoleSet.has((row as any).role)) {
+          roles.add((row as any).role as V2UserRole);
+        }
+      }
     }
-
-    const validRoleSet = new Set<string>(CANONICAL_V2_ROLES);
-    return data
-      .map((row: { role: string }) => row.role)
-      .filter((role: string): role is V2UserRole => validRoleSet.has(role));
   } catch {
-    return [];
+    // Database lookup failsafe
   }
+
+  if (user) {
+    const metaRoles = [
+      (user as any).app_metadata?.role,
+      ...(Array.isArray((user as any).app_metadata?.roles) ? (user as any).app_metadata.roles : []),
+      (user as any).user_metadata?.role,
+      ...(Array.isArray((user as any).user_metadata?.roles) ? (user as any).user_metadata.roles : []),
+    ];
+    for (const r of metaRoles) {
+      if (typeof r === 'string' && validRoleSet.has(r)) {
+        roles.add(r as V2UserRole);
+      }
+    }
+  }
+
+  return Array.from(roles);
 }
 
 // ============================================================================
@@ -206,7 +231,7 @@ export async function requireAuth(
     return;
   }
 
-  const roles = await getVerifiedUserRoles(supabase, user.id);
+  const roles = await getVerifiedUserRoles(supabase, user.id, user);
 
   req.v2Auth = {
     userId: user.id,

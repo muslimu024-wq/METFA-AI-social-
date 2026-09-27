@@ -12,6 +12,7 @@ import {
 } from 'lucide-react';
 import { Conversation } from '../../types/messaging';
 import { isSupabaseConfigured } from '../../services/supabaseClient';
+import { GUEST_AVATAR, sanitizeAvatarUrl } from '../../services/authService';
 import BrandTitle from '../BrandTitle';
 
 interface ConversationsListViewProps {
@@ -133,8 +134,7 @@ export const ConversationsListView: React.FC<ConversationsListViewProps> = ({
               ? `@${conv.partnerProfile.username}`
               : '';
             const partnerAvatar =
-              conv.partnerProfile?.avatar ||
-              `https://api.dicebear.com/7.x/avataaars/svg?seed=${conv.partnerId || 'partner'}`;
+              sanitizeAvatarUrl(conv.partnerProfile?.avatar, conv.partnerProfile?.username || partnerName) || GUEST_AVATAR;
 
             return (
               <div
@@ -153,7 +153,7 @@ export const ConversationsListView: React.FC<ConversationsListViewProps> = ({
                     alt={partnerName}
                     className="w-11 h-11 rounded-full object-cover border border-slate-200 shadow-xs"
                     onError={(e) => {
-                      (e.target as HTMLImageElement).src = `https://api.dicebear.com/7.x/avataaars/svg?seed=${conv.partnerId || 'partner'}`;
+                      (e.target as HTMLImageElement).src = GUEST_AVATAR;
                     }}
                   />
                   <span className="absolute bottom-0 right-0 w-2.5 h-2.5 bg-emerald-500 border-2 border-white rounded-full" />

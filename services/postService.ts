@@ -2,6 +2,7 @@ import { supabase, isSupabaseConfigured } from './supabaseClient';
 import { CommunityPost, PostingIdentity, VoiceComment, PostComment } from '../types/community';
 import { AudioTrack } from '../types/audio';
 import { getDefaultAvatar } from './authService';
+import { batchFetchEngagement } from './engagementService';
 
 export interface SupabasePostRow {
   id: string;
@@ -187,9 +188,28 @@ export async function fetchSupabasePosts(): Promise<{ posts: CommunityPost[]; er
       return { posts: [] };
     }
 
-    const mappedPosts: CommunityPost[] = data.map((row: any) =>
-      mapSupabaseRowToCommunityPost(row as SupabasePostRow)
-    );
+    const postIds = data.map((row: any) => row.id).filter(Boolean);
+    const engagementMap = await batchFetchEngagement(postIds);
+
+    const mappedPosts: CommunityPost[] = data.map((row: any) => {
+      const post = mapSupabaseRowToCommunityPost(row as SupabasePostRow);
+      const eng = engagementMap.get(post.id);
+      if (eng) {
+        post.commentsCount = Math.max(post.commentsCount, eng.commentsCount);
+        post.likesCount = Math.max(post.likesCount, eng.likesCount);
+        if (eng.userReaction) {
+          post.userReaction = eng.userReaction;
+          post.isLiked = true;
+        }
+        if (Object.keys(eng.reactionCounts).length > 0) {
+          post.reactionCounts = eng.reactionCounts;
+        }
+        if (eng.commentsPreview.length > 0) {
+          post.comments = eng.commentsPreview;
+        }
+      }
+      return post;
+    });
 
     return { posts: mappedPosts };
   } catch (err: any) {
@@ -463,7 +483,25 @@ export async function fetchSupabasePostById(
       return { post: null };
     }
 
-    return { post: mapSupabaseRowToCommunityPost(data as any) };
+    const mapped = mapSupabaseRowToCommunityPost(data as any);
+    const engMap = await batchFetchEngagement([mapped.id]);
+    const eng = engMap.get(mapped.id);
+    if (eng) {
+      mapped.commentsCount = Math.max(mapped.commentsCount, eng.commentsCount);
+      mapped.likesCount = Math.max(mapped.likesCount, eng.likesCount);
+      if (eng.userReaction) {
+        mapped.userReaction = eng.userReaction;
+        mapped.isLiked = true;
+      }
+      if (Object.keys(eng.reactionCounts).length > 0) {
+        mapped.reactionCounts = eng.reactionCounts;
+      }
+      if (eng.commentsPreview.length > 0) {
+        mapped.comments = eng.commentsPreview;
+      }
+    }
+
+    return { post: mapped };
   } catch (err: any) {
     console.warn('[PostService] Exception fetching post by id:', err);
     return { post: null, error: err?.message || 'Error fetching post' };

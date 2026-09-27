@@ -182,7 +182,9 @@ export const getStudioSettings = (): StudioSettings => {
 
 export const saveStudioSettings = (settings: StudioSettings): void => {
   try {
-    safeSetItem(SETTINGS_STORAGE_KEY, JSON.stringify(settings));
+    // Strip third-party API keys to prevent plaintext storage in persistent localStorage
+    const { geminiApiKey, openaiApiKey, grokApiKey, claudeApiKey, ...safeSettings } = settings;
+    safeSetItem(SETTINGS_STORAGE_KEY, JSON.stringify(safeSettings));
   } catch (err) {
     console.error('Error saving studio settings:', err);
   }

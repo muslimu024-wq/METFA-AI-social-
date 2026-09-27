@@ -67,7 +67,7 @@ export const SocialEcosystemModule: React.FC<SocialEcosystemProps> = ({
   viewedProfileUserId,
   onViewProfile,
 }) => {
-  const { user, userProfile, updateProfile, isSupabaseConnected } = useAuth();
+  const { user, userProfile, updateProfile, isSupabaseConnected, isAuthenticated } = useAuth();
 
   // Social State (Isolated from AI Studio chat & inference)
   const [posts, setPosts] = useState<CommunityPost[]>(() => getCommunityPosts());
@@ -233,7 +233,14 @@ export const SocialEcosystemModule: React.FC<SocialEcosystemProps> = ({
           }}
           userProfile={userProfile}
           onRemixPrompt={handleRemix}
-          onCreatePostClick={() => setIsCreatePostOpen(true)}
+          onCreatePostClick={() => {
+            if (!isAuthenticated) {
+              if (onOpenAuthModal) onOpenAuthModal();
+              else window.dispatchEvent(new CustomEvent('metfa_open_auth_modal'));
+              return;
+            }
+            setIsCreatePostOpen(true);
+          }}
           targetSharedPostId={targetSharedPostId}
           isLoadingPosts={isLoadingPosts}
           onClearSharedPost={() => {
@@ -251,7 +258,14 @@ export const SocialEcosystemModule: React.FC<SocialEcosystemProps> = ({
           onUpdateReels={(r) => setReels(r)}
           userProfile={userProfile}
           onRemixPrompt={(prompt) => handleRemix(prompt)}
-          onCreateReelClick={() => setIsCreateReelOpen(true)}
+          onCreateReelClick={() => {
+            if (!isAuthenticated) {
+              if (onOpenAuthModal) onOpenAuthModal();
+              else window.dispatchEvent(new CustomEvent('metfa_open_auth_modal'));
+              return;
+            }
+            setIsCreateReelOpen(true);
+          }}
         />
       )}
 
@@ -274,7 +288,14 @@ export const SocialEcosystemModule: React.FC<SocialEcosystemProps> = ({
         <Suspense fallback={<div className="flex-1 flex items-center justify-center p-8 text-slate-400 text-xs">Loading Pages...</div>}>
           <PagesDirectory
             userProfile={userProfile}
-            onCreatePageClick={() => setIsCreatePageOpen(true)}
+            onCreatePageClick={() => {
+              if (!isAuthenticated) {
+                if (onOpenAuthModal) onOpenAuthModal();
+                else window.dispatchEvent(new CustomEvent('metfa_open_auth_modal'));
+                return;
+              }
+              setIsCreatePageOpen(true);
+            }}
           />
         </Suspense>
       )}
@@ -283,7 +304,14 @@ export const SocialEcosystemModule: React.FC<SocialEcosystemProps> = ({
         <Suspense fallback={<div className="flex-1 flex items-center justify-center p-8 text-slate-400 text-xs">Loading Groups...</div>}>
           <GroupsDirectory
             userProfile={userProfile}
-            onCreateGroupClick={() => setIsCreateGroupOpen(true)}
+            onCreateGroupClick={() => {
+              if (!isAuthenticated) {
+                if (onOpenAuthModal) onOpenAuthModal();
+                else window.dispatchEvent(new CustomEvent('metfa_open_auth_modal'));
+                return;
+              }
+              setIsCreateGroupOpen(true);
+            }}
           />
         </Suspense>
       )}
@@ -316,8 +344,22 @@ export const SocialEcosystemModule: React.FC<SocialEcosystemProps> = ({
           }}
           onWatchAdClick={onWatchAdClick}
           onOpenAuthModal={onOpenAuthModal}
-          onCreatePageClick={() => setIsCreatePageOpen(true)}
-          onCreateGroupClick={() => setIsCreateGroupOpen(true)}
+          onCreatePageClick={() => {
+            if (!isAuthenticated) {
+              if (onOpenAuthModal) onOpenAuthModal();
+              else window.dispatchEvent(new CustomEvent('metfa_open_auth_modal'));
+              return;
+            }
+            setIsCreatePageOpen(true);
+          }}
+          onCreateGroupClick={() => {
+            if (!isAuthenticated) {
+              if (onOpenAuthModal) onOpenAuthModal();
+              else window.dispatchEvent(new CustomEvent('metfa_open_auth_modal'));
+              return;
+            }
+            setIsCreateGroupOpen(true);
+          }}
           onOpenChatWithUser={(targetId, targetProfile, conversationId) => {
             window.dispatchEvent(
               new CustomEvent('metfa_open_chat', {

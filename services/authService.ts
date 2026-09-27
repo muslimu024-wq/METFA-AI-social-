@@ -90,12 +90,12 @@ export const generateUnifiedMetfaId = (seed?: string): string => {
   return `MID-${timestampSuffix}-${randomHex}`;
 };
 
-// Default clean guest user representing an unauthenticated guest state
+// Default clean unauthenticated visitor state (no fake user identity)
 export const GUEST_USER: AuthUser = {
   id: '',
   metfaId: '',
-  name: 'Guest',
-  username: 'guest',
+  name: 'Visitor',
+  username: '',
   authType: 'guest',
   phoneOrEmail: '',
   avatar: GUEST_AVATAR,
@@ -107,8 +107,8 @@ export const GUEST_USER: AuthUser = {
 
 export const GUEST_PROFILE: UserProfile = {
   id: '',
-  name: 'Guest',
-  username: 'guest',
+  name: 'Visitor',
+  username: '',
   avatar: GUEST_AVATAR,
   bio: '',
   location: '',
@@ -522,7 +522,14 @@ export async function saveProfileAndEnterMetfa(params: {
   fullName: string;
   username?: string;
   avatar: string;
-}): Promise<{ user: AuthUser; profile: UserProfile; error?: string }> {
+}): Promise<{
+  user: AuthUser;
+  profile: UserProfile;
+  error?: string;
+  isPendingConfirmation?: boolean;
+  email?: string;
+  message?: string;
+}> {
   const { authMethod, identifier, fullName, username, avatar } = params;
   const cleanName = fullName.trim() || 'Metfa Creator';
   const cleanUsername = username?.trim()
@@ -630,11 +637,14 @@ export async function saveProfileAndEnterMetfa(params: {
       const emailToUse = identifier.trim().toLowerCase();
       const userPassword = params.password || `MetfaPass_${emailToUse.replace(/[^a-zA-Z0-9]/g, '').slice(-8)}!9`;
 
+      const redirectUrl = typeof window !== 'undefined' ? window.location.origin : undefined;
+
       // 1. Try signing up new user
       const { data: signUpData, error: signUpError } = await supabase.auth.signUp({
         email: emailToUse,
         password: userPassword,
         options: {
+          emailRedirectTo: redirectUrl,
           data: {
             full_name: cleanName,
             username: cleanUsername,
@@ -703,7 +713,9 @@ export async function saveProfileAndEnterMetfa(params: {
         return {
           user: GUEST_USER,
           profile: GUEST_PROFILE,
-          error: 'Account created! Please check your email to confirm registration before signing in, or disable "Confirm email" in Supabase Auth settings.',
+          isPendingConfirmation: true,
+          email: emailToUse,
+          message: `Account created for ${emailToUse}! Please check your email inbox to confirm registration before signing in.`,
         };
       }
 
@@ -841,7 +853,7 @@ export async function signInExistingUser(params: {
           const lowerEmailErr = signInError.message.toLowerCase();
           let formattedErr = signInError.message;
           if (lowerEmailErr.includes('email not confirmed')) {
-            formattedErr = 'Please confirm your email address before signing in, or disable "Confirm email" in Supabase Auth settings.';
+            formattedErr = 'Your email address has not been confirmed yet. Please check your inbox and click the confirmation link to complete registration.';
           } else if (lowerEmailErr.includes('provider is disabled') || lowerEmailErr.includes('email logins are disabled')) {
             formattedErr = 'Email sign-in is disabled in your Supabase project settings.';
           } else if (lowerEmailErr.includes('invalid login credentials')) {
@@ -956,4 +968,29 @@ export const ssoLoginWithGmail = (email: string, name: string, av?: string, user
 };
 
 export const ssoLogout = supabaseSignOut;
+
+/**
+ * Minimal resend confirmation email helper using the active runtime origin.
+ */
+export async function resendConfirmationEmail(email: string): Promise<{ success: boolean; error?: string }> {
+  if (!isSupabaseConfigured()) {
+    return { success: false, error: 'Supabase authentication is not configured.' };
+  }
+  try {
+    const redirectUrl = typeof window !== 'undefined' ? window.location.origin : undefined;
+    const { error } = await supabase.auth.resend({
+      type: 'signup',
+      email: email.trim().toLowerCase(),
+      options: {
+        emailRedirectTo: redirectUrl,
+      },
+    });
+    if (error) {
+      return { success: false, error: error.message };
+    }
+    return { success: true };
+  } catch (err: any) {
+    return { success: false, error: err?.message || 'Failed to resend confirmation email.' };
+  }
+}
 

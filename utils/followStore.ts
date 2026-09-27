@@ -1,4 +1,5 @@
 import { GUEST_AVATAR, sanitizeAvatarUrl } from '../services/authService';
+import { safeGetItem, safeSetItem } from './storageUtils';
 
 export interface FollowedUser {
   id: string;
@@ -11,23 +12,29 @@ export interface FollowedUser {
 const FOLLOW_STORAGE_KEY = 'metfa_followed_users';
 
 /**
- * Retrieves the list of followed users from localStorage.
+ * PHASE 2B ARCHITECTURE NOTICE:
+ * This store is strictly a client-side offline/UI cache helper.
+ * Supabase (`public.user_follows`) is the sole authoritative source of truth for follows.
+ * Local storage records are NEVER blindly pushed or migrated to Supabase.
+ */
+
+/**
+ * Retrieves the list of cached followed users from localStorage.
  */
 export const getFollowedUsers = (): FollowedUser[] => {
-  if (typeof window === 'undefined') return [];
   try {
-    const raw = localStorage.getItem(FOLLOW_STORAGE_KEY);
+    const raw = safeGetItem(FOLLOW_STORAGE_KEY);
     if (!raw) return [];
     const parsed = JSON.parse(raw);
     return Array.isArray(parsed) ? parsed : [];
   } catch (err) {
-    console.warn('[FollowStore] Error reading followed users:', err);
+    console.warn('[FollowStore] Error reading cached followed users:', err);
     return [];
   }
 };
 
 /**
- * Returns an array of IDs and usernames for quick lookup.
+ * Returns an array of IDs and usernames for quick local lookup.
  */
 export const getFollowedUserIds = (): string[] => {
   const users = getFollowedUsers();
@@ -40,7 +47,7 @@ export const getFollowedUserIds = (): string[] => {
 };
 
 /**
- * Checks if a specific user/author is currently followed.
+ * Non-authoritative synchronous cache check (for offline/initial render only).
  */
 export const isUserFollowed = (userIdOrUsername?: string | null): boolean => {
   if (!userIdOrUsername) return false;
@@ -54,8 +61,76 @@ export const isUserFollowed = (userIdOrUsername?: string | null): boolean => {
 };
 
 /**
- * Toggles follow/unfollow for a given user or post author.
- * Updates localStorage, broadcasts an event, and returns the new follow state.
+ * Updates the local cache in response to an authoritative Supabase follow/unfollow action.
+ * Does NOT generate fake IDs or write unbacked data.
+ */
+export const syncFollowCache = (
+  user: {
+    id?: string;
+    name?: string;
+    username?: string;
+    avatar?: string;
+  },
+  isNowFollowing: boolean
+): void => {
+  const current = getFollowedUsers();
+  const targetId = (user.id || '').trim();
+  const targetUsername = (user.username || '').replace(/^@/, '').toLowerCase().trim();
+
+  if (!targetId && !targetUsername) return;
+
+  let updated: FollowedUser[];
+
+  if (!isNowFollowing) {
+    // Remove from cache
+    updated = current.filter((u) => {
+      if (targetId && u.id && u.id === targetId) return false;
+      if (targetUsername && u.username && u.username.toLowerCase().replace(/^@/, '') === targetUsername) {
+        return false;
+      }
+      return true;
+    });
+  } else {
+    // Add to cache if not already present
+    const exists = current.some((u) => {
+      if (targetId && u.id && u.id === targetId) return true;
+      if (targetUsername && u.username && u.username.toLowerCase().replace(/^@/, '') === targetUsername) return true;
+      return false;
+    });
+
+    if (exists) {
+      updated = current;
+    } else {
+      const newFollowed: FollowedUser = {
+        id: targetId,
+        name: user.name || (targetUsername ? `@${targetUsername}` : 'Creator'),
+        username: targetUsername || (targetId ? targetId : 'user'),
+        avatar: sanitizeAvatarUrl(user.avatar) || GUEST_AVATAR,
+        followedAt: new Date().toISOString(),
+      };
+      updated = [newFollowed, ...current];
+    }
+  }
+
+  safeSetItem(FOLLOW_STORAGE_KEY, JSON.stringify(updated));
+
+  // Notify listeners in browser context
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(
+      new CustomEvent('metfa_following_updated', {
+        detail: {
+          followedUsers: updated,
+          isFollowing: isNowFollowing,
+          targetUser: user,
+        },
+      })
+    );
+  }
+};
+
+/**
+ * Legacy compatibility wrapper - redirects to syncFollowCache.
+ * Marked as legacy compatibility; UI components now invoke followService directly.
  */
 export const toggleFollowUser = (user: {
   id?: string;
@@ -63,60 +138,9 @@ export const toggleFollowUser = (user: {
   username?: string;
   avatar?: string;
 }): { isFollowing: boolean; followedCount: number } => {
-  if (typeof window === 'undefined') return { isFollowing: false, followedCount: 0 };
-
   const current = getFollowedUsers();
-  const targetId = (user.id || '').trim();
-  const targetUsername = (user.username || '').replace(/^@/, '').toLowerCase().trim();
-
-  if (!targetId && !targetUsername) {
-    return { isFollowing: false, followedCount: current.length };
-  }
-
-  const existingIndex = current.findIndex((u) => {
-    if (targetId && u.id && u.id === targetId) return true;
-    if (targetUsername && u.username && u.username.toLowerCase().replace(/^@/, '') === targetUsername) {
-      return true;
-    }
-    return false;
-  });
-
-  let updated: FollowedUser[];
-  let isNowFollowing = false;
-
-  if (existingIndex >= 0) {
-    // Unfollow
-    updated = current.filter((_, idx) => idx !== existingIndex);
-    isNowFollowing = false;
-  } else {
-    // Follow
-    const newFollowed: FollowedUser = {
-      id: targetId || `usr_${Date.now()}`,
-      name: user.name || (targetUsername ? `@${targetUsername}` : 'Creator'),
-      username: targetUsername || (targetId ? targetId : 'user'),
-      avatar: sanitizeAvatarUrl(user.avatar) || GUEST_AVATAR,
-      followedAt: new Date().toISOString(),
-    };
-    updated = [newFollowed, ...current];
-    isNowFollowing = true;
-  }
-
-  try {
-    localStorage.setItem(FOLLOW_STORAGE_KEY, JSON.stringify(updated));
-  } catch (err) {
-    console.warn('[FollowStore] Error saving followed users:', err);
-  }
-
-  // Notify listeners (feeds, profile stats, etc.)
-  window.dispatchEvent(
-    new CustomEvent('metfa_following_updated', {
-      detail: {
-        followedUsers: updated,
-        isFollowing: isNowFollowing,
-        targetUser: user,
-      },
-    })
-  );
-
-  return { isFollowing: isNowFollowing, followedCount: updated.length };
+  const currentlyFollowing = isUserFollowed(user.id || user.username);
+  const nextFollowing = !currentlyFollowing;
+  syncFollowCache(user, nextFollowing);
+  return { isFollowing: nextFollowing, followedCount: current.length + (nextFollowing ? 1 : -1) };
 };

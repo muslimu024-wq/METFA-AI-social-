@@ -8,7 +8,7 @@ import {
   updateSupabasePost as doUpdateSupabasePost,
   deleteSupabasePost as doDeleteSupabasePost,
 } from '../services/postService';
-import { isSupabaseConfigured, supabase } from '../services/supabaseClient';
+import { isSupabaseConfigured, supabase, getClientAuthToken } from '../services/supabaseClient';
 import { uploadMediaItem } from '../services/storageService';
 import { GUEST_AVATAR, sanitizeAvatarUrl } from '../services/authService';
 
@@ -22,8 +22,8 @@ export const isUuid = (id?: string | null): boolean => {
 
 export const INITIAL_USER_PROFILE: UserProfile = {
   id: '',
-  name: 'Guest',
-  username: 'guest',
+  name: 'Visitor',
+  username: '',
   avatar: GUEST_AVATAR,
   bio: '',
   location: '',
@@ -218,9 +218,14 @@ export async function fetchServerPosts(): Promise<CommunityPost[]> {
 
 export async function saveServerPost(post: CommunityPost): Promise<void> {
   try {
+    const token = await getClientAuthToken();
+    if (!token) return;
     await fetch('/api/posts', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${token}`,
+      },
       body: JSON.stringify(post),
     });
   } catch (err) {
@@ -230,9 +235,14 @@ export async function saveServerPost(post: CommunityPost): Promise<void> {
 
 export async function updateServerPost(postId: string, updates: Partial<CommunityPost>): Promise<void> {
   try {
+    const token = await getClientAuthToken();
+    if (!token) return;
     await fetch(`/api/posts/${postId}`, {
       method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${token}`,
+      },
       body: JSON.stringify(updates),
     });
   } catch (err) {
@@ -242,8 +252,13 @@ export async function updateServerPost(postId: string, updates: Partial<Communit
 
 export async function deleteServerPost(postId: string): Promise<void> {
   try {
+    const token = await getClientAuthToken();
+    if (!token) return;
     await fetch(`/api/posts/${postId}`, {
       method: 'DELETE',
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
     });
   } catch (err) {
     console.warn('[CommunityStore] Error deleting post on /api/posts:', err);
@@ -448,48 +463,49 @@ export const createPostAsync = async (
   }
 
   // 4. Resolve author ID for Supabase
-  if (isSupabaseConfigured() && (!resolvedAuthorId || !isUuid(resolvedAuthorId))) {
-    try {
-      const { data } = await supabase.auth.getSession();
-      if (data?.session?.user?.id && isUuid(data.session.user.id)) {
-        resolvedAuthorId = data.session.user.id;
-      }
-    } catch {}
-  }
-
-  if (isSupabaseConfigured() && resolvedAuthorId && isUuid(resolvedAuthorId)) {
-    try {
-      const { post: dbPost, error } = await createSupabasePost(postToSave, resolvedAuthorId);
-      if (dbPost && !error) {
-        recordOwnedPostId(dbPost.id);
-        const current = getCommunityPosts();
-        const updated = [dbPost, ...current.filter((p) => p.id !== dbPost.id)];
-        saveCommunityPosts(updated);
-        savePostsToIDB(updated);
-        saveServerPost(dbPost);
-
-        addNotification({
-          type: 'like',
-          title: 'Post Published Globally',
-          message: `Your creation "${(dbPost.videoTitle || dbPost.prompt).substring(0, 35)}..." was published!`,
-          actor: {
-            name: dbPost.author.name,
-            username: dbPost.author.username,
-            avatar: dbPost.author.avatar,
-          },
-          linkTab: 'feed',
-          thumbnail: dbPost.imageSrc || dbPost.videoThumbnail,
-        });
-
-        return dbPost;
-      }
-      console.warn('[CommunityStore] Supabase post creation failed, falling back to server disk:', error);
-    } catch (err) {
-      console.warn('[CommunityStore] Exception during createPostAsync, falling back to server disk:', err);
+  if (isSupabaseConfigured()) {
+    if (!resolvedAuthorId || !isUuid(resolvedAuthorId)) {
+      try {
+        const { data } = await supabase.auth.getSession();
+        if (data?.session?.user?.id && isUuid(data.session.user.id)) {
+          resolvedAuthorId = data.session.user.id;
+        }
+      } catch {}
     }
+
+    if (!resolvedAuthorId || !isUuid(resolvedAuthorId)) {
+      throw new Error('Authentication required to create a post');
+    }
+
+    const { post: dbPost, error } = await createSupabasePost(postToSave, resolvedAuthorId);
+    if (error || !dbPost) {
+      throw new Error(error || 'Failed to create post in Supabase');
+    }
+
+    recordOwnedPostId(dbPost.id);
+    const current = getCommunityPosts();
+    const updated = [dbPost, ...current.filter((p) => p.id !== dbPost.id)];
+    saveCommunityPosts(updated);
+    savePostsToIDB(updated);
+    saveServerPost(dbPost);
+
+    addNotification({
+      type: 'like',
+      title: 'Post Published Globally',
+      message: `Your creation "${(dbPost.videoTitle || dbPost.prompt).substring(0, 35)}..." was published!`,
+      actor: {
+        name: dbPost.author.name,
+        username: dbPost.author.username,
+        avatar: dbPost.author.avatar,
+      },
+      linkTab: 'feed',
+      thumbnail: dbPost.imageSrc || dbPost.videoThumbnail,
+    });
+
+    return dbPost;
   }
 
-  // 5. Persistent fallback: save to local store, IndexedDB, and server disk
+  // 5. Offline fallback when database is not configured
   return saveCommunityPost(postToSave);
 };
 
@@ -633,12 +649,18 @@ export const isContentOwner = (
   const userProfileId = getId(userProfile);
   const authUserId = getId(authUser);
 
-  const validIds = [userProfileId, authUserId].filter(Boolean) as string[];
+  // Unauthenticated visitors never own posts
+  if (!userProfileId && !authUserId) return false;
+
+  const validIds = [userProfileId, authUserId]
+    .filter((id): id is string => typeof id === 'string' && id !== 'guest' && id.trim().length > 0);
+
+  if (validIds.length === 0) return false;
 
   const validUsernames = [
     getUsername(userProfile)?.toLowerCase(),
     getUsername(authUser)?.toLowerCase(),
-  ].filter(Boolean) as string[];
+  ].filter((u): u is string => typeof u === 'string' && u !== 'guest' && u.trim().length > 0);
 
   if (authorId && validIds.includes(authorId)) return true;
   if (authorUsername && validUsernames.includes(authorUsername.toLowerCase())) return true;
@@ -647,9 +669,6 @@ export const isContentOwner = (
   if (postIdentityId && validIds.includes(postIdentityId)) return true;
   const postIdentityUsername = getUsername(postingIdentity);
   if (postIdentityUsername && validUsernames.includes(postIdentityUsername.toLowerCase())) return true;
-
-  // If authorId matches userProfileId directly even if empty or guest
-  if (authorId && userProfileId && authorId === userProfileId) return true;
 
   return false;
 };

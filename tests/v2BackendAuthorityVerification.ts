@@ -34,6 +34,7 @@ export interface V2AuthorityTestResult {
 }
 
 export interface V2AuthorityTestSuiteSummary {
+  passed: boolean;
   totalTests: number;
   passedTests: number;
   failedTests: number;
@@ -345,7 +346,9 @@ export async function runV2BackendAuthorityVerification(): Promise<V2AuthorityTe
     }
   });
 
+  const allPassed = results.every((r) => r.passed);
   return {
+    passed: allPassed,
     totalTests: results.length,
     passedTests: results.filter((r) => r.passed).length,
     failedTests: results.filter((r) => !r.passed).length,

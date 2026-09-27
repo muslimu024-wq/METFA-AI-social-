@@ -1,7 +1,8 @@
-import { supabase, isSupabaseConfigured } from './supabaseClient';
+import { supabase, isSupabaseConfigured, getClientAuthToken } from './supabaseClient';
 import { Conversation, Message, MessageType, MessageMediaMetadata, ConversationMember } from '../types/messaging';
 import { UserProfile } from '../types/community';
 import { uploadMediaItem } from './storageService';
+import { getDefaultAvatar, sanitizeAvatarUrl } from './authService';
 
 // In-memory cache for temporary signed URLs (expires in 45 minutes)
 const signedUrlCache = new Map<string, { url: string; expiresAt: number }>();
@@ -85,7 +86,7 @@ function mapSupabaseRowToMessage(row: any, senderProfile?: UserProfile): Message
     id: row.sender.id,
     name: row.sender.display_name || row.sender.name || 'Metfa Creator',
     username: row.sender.username || 'creator',
-    avatar: row.sender.avatar_url || 'https://api.dicebear.com/7.x/avataaars/svg?seed=user',
+    avatar: sanitizeAvatarUrl(row.sender.avatar_url, row.sender.username || row.sender.name),
     bio: row.sender.bio || '',
     isVerified: Boolean(row.sender.is_verified),
     joinDate: row.sender.created_at || 'Recently',
@@ -186,9 +187,15 @@ export async function getOrCreateDirectConversation(
 
   // 2. Server API fallback (for local development before cloud Supabase keys are configured)
   try {
+    const token = await getClientAuthToken();
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
+
     const res = await fetch('/api/conversations/direct', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers,
       body: JSON.stringify({
         currentUserId,
         partnerId,
@@ -276,7 +283,7 @@ export async function fetchUserConversations(currentUserId: string): Promise<{
           id: m.profile.id,
           name: m.profile.display_name || 'Creator',
           username: m.profile.username || 'creator',
-          avatar: m.profile.avatar_url || 'https://api.dicebear.com/7.x/avataaars/svg?seed=' + m.user_id,
+          avatar: sanitizeAvatarUrl(m.profile.avatar_url, m.profile.username || m.profile.display_name),
           bio: m.profile.bio || '',
           isVerified: Boolean(m.profile.is_verified),
           joinDate: 'Joined recently',
@@ -335,7 +342,12 @@ export async function fetchUserConversations(currentUserId: string): Promise<{
 
   // Fallback to Server API
   try {
-    const res = await fetch(`/api/conversations?userId=${encodeURIComponent(currentUserId)}`);
+    const token = await getClientAuthToken();
+    const headers: Record<string, string> = {};
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
+    const res = await fetch(`/api/conversations?userId=${encodeURIComponent(currentUserId)}`, { headers });
     if (res.ok) {
       const data = await res.json();
       return { conversations: Array.isArray(data.conversations) ? data.conversations : [] };
@@ -407,7 +419,12 @@ export async function fetchConversationMessages(
 
   // Fallback to Server API
   try {
-    const res = await fetch(`/api/conversations/${encodeURIComponent(conversationId)}/messages`);
+    const token = await getClientAuthToken();
+    const headers: Record<string, string> = {};
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
+    const res = await fetch(`/api/conversations/${encodeURIComponent(conversationId)}/messages`, { headers });
     if (res.ok) {
       const data = await res.json();
       return { messages: Array.isArray(data.messages) ? data.messages : [] };
@@ -593,9 +610,15 @@ export async function sendMessage(params: {
 
   // Fallback to Server API
   try {
+    const token = await getClientAuthToken();
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
+
     const res = await fetch(`/api/conversations/${encodeURIComponent(conversationId)}/messages`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers,
       body: JSON.stringify({
         conversationId,
         senderId,
@@ -649,9 +672,15 @@ export async function markConversationAsRead(
   }
 
   try {
+    const token = await getClientAuthToken();
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
+
     await fetch(`/api/conversations/${encodeURIComponent(conversationId)}/read`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers,
       body: JSON.stringify({ currentUserId }),
     });
   } catch {}

@@ -64,27 +64,11 @@ export class V2WalletEngine {
 
   constructor(rewardEngine: V2RewardEngine = v2RewardEngine) {
     this.rewardEngine = rewardEngine;
-    this.seedBaselineWallets();
   }
 
   // =========================================================================
   // 1. WALLET ACCOUNT MANAGEMENT
   // =========================================================================
-
-  /**
-   * Initializes baseline demonstration accounts
-   */
-  private seedBaselineWallets(): void {
-    const demoUsers = [
-      { userId: 'usr_creator_01', name: 'Al-Amin Creator' },
-      { userId: 'usr_contributor_02', name: 'Nadia Contributor' },
-      { userId: 'usr_verified_03', name: 'Kareem Video Pro' },
-    ];
-
-    for (const u of demoUsers) {
-      this.getOrCreateWallet(u.userId, 'USD');
-    }
-  }
 
   /**
    * Retrieves or provisions an authoritative wallet account for a user.

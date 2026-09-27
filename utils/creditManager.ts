@@ -39,7 +39,7 @@ export const getDailyCreditsData = (userId?: string): DailyCreditsData => {
       const data = JSON.parse(raw);
       if (data && data.date === today && typeof data.remainingCredits === 'number') {
         return {
-          userId: userId || data.userId || 'user_default',
+          userId: userId || data.userId || undefined,
           date: data.date,
           remainingCredits: Math.max(0, data.remainingCredits),
           totalEarnedToday: data.totalEarnedToday ?? DEFAULT_DAILY_FREE_PROMPTS,
@@ -53,7 +53,7 @@ export const getDailyCreditsData = (userId?: string): DailyCreditsData => {
   }
 
   const initialData: DailyCreditsData = {
-    userId: userId || 'user_default',
+    userId: userId || undefined,
     date: today,
     remainingCredits: DEFAULT_DAILY_FREE_PROMPTS,
     totalEarnedToday: DEFAULT_DAILY_FREE_PROMPTS,
@@ -71,7 +71,7 @@ export const saveDailyCreditsData = (data: DailyCreditsData, userId?: string): v
     const targetUserId = userId || data.userId;
     const key = getStorageKey(targetUserId);
     const safeData: DailyCreditsData = {
-      userId: targetUserId || 'user_default',
+      userId: targetUserId || undefined,
       date: data.date || getTodayDateString(),
       remainingCredits: typeof data.remainingCredits === 'number' ? Math.max(0, data.remainingCredits) : DEFAULT_DAILY_FREE_PROMPTS,
       totalEarnedToday: typeof data.totalEarnedToday === 'number' ? data.totalEarnedToday : DEFAULT_DAILY_FREE_PROMPTS,
@@ -129,7 +129,7 @@ export const addRewardCredits = addCredits;
 export const resetTodayCreditsForTesting = (customCredits = DEFAULT_DAILY_FREE_PROMPTS, userId?: string): DailyCreditsData => {
   const today = getTodayDateString();
   const resetData: DailyCreditsData = {
-    userId: userId || 'user_default',
+    userId: userId || undefined,
     date: today,
     remainingCredits: customCredits,
     totalEarnedToday: customCredits,

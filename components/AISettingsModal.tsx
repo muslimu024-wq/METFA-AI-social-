@@ -60,12 +60,11 @@ export function AISettingsModal({ isOpen, onClose, onSaved }: AISettingsModalPro
     if (isOpen) {
       try {
         const stored = getStoredApiKeys();
-        const studio = getStudioSettings();
         setKeys({
-          geminiApiKey: stored.geminiApiKey || studio.geminiApiKey || '',
-          openaiApiKey: stored.openaiApiKey || studio.openaiApiKey || '',
-          grokApiKey: stored.grokApiKey || studio.grokApiKey || '',
-          claudeApiKey: stored.claudeApiKey || studio.claudeApiKey || '',
+          geminiApiKey: stored.geminiApiKey || '',
+          openaiApiKey: stored.openaiApiKey || '',
+          grokApiKey: stored.grokApiKey || '',
+          claudeApiKey: stored.claudeApiKey || '',
         });
       } catch {
         // ignore fallback
@@ -97,20 +96,11 @@ export function AISettingsModal({ isOpen, onClose, onSaved }: AISettingsModalPro
         claudeApiKey: claudeKey,
       });
 
-      // 2. Sync to Studio settings
+      // 2. Notify studio settings of key update
       const current = getStudioSettings();
-      const updated: StudioSettings = {
-        ...current,
-        geminiApiKey: geminiKey || undefined,
-        openaiApiKey: openaiKey || undefined,
-        grokApiKey: grokKey || undefined,
-        claudeApiKey: claudeKey || undefined,
-      };
-      saveStudioSettings(updated);
-      
       window.dispatchEvent(
         new CustomEvent('metfa_studio_settings_updated', {
-          detail: updated,
+          detail: current,
         })
       );
       

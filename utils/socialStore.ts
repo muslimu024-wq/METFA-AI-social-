@@ -281,7 +281,7 @@ export const getActiveIdentity = (): PostingIdentity => {
               name: GUEST_USER.name,
               username: GUEST_USER.username,
               avatar: GUEST_USER.avatar,
-              badge: 'Guest',
+              badge: 'Visitor',
             };
           }
         }
@@ -299,7 +299,7 @@ export const getActiveIdentity = (): PostingIdentity => {
     name: auth.name,
     username: auth.username,
     avatar: auth.avatar,
-    badge: auth.isVerified ? 'Verified Creator' : (auth.authType === 'guest' ? 'Guest' : 'Creator'),
+    badge: auth.isVerified ? 'Verified Creator' : (auth.authType === 'guest' ? 'Visitor' : 'Creator'),
   };
 };
 

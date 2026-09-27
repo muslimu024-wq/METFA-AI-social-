@@ -23,6 +23,7 @@ import {
   V2ContributionEngineHealth,
   V2ActivityEventRequest,
 } from '../types/v2Contribution';
+import { supabase } from './supabaseClient';
 
 export class V2ContributionEngine {
   // In-memory data store adhering strictly to v2_contribution_policies and v2_contribution_ledger
@@ -428,6 +429,40 @@ export class V2ContributionEngine {
       points_awarded: finalPoints,
       is_duplicate: false,
     };
+  }
+
+  /**
+   * Primary asynchronous ingestion route invoking the server-authoritative
+   * PostgreSQL RPC `v2_ingest_contribution`.
+   * Falls back to deterministic server engine processing if live RPC is not yet deployed.
+   */
+  public async ingestViaRpc(
+    event: V2ActivityEventRequest,
+    idempotencyKey?: string
+  ): Promise<V2ContributionProcessingResult> {
+    try {
+      const { data, error } = await supabase.rpc('v2_ingest_contribution', {
+        p_action: event.action,
+        p_source_ref: event.source_ref,
+        p_client_payload: event.payload || {},
+        p_idempotency_key: idempotencyKey || null,
+        p_user_id: event.user_id || null,
+      });
+
+      if (!error && data) {
+        return {
+          success: Boolean(data.success),
+          status: data.status,
+          points_awarded: Number(data.points_awarded) || 0,
+          is_duplicate: Boolean(data.is_duplicate),
+          rejection_reason: data.rejection_reason || undefined,
+        };
+      }
+    } catch {
+      // Fallback to internal authoritative calculation
+    }
+
+    return this.processActivity(event);
   }
 
   // =========================================================================
