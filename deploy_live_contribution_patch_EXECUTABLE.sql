@@ -943,10 +943,6 @@ BEGIN
     ADD CONSTRAINT v2_contribution_ledger_user_id_fkey
     FOREIGN KEY (user_id) REFERENCES public.profiles(id)
     ON DELETE RESTRICT;
-EXCEPTION
-  WHEN OTHERS THEN
-    -- If profiles table or constraint is not yet available, pass gracefully
-    NULL;
 END $$;
 
 -- Step 2: Replace blanket immutable trigger with field-level dual-layer trigger
@@ -957,6 +953,7 @@ CREATE OR REPLACE FUNCTION public.v2_protect_contribution_ledger_fields()
 RETURNS TRIGGER
 LANGUAGE plpgsql
 SECURITY DEFINER
+SET search_path = public, pg_temp
 AS $$
 BEGIN
   -- 1. Unconditionally block any physical DELETE operation
@@ -1589,34 +1586,28 @@ BEGIN
 
   -- L. Integrate with Risk Signals if Flagged (Step 6)
   IF v_status = 'FLAGGED_RISK' THEN
-    BEGIN
-      INSERT INTO public.v2_risk_signals (
-        user_id,
-        signal_type,
-        severity,
-        risk_score,
-        affected_module,
-        evidence,
-        status
-      ) VALUES (
-        v_effective_user_id,
-        'CONTRIBUTION_ANOMALY',
-        'WARNING',
-        v_risk_score,
-        'contribution',
-        jsonb_build_object(
-          'contribution_id', v_new_id,
-          'action', p_action,
-          'risk_score', v_risk_score,
-          'reason', v_qualification_reason
-        ),
-        'ACTIVE'
-      );
-    EXCEPTION
-      WHEN OTHERS THEN
-        -- Non-blocking if risk_signals table is not ready
-        NULL;
-    END;
+    INSERT INTO public.v2_risk_signals (
+      user_id,
+      signal_type,
+      severity,
+      risk_score,
+      affected_module,
+      evidence,
+      status
+    ) VALUES (
+      v_effective_user_id,
+      'CONTRIBUTION_ANOMALY',
+      'WARNING',
+      v_risk_score,
+      'contribution',
+      jsonb_build_object(
+        'contribution_id', v_new_id,
+        'action', p_action,
+        'risk_score', v_risk_score,
+        'reason', v_qualification_reason
+      ),
+      'ACTIVE'
+    );
   END IF;
 
   RETURN jsonb_build_object(
