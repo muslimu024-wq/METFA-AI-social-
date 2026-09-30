@@ -24,6 +24,7 @@
  * 10. AI boundary: METFA AI cannot authorize or mutate financial ledger records.
  */
 
+import crypto from 'crypto';
 import {
   V2WalletAccount,
   V2WalletLedgerEntry,
@@ -39,6 +40,7 @@ import {
   V2WalletEngineHealth,
 } from '../types/v2Wallet';
 import { V2RewardEngine, v2RewardEngine } from './v2RewardEngine';
+import { getServerSupabaseClient } from './serverAuth';
 
 export interface V2WalletAuditLog {
   id: string;
@@ -66,6 +68,74 @@ export class V2WalletEngine {
     this.rewardEngine = rewardEngine;
   }
 
+  public async hydrateFromDatabase(): Promise<void> {
+    const supabase = getServerSupabaseClient();
+    if (!supabase) return;
+    try {
+      const { data: dbWallets, error: wErr } = await supabase
+        .from('v2_wallet_accounts')
+        .select('*');
+      if (!wErr && Array.isArray(dbWallets)) {
+        for (const w of dbWallets) {
+          const account: V2WalletAccount = {
+            id: w.id,
+            user_id: w.user_id,
+            currency: w.currency || 'USD',
+            available_balance_cents: Number(w.available_balance_cents || 0),
+            pending_balance_cents: 0,
+            approved_balance_cents: Number(w.available_balance_cents || 0),
+            locked_balance_cents: Number(w.held_balance_cents || 0),
+            lifetime_earnings_cents: Number(w.available_balance_cents || 0),
+            lifetime_payouts_cents: 0,
+            is_locked_for_audit: false,
+            created_at: w.created_at,
+            updated_at: w.updated_at,
+          };
+          this.wallets.set(w.id, account);
+          this.userToWalletId.set(w.user_id, w.id);
+          if (!this.walletLedgerIndex.has(w.id)) {
+            this.walletLedgerIndex.set(w.id, []);
+          }
+        }
+      }
+
+      const { data: dbLedger, error: lErr } = await supabase
+        .from('v2_wallet_ledger')
+        .select('*');
+      if (!lErr && Array.isArray(dbLedger)) {
+        for (const l of dbLedger) {
+          const entry: V2WalletLedgerEntry = {
+            id: l.id,
+            wallet_id: l.wallet_id,
+            user_id: l.user_id || (this.wallets.get(l.wallet_id)?.user_id || 'system'),
+            entry_type: (l.entry_type as V2WalletLedgerEntryType) || 'REWARD_CREDIT',
+            direction: 'CREDIT',
+            amount_cents: Number(l.amount_cents || 0),
+            balance_after_cents: Number(l.balance_after_cents || 0),
+            currency: l.currency || 'USD',
+            source_type: 'REWARD_ALLOCATION',
+            source_id: l.reference_id || l.id,
+            idempotency_key: l.reference_id || l.id,
+            status: 'POSTED',
+            reference_id: l.reference_id || undefined,
+            description: l.description || '',
+            metadata: l.metadata || {},
+            created_at: l.created_at,
+          };
+          this.ledger.set(l.id, entry);
+          this.idempotencyIndex.set(entry.idempotency_key, l.id);
+          const list = this.walletLedgerIndex.get(l.wallet_id) || [];
+          if (!list.includes(l.id)) {
+            list.push(l.id);
+            this.walletLedgerIndex.set(l.wallet_id, list);
+          }
+        }
+      }
+    } catch (e: any) {
+      console.warn('[v2WalletEngine] DB hydration warning:', e?.message || e);
+    }
+  }
+
   // =========================================================================
   // 1. WALLET ACCOUNT MANAGEMENT
   // =========================================================================
@@ -79,7 +149,8 @@ export class V2WalletEngine {
       return { ...this.wallets.get(existingWalletId)! };
     }
 
-    const walletId = `wlt_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
+    const isUserUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(userId);
+    const walletId = isUserUuid ? crypto.randomUUID() : `wlt_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
     const newAccount: V2WalletAccount = {
       id: walletId,
       user_id: userId,
@@ -98,6 +169,25 @@ export class V2WalletEngine {
     this.wallets.set(walletId, newAccount);
     this.userToWalletId.set(userId, walletId);
     this.walletLedgerIndex.set(walletId, []);
+
+    if (isUserUuid) {
+      const supabase = getServerSupabaseClient();
+      if (supabase) {
+        supabase
+          .from('v2_wallet_accounts')
+          .insert({
+            id: walletId,
+            user_id: userId,
+            currency: currency.toUpperCase(),
+            available_balance_cents: 0,
+            held_balance_cents: 0,
+            version: 1,
+          })
+          .then(({ error }) => {
+            if (error) console.warn('[v2WalletEngine] Supabase wallet insert error:', error.message);
+          });
+      }
+    }
 
     this.recordAudit({
       action: 'WALLET_ACCOUNT_CREATED',
@@ -1115,6 +1205,34 @@ export class V2WalletEngine {
     const list = this.walletLedgerIndex.get(entry.wallet_id) || [];
     list.push(entry.id);
     this.walletLedgerIndex.set(entry.wallet_id, list);
+
+    // Persist to live Supabase v2_wallet_ledger if wallet_id is a UUID
+    const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(entry.wallet_id);
+    if (isUuid) {
+      const supabase = getServerSupabaseClient();
+      if (supabase) {
+        const dbEntryId = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(entry.id)
+          ? entry.id
+          : crypto.randomUUID();
+
+        supabase
+          .from('v2_wallet_ledger')
+          .insert({
+            id: dbEntryId,
+            wallet_id: entry.wallet_id,
+            entry_type: entry.entry_type,
+            amount_cents: entry.amount_cents,
+            balance_after_cents: entry.balance_after_cents,
+            currency: entry.currency || 'USD',
+            reference_id: entry.reference_id || entry.idempotency_key,
+            description: entry.description || `Wallet transaction ${entry.entry_type}`,
+            metadata: entry.metadata || {},
+          })
+          .then(({ error }) => {
+            if (error) console.warn('[v2WalletEngine] Supabase ledger insert error:', error.message);
+          });
+      }
+    }
   }
 
   /**
@@ -1194,6 +1312,25 @@ export class V2WalletEngine {
     wallet.lifetime_earnings_cents = earnings;
     wallet.lifetime_payouts_cents = payouts;
     wallet.updated_at = new Date().toISOString();
+
+    // Persist balance update to Supabase v2_wallet_accounts if wallet.id is a UUID
+    const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(wallet.id);
+    if (isUuid) {
+      const supabase = getServerSupabaseClient();
+      if (supabase) {
+        supabase
+          .from('v2_wallet_accounts')
+          .update({
+            available_balance_cents: available,
+            held_balance_cents: locked,
+            updated_at: wallet.updated_at,
+          })
+          .eq('id', wallet.id)
+          .then(({ error }) => {
+            if (error) console.warn('[v2WalletEngine] Supabase wallet update error:', error.message);
+          });
+      }
+    }
   }
 
   // =========================================================================

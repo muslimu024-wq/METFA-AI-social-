@@ -13,6 +13,7 @@
  * 7. AI Boundary: METFA AI can review patterns and advise, but CANNOT award, modify, or fabricate CP.
  */
 
+import crypto from 'crypto';
 import {
   V2ContributionAction,
   V2ContributionEntryType,
@@ -24,6 +25,7 @@ import {
   V2ActivityEventRequest,
 } from '../types/v2Contribution';
 import { supabase } from './supabaseClient';
+import { getServerSupabaseClient } from './serverAuth';
 
 export class V2ContributionEngine {
   // In-memory data store adhering strictly to v2_contribution_policies and v2_contribution_ledger
@@ -35,6 +37,42 @@ export class V2ContributionEngine {
 
   constructor() {
     this.seedDefaultPolicies();
+  }
+
+  public async hydrateFromDatabase(): Promise<void> {
+    const serverSupabase = getServerSupabaseClient();
+    if (!serverSupabase) return;
+    try {
+      const { data: dbLedger, error } = await serverSupabase
+        .from('v2_contribution_ledger')
+        .select('*');
+      if (!error && Array.isArray(dbLedger)) {
+        for (const l of dbLedger) {
+          const record: V2ContributionLedgerRecord = {
+            id: l.id,
+            user_id: l.user_id,
+            action: l.action as V2ContributionAction,
+            policy_id: l.policy_id,
+            policy_version: 1,
+            entry_type: (l.entry_type as V2ContributionEntryType) || 'AWARD',
+            base_points: Number(l.base_points || 0),
+            quality_multiplier: Number(l.quality_multiplier || 1),
+            final_points: Number(l.final_points || 0),
+            source_ref: l.source_ref || '',
+            risk_score: Number(l.risk_score || 0),
+            status: l.status,
+            metadata: l.metadata || {},
+            created_at: l.created_at,
+          };
+          this.ledger.set(l.id, record);
+          if (l.source_ref) {
+            this.idempotencyIndex.set(`${l.user_id}:${l.action}:${l.source_ref}`, l.id);
+          }
+        }
+      }
+    } catch (e: any) {
+      console.warn('[v2ContributionEngine] DB hydration warning:', e?.message || e);
+    }
   }
 
   // =========================================================================
@@ -421,6 +459,44 @@ export class V2ContributionEngine {
     this.ledger.set(entryId, ledgerEntry);
     this.idempotencyIndex.set(idempotencyKey, entryId);
     this.userLastActionTimestamp.set(cooldownKey, now);
+
+    const isUserUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(user_id);
+    const serverSupabase = getServerSupabaseClient();
+    if (isUserUuid && serverSupabase) {
+      const dbEntryId = crypto.randomUUID();
+      const actionPolicyMap: Record<string, string> = {
+        ORIGINAL_CONTENT: '00000000-0000-0000-0000-000000000002',
+        QUALIFIED_VIEW: '00000000-0000-0000-0000-000000000003',
+        QUALIFIED_WATCH: '00000000-0000-0000-0000-000000000004',
+        MEANINGFUL_ENGAGEMENT: '00000000-0000-0000-0000-000000000005',
+      };
+      const dbPolicyId = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(policy.id)
+        ? policy.id
+        : (actionPolicyMap[action] || '00000000-0000-0000-0000-000000000001');
+
+      serverSupabase
+        .from('v2_contribution_ledger')
+        .insert({
+          id: dbEntryId,
+          user_id,
+          action,
+          policy_id: dbPolicyId,
+          base_points: policy.base_points,
+          quality_multiplier: qualification.qualityMultiplier,
+          final_points: finalPoints,
+          source_ref: source_ref || `ref_${Date.now()}`,
+          status,
+          risk_score: riskScore,
+          metadata: {
+            payload_summary: payload || {},
+            qualification_reason: qualification.reason || 'Passed quality verification',
+          },
+          entry_type: 'AWARD',
+        })
+        .then(({ error }) => {
+          if (error) console.warn('[v2ContributionEngine] Supabase contribution insert error:', error.message);
+        });
+    }
 
     return {
       success: true,

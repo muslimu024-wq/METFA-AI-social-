@@ -905,7 +905,7 @@ export function getSellmeShopUrl(params?: {
   searchQuery?: string;
   source?: string;
 }): string {
-  const baseUrl = 'https://sellme-copy-975fc0cd.base44.app';
+  const baseUrl = 'https://shop.metfaai.com';
   if (!params) {
     return baseUrl;
   }

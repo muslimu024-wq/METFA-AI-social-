@@ -2588,25 +2588,16 @@ ${prompt}
       });
 
       const captionText =
-        result.response.text?.trim() ||
-        "Transformed scene with Metfa Social Studio. ✨ #MetfaSocial #AIArtwork #DigitalArt #GenerativeArt";
+        result.response.text?.trim() || "";
+      if (!captionText) {
+        return res.status(502).json({ error: "Empty response from Gemini AI model", code: "EMPTY_AI_RESPONSE" });
+      }
       return res.json({ caption: captionText, modelUsed: result.modelUsed });
     } catch (err: any) {
-      console.warn("Gemini social-caption fallback activated:", err?.message || err);
-      const raw = (req.body?.imagePrompt || "").trim();
-      const isBengali = /[\u0980-\u09FF]/.test(raw);
-
-      let caption = "";
-      if (isBengali) {
-        caption = `মেটফা সোশ্যাল স্টুডিওতে তৈরি করা নতুন ভিজ্যুয়াল ক্রিয়েশন: "${raw || 'ডিজিটাল আর্টওয়ার্ক'}" ✨\n\n#MetfaSocial #DigitalArt #AIArtwork #BanglaAI #CreativeDesign`;
-      } else {
-        caption = `Created an aesthetic visual piece with Metfa Social Studio: "${raw || 'Cinematic Artwork'}" ✨\n\n#MetfaSocial #AIArtwork #DigitalArt #CinematicRender #GenerativeArt`;
-      }
-
-      return res.json({
-        caption,
-        fallback: true,
-        modelUsed: "Metfa Social Engine (Local)",
+      console.warn("[METFA AI] Gemini social-caption error:", err?.message || err);
+      return res.status(502).json({
+        error: cleanErrorMessage(err?.message || "Failed to generate AI caption."),
+        code: "AI_GENERATION_FAILED",
       });
     }
   });
@@ -2640,16 +2631,9 @@ ${prompt}
 
       const ai = getAiClient(geminiApiKey || req.body.settings?.geminiApiKey, req);
       if (!ai) {
-        const isBengali = /[\u0980-\u09FF]/.test(text);
-        return res.json({
-          caption: isBengali
-            ? `${text || "নতুন সৃষ্টি"} — মেটফা সোশ্যাল ইকোসিস্টেমে আজকের নতুন ভাবনা। সবার মতামত প্রত্যাশা করছি! ✨`
-            : `${text || "Exploring new creative frontiers on Metfa"} ✨ Finding inspiration in every perspective.`,
-          hashtags: isBengali
-            ? ["#MetfaAI", "#BanglaCreators", "#DigitalArt", "#CreativeVibes"]
-            : ["#MetfaAI", "#SocialFirst", "#CreativeCommunity", "#VisualArt"],
-          suggestedMood: tone || "Creative",
-          modelUsed: "Metfa Background Engine (Local)",
+        return res.status(503).json({
+          error: "METFA AI requires a valid Gemini API key. Please configure GEMINI_API_KEY in server environment or provide x-gemini-api-key header.",
+          code: "AI_KEY_REQUIRED",
         });
       }
 
@@ -2708,19 +2692,10 @@ Output Format: Respond strictly with JSON format:
         modelUsed: result.modelUsed,
       });
     } catch (err: any) {
-      console.warn("[Background AI] caption-hashtags fallback:", err?.message || err);
-      const text = (req.body?.text || "").trim();
-      const isBengali = /[\u0980-\u09FF]/.test(text);
-
-      return res.json({
-        caption: isBengali
-          ? `${text || "নতুন সৃষ্টি"} — মেটফা সোশ্যাল ইকোসিস্টেমে আজকের নতুন ভাবনা। সবার মতামত প্রত্যাশা করছি! ✨`
-          : `${text || "Exploring new creative frontiers on Metfa"} ✨ Finding inspiration in every perspective.`,
-        hashtags: isBengali
-          ? ["#MetfaAI", "#BanglaCreators", "#DigitalArt", "#CreativeVibes"]
-          : ["#MetfaAI", "#SocialFirst", "#CreativeCommunity", "#VisualArt"],
-        suggestedMood: req.body?.tone || "Creative",
-        modelUsed: "Metfa Background Engine (Local)",
+      console.warn("[Background AI] caption-hashtags error:", err?.message || err);
+      return res.status(502).json({
+        error: cleanErrorMessage(err?.message || "AI caption generation failed."),
+        code: "AI_GENERATION_FAILED",
       });
     }
   });
@@ -2735,10 +2710,9 @@ Output Format: Respond strictly with JSON format:
 
       const ai = getAiClient(geminiApiKey || req.body.settings?.geminiApiKey, req);
       if (!ai) {
-        return res.json({
-          refinedText: text,
-          changesSummary: "Processed with Metfa Refine Engine",
-          modelUsed: "Metfa Refine Engine (Local)",
+        return res.status(503).json({
+          error: "METFA AI requires a valid Gemini API key. Please configure GEMINI_API_KEY in server environment.",
+          code: "AI_KEY_REQUIRED",
         });
       }
 
@@ -2763,12 +2737,10 @@ Instructions: Preserve the user's language (Bengali, English, etc.). Output ONLY
         modelUsed: result.modelUsed,
       });
     } catch (err: any) {
-      console.warn("[Background AI] refine-text fallback:", err?.message || err);
-      const text = (req.body?.text || "").trim();
-      return res.json({
-        refinedText: text,
-        changesSummary: "Processed",
-        modelUsed: "Metfa Refine Engine (Local)",
+      console.warn("[Background AI] refine-text error:", err?.message || err);
+      return res.status(502).json({
+        error: cleanErrorMessage(err?.message || "AI text refinement failed."),
+        code: "AI_REFINEMENT_FAILED",
       });
     }
   });
@@ -2781,12 +2753,9 @@ Instructions: Preserve the user's language (Bengali, English, etc.). Output ONLY
       const { commentText, postCaption, geminiApiKey } = req.body;
       const ai = getAiClient(geminiApiKey || req.body.settings?.geminiApiKey, req);
       if (!ai) {
-        const isBengali = /[\u0980-\u09FF]/.test(commentText || "");
-        return res.json({
-          replies: isBengali
-            ? ["অনেক ধন্যবাদ আপনার মতামতের জন্য! ❤️", "দারুণ লাগলো মন্তব্যটি! ✨", "আরও নতুন পোস্ট আসছে শিগগিরই 🚀"]
-            : ["Thank you so much! ❤️", "Really appreciate your kind words! ✨", "More coming soon! 🚀"],
-          modelUsed: "Metfa Quick Reply Engine (Local)",
+        return res.status(503).json({
+          error: "METFA AI requires a valid Gemini API key. Please configure GEMINI_API_KEY in server environment.",
+          code: "AI_KEY_REQUIRED",
         });
       }
 
@@ -2814,13 +2783,10 @@ Output strictly in JSON: {"replies": ["reply 1", "reply 2", "reply 3"]}`;
         modelUsed: result.modelUsed,
       });
     } catch (err: any) {
-      console.warn("[Background AI] quick-reply fallback:", err?.message || err);
-      const isBengali = /[\u0980-\u09FF]/.test(req.body?.commentText || "");
-      return res.json({
-        replies: isBengali
-          ? ["অনেক ধন্যবাদ আপনার মতামতের জন্য! ❤️", "দারুণ লাগলো মন্তব্যটি! ✨", "আরও নতুন পোস্ট আসছে শিগগিরই 🚀"]
-          : ["Thank you so much! ❤️", "Really appreciate your kind words! ✨", "More coming soon! 🚀"],
-        modelUsed: "Metfa Quick Reply Engine (Local)",
+      console.warn("[Background AI] quick-reply error:", err?.message || err);
+      return res.status(502).json({
+        error: cleanErrorMessage(err?.message || "AI quick reply failed."),
+        code: "AI_QUICK_REPLY_FAILED",
       });
     }
   });
@@ -2833,14 +2799,9 @@ Output strictly in JSON: {"replies": ["reply 1", "reply 2", "reply 3"]}`;
       const { style, prompt, seed, geminiApiKey } = req.body;
       const ai = getAiClient(geminiApiKey || req.body.settings?.geminiApiKey, req);
       if (!ai) {
-        const colors = ["%232563eb", "%237c3aed", "%23059669", "%23d97706", "%23dc2626", "%230891b2", "%234f46e5", "%23db2777"];
-        const hash = String(seed || "avatar").split("").reduce((acc, c) => (acc << 5) - acc + c.charCodeAt(0), 0);
-        const chosenColor = colors[Math.abs(hash) % colors.length];
-        const fallbackUrl = `data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><circle cx="50" cy="50" r="50" fill="${chosenColor}"/><circle cx="50" cy="40" r="18" fill="%23ffffff"/><path d="M22,86 C22,66 35,66 50,66 C65,66 78,66 78,86 Z" fill="%23ffffff"/></svg>`;
-        return res.json({
-          avatarUrl: fallbackUrl,
-          promptUsed: prompt || "Avatar Profile",
-          modelUsed: "Metfa Avatar Engine (Vector Silhouette)",
+        return res.status(503).json({
+          error: "METFA AI requires a valid Gemini API key. Please configure GEMINI_API_KEY in server environment.",
+          code: "AI_KEY_REQUIRED",
         });
       }
 
@@ -3230,16 +3191,24 @@ Structure your response into 3 concise sections:
   });
 
   // 3. Process Activity Event (Server-Authoritative Qualification & CP Award)
-  app.post("/api/v2/contribution/process", (req, res) => {
+  app.post("/api/v2/contribution/process", requireAuth, (req, res) => {
     try {
+      const authUserId = (req as any).v2Auth?.userId;
+      const callerRoles: string[] = (req as any).v2Auth?.roles || [];
+      const isPrivileged = callerRoles.includes("SUPER_ADMIN") || callerRoles.includes("ADMIN") || callerRoles.includes("OPERATOR");
+
       const { user_id, action, source_ref, payload, user_tier } = req.body || {};
-      if (!user_id || !action || !source_ref) {
+      
+      // Prevent unprivileged clients from arbitrarily substituting another user's identity
+      const targetUserId = (user_id && isPrivileged) ? user_id : authUserId;
+
+      if (!targetUserId || !action || !source_ref) {
         return res.status(400).json({
-          error: "Missing required activity parameters: user_id, action, and source_ref.",
+          error: "Missing required activity parameters: target user, action, and source_ref.",
         });
       }
       const result = v2ContributionEngine.processActivity({
-        user_id,
+        user_id: targetUserId,
         action,
         source_ref,
         payload,

@@ -173,11 +173,10 @@ export async function getVerifiedUserRoles(
   }
 
   if (user) {
+    // Only accept server-signed app_metadata (immutable by clients), NEVER client-editable user_metadata
     const metaRoles = [
       (user as any).app_metadata?.role,
       ...(Array.isArray((user as any).app_metadata?.roles) ? (user as any).app_metadata.roles : []),
-      (user as any).user_metadata?.role,
-      ...(Array.isArray((user as any).user_metadata?.roles) ? (user as any).user_metadata.roles : []),
     ];
     for (const r of metaRoles) {
       if (typeof r === 'string' && validRoleSet.has(r)) {

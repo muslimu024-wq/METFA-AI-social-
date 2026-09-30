@@ -18,6 +18,7 @@
  * 12. AI boundary: METFA AI cannot authorize, mutate, or fabricate reward settlements.
  */
 
+import crypto from 'crypto';
 import {
   V2RewardSettlementPeriodRecord,
   V2RewardAllocationRecord,
@@ -30,6 +31,7 @@ import {
 } from '../types/v2Reward';
 import { v2RevenueEngine } from './v2RevenueEngine';
 import { v2ContributionEngine } from './v2ContributionEngine';
+import { getServerSupabaseClient } from './serverAuth';
 
 export interface V2RewardAuditLog {
   id: string;
@@ -51,6 +53,90 @@ export class V2RewardEngine {
 
   constructor() {
     this.seedDefaultPolicies();
+  }
+
+  public async hydrateFromDatabase(): Promise<void> {
+    const supabase = getServerSupabaseClient();
+    if (!supabase) return;
+    try {
+      const { data: dbSettlements, error: sErr } = await supabase
+        .from('v2_reward_settlements')
+        .select('*');
+      if (!sErr && Array.isArray(dbSettlements)) {
+        for (const s of dbSettlements) {
+          const record: V2RewardSettlementPeriodRecord = {
+            id: s.id,
+            period_name: `Settlement ${s.id.slice(0, 8)}`,
+            revenue_period_id: s.revenue_period_id,
+            contribution_period_id: s.revenue_period_id,
+            applied_policy_id: 'pol_reward_pool_v1',
+            applied_policy_version: 1,
+            reward_pool_percentage_basis_points: 2500,
+            verified_eligible_net_revenue_cents: Number(s.reward_pool_cents ? s.reward_pool_cents * 4 : 0),
+            total_reward_pool_cents: Number(s.reward_pool_cents || 0),
+            total_allocated_reward_cents: Number(s.reward_pool_cents || 0),
+            undistributed_remainder_cents: 0,
+            total_network_eligible_cp: Number(s.total_points || 0),
+            total_eligible_participants: 0,
+            currency: s.currency || 'USD',
+            status: (s.status as V2RewardPeriodStatus) || 'FINALIZED',
+            finalized_at: s.finalized_at || s.created_at,
+            finalized_by: 'system',
+            idempotency_key: s.settlement_key || s.id,
+            created_at: s.created_at,
+            updated_at: s.created_at,
+          };
+          this.settlementPeriods.set(s.id, record);
+          if (s.settlement_key) {
+            this.idempotencyIndex.set(s.settlement_key, s.id);
+          }
+        }
+      }
+
+      const { data: dbAllocations, error: aErr } = await supabase
+        .from('v2_reward_allocations')
+        .select('*');
+      if (!aErr && Array.isArray(dbAllocations)) {
+        for (const a of dbAllocations) {
+          const record: V2RewardAllocationRecord = {
+            id: a.id,
+            period_id: a.settlement_id,
+            revenue_period_id: a.settlement_id,
+            user_id: a.user_id,
+            qualified_points: Number(a.points || 0),
+            total_network_qualified_points: Number(a.points || 0),
+            user_share_ratio: 1.0,
+            reward_pool_cents: Number(a.allocation_cents || 0),
+            allocated_cents: Number(a.allocation_cents || 0),
+            estimated_reward_cents: 0,
+            pending_reward_cents: 0,
+            approved_reward_cents: Number(a.allocation_cents || 0),
+            withdrawable_balance_cents: Number(a.allocation_cents || 0),
+            deductions_cents: 0,
+            currency: a.currency || 'USD',
+            status: 'WITHDRAWABLE',
+            risk_review_status: 'CLEAN',
+            policy_version: 1,
+            calculation_metadata: a.metadata || {
+              formula: 'GLOBAL_REWARD_POOL * (USER_ELIGIBLE_CP / TOTAL_NETWORK_ELIGIBLE_CP)',
+              share_bps: 10000,
+              rounding_cents: Number(a.allocation_cents || 0),
+              settlement_timestamp: a.created_at,
+            },
+            created_at: a.created_at,
+            updated_at: a.created_at,
+          };
+          this.allocations.set(a.id, record);
+          const list = this.allocationsByPeriod.get(a.settlement_id) || [];
+          if (!list.includes(a.id)) {
+            list.push(a.id);
+            this.allocationsByPeriod.set(a.settlement_id, list);
+          }
+        }
+      }
+    } catch (e: any) {
+      console.warn('[v2RewardEngine] DB hydration warning:', e?.message || e);
+    }
   }
 
   // =========================================================================
@@ -401,6 +487,59 @@ export class V2RewardEngine {
       allocIds.push(alloc.id);
     }
     this.allocationsByPeriod.set(settlementPeriodId, allocIds);
+
+    // Persist to live Supabase v2_reward_settlements and v2_reward_allocations
+    const supabase = getServerSupabaseClient();
+    const isRevenueUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(revenuePeriod.id);
+    if (supabase && isRevenueUuid) {
+      const dbSettlementId = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(settlementPeriodId)
+        ? settlementPeriodId
+        : crypto.randomUUID();
+
+      supabase
+        .from('v2_reward_settlements')
+        .insert({
+          id: dbSettlementId,
+          revenue_period_id: revenuePeriod.id,
+          settlement_key: idempotencyKey,
+          reward_pool_cents: totalRewardPoolCents,
+          total_points: totalNetworkEligibleCp,
+          currency: revenuePeriod.currency || 'USD',
+          status: 'FINALIZED',
+          metadata: {
+            undistributed_remainder_cents: undistributedRemainderCents,
+            participants_count: eligibleUserIds.length,
+            policy_version: targetPolicy.version,
+          },
+          finalized_at: new Date().toISOString(),
+        })
+        .then(({ error }) => {
+          if (error) console.warn('[v2RewardEngine] Supabase settlement insert error:', error.message);
+        });
+
+      for (const alloc of createdAllocations) {
+        if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(alloc.user_id)) {
+          const dbAllocId = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(alloc.id)
+            ? alloc.id
+            : crypto.randomUUID();
+
+          supabase
+            .from('v2_reward_allocations')
+            .insert({
+              id: dbAllocId,
+              settlement_id: dbSettlementId,
+              user_id: alloc.user_id,
+              points: alloc.qualified_points,
+              allocation_cents: alloc.allocated_cents,
+              currency: alloc.currency || 'USD',
+              metadata: alloc.calculation_metadata || {},
+            })
+            .then(({ error }) => {
+              if (error) console.warn('[v2RewardEngine] Supabase allocation insert error:', error.message);
+            });
+        }
+      }
+    }
 
     this.recordAudit({
       action: 'REWARD_SETTLEMENT_FINALIZED',

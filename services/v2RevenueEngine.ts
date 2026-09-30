@@ -12,6 +12,7 @@
  * 7. Comprehensive audit logging for all mutations.
  */
 
+import crypto from 'crypto';
 import {
   V2RevenuePeriodRecord,
   V2RevenueLedgerRecord,
@@ -23,6 +24,7 @@ import {
   V2RevenueHealthSummary,
   V2RevenueSourceReport,
 } from '../types/v2Revenue';
+import { getServerSupabaseClient } from './serverAuth';
 
 interface AuditLogEntry {
   id: string;
@@ -81,6 +83,68 @@ export class V2RevenueEngine {
     });
   }
 
+  public async hydrateFromDatabase(): Promise<void> {
+    const supabase = getServerSupabaseClient();
+    if (!supabase) return;
+    try {
+      const { data: dbPeriods, error: pErr } = await supabase
+        .from('v2_revenue_periods')
+        .select('*');
+      if (!pErr && Array.isArray(dbPeriods)) {
+        for (const p of dbPeriods) {
+          this.periods.set(p.id, {
+            id: p.id,
+            period_name: p.period_name,
+            period_start: p.period_start,
+            period_end: p.period_end,
+            currency: p.currency || 'USD',
+            status: (p.status as V2RevenuePeriodStatus) || 'OPEN',
+            gross_revenue_cents: Number(p.gross_revenue_cents || 0),
+            refunds_cents: 0,
+            payment_fees_cents: 0,
+            taxes_cents: 0,
+            eligible_costs_cents: 0,
+            eligible_net_revenue_cents: Number(p.eligible_revenue_cents || 0),
+            applied_policy_version: p.policy_version || 1,
+            reward_pool_percentage_basis_points: 2500,
+            reward_pool_cents: Number(p.reward_pool_cents || 0),
+            created_at: p.created_at,
+            updated_at: p.created_at,
+            finalized_at: p.finalized_at || undefined,
+          });
+        }
+      }
+
+      const { data: dbLedger, error: lErr } = await supabase
+        .from('v2_revenue_ledger')
+        .select('*');
+      if (!lErr && Array.isArray(dbLedger)) {
+        for (const l of dbLedger) {
+          const entry: V2RevenueLedgerRecord = {
+            id: l.id,
+            period_id: l.revenue_period_id,
+            source: (l.metadata?.source as V2RevenueSource) || 'OTHER',
+            entry_type: (l.metadata?.original_entry_type as V2RevenueEntryType) || (l.entry_type === 'REFUND' ? 'REFUND' : 'GROSS_INCOME'),
+            amount_cents: Number(l.amount_cents || 0),
+            currency: l.currency || 'USD',
+            reference_id: l.source_ref || l.id,
+            description: l.description || '',
+            metadata: l.metadata || {},
+            is_verified: true,
+            created_by: 'system',
+            created_at: l.created_at,
+          };
+          this.ledger.set(l.id, entry);
+          if (l.source_ref) {
+            this.referenceIndex.add(`${entry.source}:${l.source_ref}`);
+          }
+        }
+      }
+    } catch (e: any) {
+      console.warn('[v2RevenueEngine] DB hydration warning:', e?.message || e);
+    }
+  }
+
   // =========================================================================
   // 1. POLICY REGISTRATION & VERSIONING
   // =========================================================================
@@ -111,7 +175,7 @@ export class V2RevenueEngine {
     actor_role: string;
   }): V2RevenuePeriodRecord {
     const currency = params.currency?.toUpperCase() || 'USD';
-    const periodId = `period_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
+    const periodId = crypto.randomUUID();
 
     const activePolicy = this.getActivePolicy('reward_pool_policy');
     const bps = activePolicy?.configuration?.reward_pool_percentage_basis_points ?? 2500;
@@ -137,6 +201,30 @@ export class V2RevenueEngine {
     };
 
     this.periods.set(periodId, period);
+
+    const supabase = getServerSupabaseClient();
+    if (supabase) {
+      supabase
+        .from('v2_revenue_periods')
+        .insert({
+          id: periodId,
+          period_name: params.period_name,
+          period_start: params.period_start,
+          period_end: params.period_end,
+          gross_revenue_cents: 0,
+          eligible_revenue_cents: 0,
+          reward_pool_cents: 0,
+          currency,
+          status: 'OPEN',
+          metadata: {
+            applied_policy_version: activePolicy?.version ?? 1,
+            reward_pool_percentage_basis_points: bps,
+          },
+        })
+        .then(({ error }) => {
+          if (error) console.warn('[v2RevenueEngine] Supabase period insert error:', error.message);
+        });
+    }
 
     this.recordAudit({
       category: 'REVENUE_PERIOD_CREATED',
@@ -211,7 +299,7 @@ export class V2RevenueEngine {
         return { success: true, entry: existing, is_duplicate: true };
       }
 
-      const entryId = `rev_entry_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
+      const entryId = crypto.randomUUID();
       const isVerified = Boolean(params.auto_verify);
 
       const entry: V2RevenueLedgerRecord = {
@@ -236,6 +324,52 @@ export class V2RevenueEngine {
 
       // Re-calculate period accounting figures deterministically
       this.recomputePeriodTotals(period);
+
+      const supabase = getServerSupabaseClient();
+      if (supabase) {
+        let liveEntryType = 'REVENUE';
+        if (params.entry_type === 'REFUND') liveEntryType = 'REFUND';
+        else if (
+          params.entry_type === 'SETTLEMENT_ALLOCATION' ||
+          params.entry_type === 'PROCESSING_FEE' ||
+          params.entry_type === 'TAX_WITHHOLDING' ||
+          params.entry_type === 'COST_DEDUCTION'
+        ) {
+          liveEntryType = 'ADJUSTMENT';
+        }
+
+        supabase
+          .from('v2_revenue_ledger')
+          .insert({
+            id: entryId,
+            revenue_period_id: params.period_id,
+            entry_type: liveEntryType,
+            amount_cents: params.amount_cents,
+            currency: params.currency.toUpperCase(),
+            source_ref: params.reference_id,
+            description: params.description || `Revenue from ${params.source}`,
+            metadata: {
+              source: params.source,
+              original_entry_type: params.entry_type,
+              ...(params.metadata || {}),
+            },
+          })
+          .then(({ error }) => {
+            if (error) console.warn('[v2RevenueEngine] Supabase ledger insert error:', error.message);
+          });
+
+        supabase
+          .from('v2_revenue_periods')
+          .update({
+            gross_revenue_cents: period.gross_revenue_cents,
+            eligible_revenue_cents: period.eligible_net_revenue_cents,
+            reward_pool_cents: period.reward_pool_cents,
+          })
+          .eq('id', period.id)
+          .then(({ error }) => {
+            if (error) console.warn('[v2RevenueEngine] Supabase period update error:', error.message);
+          });
+      }
 
       this.healthStats.successful_ingestions += 1;
       this.healthStats.consecutive_failures = 0;
@@ -414,6 +548,19 @@ export class V2RevenueEngine {
     period.locked_at = new Date().toISOString();
     period.updated_at = new Date().toISOString();
 
+    const supabase = getServerSupabaseClient();
+    if (supabase) {
+      supabase
+        .from('v2_revenue_periods')
+        .update({
+          status: 'LOCKED',
+        })
+        .eq('id', period.id)
+        .then(({ error }) => {
+          if (error) console.warn('[v2RevenueEngine] Supabase lock error:', error.message);
+        });
+    }
+
     this.recordAudit({
       category: 'REVENUE_PERIOD_LOCKED',
       actor_id: params.actor_id,
@@ -464,6 +611,23 @@ export class V2RevenueEngine {
     period.updated_at = new Date().toISOString();
 
     this.recomputePeriodTotals(period);
+
+    const supabase = getServerSupabaseClient();
+    if (supabase) {
+      supabase
+        .from('v2_revenue_periods')
+        .update({
+          status: 'FINALIZED',
+          finalized_at: period.finalized_at,
+          gross_revenue_cents: period.gross_revenue_cents,
+          eligible_revenue_cents: period.eligible_net_revenue_cents,
+          reward_pool_cents: period.reward_pool_cents,
+        })
+        .eq('id', period.id)
+        .then(({ error }) => {
+          if (error) console.warn('[v2RevenueEngine] Supabase finalize error:', error.message);
+        });
+    }
 
     this.recordAudit({
       category: 'REVENUE_PERIOD_FINALIZED',
