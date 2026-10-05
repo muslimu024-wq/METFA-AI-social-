@@ -38,6 +38,7 @@ interface HeaderProps {
   activeTab: string;
   onNavigateTab: (tabId: string) => void;
   creditsData: DailyCreditsData;
+  isOwnerOrAdmin?: boolean;
   onWatchAdClick?: () => void;
   onOpenSettings?: () => void;
   onOpenAuthModal?: () => void;
@@ -53,6 +54,7 @@ export const Header: React.FC<HeaderProps> = ({
   activeTab,
   onNavigateTab,
   creditsData,
+  isOwnerOrAdmin,
   onWatchAdClick,
   onOpenSettings,
   onOpenAuthModal,
@@ -213,6 +215,28 @@ export const Header: React.FC<HeaderProps> = ({
               </Suspense>
             )}
 
+            {/* [METFA V2 Owner Dashboard Launcher] — Visible ONLY to verified Owner/Admin */}
+            {isOwnerOrAdmin && (
+              <button
+                type="button"
+                id="header-v2-dashboard-btn"
+                onClick={() => handleNavigate('v2')}
+                className={`h-9 sm:h-10 px-2.5 sm:px-3 rounded-2xl flex items-center gap-1.5 transition shrink-0 active:scale-95 shadow-xs group cursor-pointer border font-bold text-xs ${
+                  activeTab === 'v2'
+                    ? 'bg-purple-600 border-purple-600 text-white shadow-purple-200'
+                    : 'bg-purple-50 hover:bg-purple-100 border-purple-200 text-purple-700 hover:text-purple-900'
+                }`}
+                title="METFA V2 Owner Dashboard"
+                aria-label="METFA V2 Dashboard"
+              >
+                <LayoutGrid className="w-4 h-4 sm:w-4.5 sm:h-4.5 text-purple-600 group-hover:scale-105 transition-transform" />
+                <span className="hidden sm:inline font-bold">V2 Dashboard</span>
+                <span className="text-[10px] bg-purple-600 text-white px-1.5 py-0.2 rounded-full font-bold">
+                  V2
+                </span>
+              </button>
+            )}
+
             {/* [User Profile Avatar] */}
             <button
               type="button"
@@ -299,6 +323,11 @@ export const Header: React.FC<HeaderProps> = ({
                     {authUser.authType !== 'guest' && (
                       <span className="text-[9px] px-1.5 py-0.2 bg-teal-100 border border-teal-300 text-teal-800 rounded font-semibold shrink-0">
                         SSO
+                      </span>
+                    )}
+                    {isOwnerOrAdmin && (
+                      <span className="text-[9px] px-1.5 py-0.2 bg-purple-100 border border-purple-300 text-purple-800 rounded font-bold shrink-0">
+                        Owner / Admin
                       </span>
                     )}
                   </div>
@@ -441,27 +470,29 @@ export const Header: React.FC<HeaderProps> = ({
                   </span>
                 </button>
 
-                {/* METFA V2 Dashboard Launcher */}
-                <button
-                  type="button"
-                  onClick={() => handleNavigate('v2')}
-                  className={`w-full p-2.5 rounded-xl flex items-center justify-between text-xs font-bold transition cursor-pointer ${
-                    activeTab === 'v2'
-                      ? 'bg-purple-600 text-white'
-                      : 'text-slate-700 hover:bg-slate-100 hover:text-purple-600'
-                  }`}
-                  title="METFA V2 Dashboard"
-                >
-                  <div className="flex items-center gap-3">
-                    <LayoutGrid className={`w-4 h-4 ${activeTab === 'v2' ? 'text-white' : 'text-purple-600'}`} />
-                    <span>METFA V2 Dashboard</span>
-                  </div>
-                  <span className={`text-[10px] px-2 py-0.5 rounded-full font-bold shadow-xs ${
-                    activeTab === 'v2' ? 'bg-white/20 text-white' : 'bg-purple-100 text-purple-700'
-                  }`}>
-                    V2
-                  </span>
-                </button>
+                {/* METFA V2 Dashboard Launcher (Owner / Administrator Only) */}
+                {isOwnerOrAdmin && (
+                  <button
+                    type="button"
+                    onClick={() => handleNavigate('v2')}
+                    className={`w-full p-2.5 rounded-xl flex items-center justify-between text-xs font-bold transition cursor-pointer ${
+                      activeTab === 'v2'
+                        ? 'bg-purple-600 text-white'
+                        : 'text-slate-700 hover:bg-slate-100 hover:text-purple-600'
+                    }`}
+                    title="METFA V2 Dashboard"
+                  >
+                    <div className="flex items-center gap-3">
+                      <LayoutGrid className={`w-4 h-4 ${activeTab === 'v2' ? 'text-white' : 'text-purple-600'}`} />
+                      <span>METFA V2 Dashboard</span>
+                    </div>
+                    <span className={`text-[10px] px-2 py-0.5 rounded-full font-bold shadow-xs ${
+                      activeTab === 'v2' ? 'bg-white/20 text-white' : 'bg-purple-100 text-purple-700'
+                    }`}>
+                      V2
+                    </span>
+                  </button>
+                )}
               </div>
 
               {/* 3. FEATURED SAMPLE CREATORS & PAGES */}

@@ -79,11 +79,15 @@ export function runV2WalletEngineVerification(): V2WalletTestSuiteSummary {
 
   // Helper setup: Provisions a finalized revenue period and finalized reward settlement
   const setupFinalizedRewardSystem = (rewardEngine: V2RewardEngine) => {
-    // 1. Create a finalized revenue period in v2RevenueEngine
+    // 1. Create a finalized revenue period in v2RevenueEngine with dynamic period bounds
+    const now = new Date();
+    const periodStart = new Date(now.getTime() - 15 * 24 * 60 * 60 * 1000).toISOString();
+    const periodEnd = new Date(now.getTime() + 15 * 24 * 60 * 60 * 1000).toISOString();
+
     const revPeriod = v2RevenueEngine.createRevenuePeriod({
       period_name: `RevPeriod_WalTest_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
-      period_start: '2026-09-01T00:00:00.000Z',
-      period_end: '2026-09-30T23:59:59.000Z',
+      period_start: periodStart,
+      period_end: periodEnd,
       currency: 'USD',
       actor_id: 'admin_test_setup',
       actor_role: 'SUPER_ADMIN',

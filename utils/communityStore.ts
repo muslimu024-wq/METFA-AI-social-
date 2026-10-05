@@ -233,6 +233,59 @@ export async function saveServerPost(post: CommunityPost): Promise<void> {
   }
 }
 
+/**
+ * Asynchronously reports an authoritative post creation event to the V2 Contribution Engine.
+ * Non-blocking: failures or disabled feature flags never invalidate the published social post.
+ * Idempotency is strictly anchored to `post_${post.id}` using the real database UUID.
+ * The server derives user identity strictly from the verified session JWT (no client user_id passed).
+ */
+export async function reportPostContribution(post: CommunityPost): Promise<void> {
+  if (!post || !post.id || !isUuid(post.id)) return;
+  try {
+    const token = await getClientAuthToken();
+    if (!token) {
+      console.warn('[Contribution] No active session token available for post contribution');
+      return;
+    }
+
+    const contentText = post.caption && post.prompt
+      ? `${post.caption} — ${post.prompt}`
+      : post.caption || post.prompt || post.videoTitle || '';
+
+    const payload = {
+      content_text: contentText,
+      is_original: true,
+      audio_track_id: post.audioTrack?.id || undefined,
+    };
+
+    const res = await fetch('/api/v2/contribution/process', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({
+        action: 'ORIGINAL_CONTENT',
+        source_ref: `post_${post.id}`,
+        payload,
+      }),
+    });
+
+    if (!res.ok) {
+      const errText = await res.text().catch(() => '');
+      console.warn(`[Contribution] Post contribution returned status ${res.status}:`, errText);
+      return;
+    }
+
+    const data = await res.json().catch(() => null);
+    if (data) {
+      console.log(`[Contribution] Original post contribution processed: status=${data.status}, points=${data.points_awarded || 0}`);
+    }
+  } catch (err: any) {
+    console.warn('[Contribution] Non-blocking error reporting post contribution:', err?.message || err);
+  }
+}
+
 export async function updateServerPost(postId: string, updates: Partial<CommunityPost>): Promise<void> {
   try {
     const token = await getClientAuthToken();
@@ -488,6 +541,11 @@ export const createPostAsync = async (
     saveCommunityPosts(updated);
     savePostsToIDB(updated);
     saveServerPost(dbPost);
+
+    // Non-blocking asynchronous contribution trigger using real database post UUID
+    reportPostContribution(dbPost).catch((contribErr) => {
+      console.warn('[Contribution] Uncaught post contribution error:', contribErr);
+    });
 
     addNotification({
       type: 'like',

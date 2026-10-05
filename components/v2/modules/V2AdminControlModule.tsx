@@ -61,34 +61,21 @@ import {
 } from '../../../tests/v2Phase10IntegrationVerification';
 import { v2IntegrationAdapter, V2IntegrationHealthSummary } from '../../../services/v2IntegrationAdapter';
 import { V2ModuleId } from '../../../types/v2';
+import { getClientAuthToken } from '../../../services/supabaseClient';
 
 interface V2AdminControlModuleProps {
-  initialRole?: V2UserRole;
+  initialRole?: V2UserRole | null;
   initialUserId?: string;
   onNavigateToModule?: (moduleId: V2ModuleId) => void;
 }
 
-const AVAILABLE_ROLES: V2UserRole[] = [
-  'SUPER_ADMIN',
-  'ADMIN',
-  'FINANCE_ADMIN',
-  'ADS_MANAGER',
-  'CONTENT_MANAGER',
-  'OPERATOR',
-  'DEVELOPER',
-  'FREELANCER',
-  'REVIEWER',
-  'SUPPORT',
-  'ANALYST',
-];
-
 export const V2AdminControlModule: React.FC<V2AdminControlModuleProps> = ({
-  initialRole = 'SUPER_ADMIN',
-  initialUserId = 'admin_lead_01',
+  initialRole = null,
+  initialUserId = '',
   onNavigateToModule,
 }) => {
-  const [currentRole, setCurrentRole] = useState<V2UserRole>(initialRole);
-  const [currentUserId] = useState<string>(initialUserId);
+  const [currentRole, setCurrentRole] = useState<V2UserRole | null>(initialRole);
+  const [currentUserId, setCurrentUserId] = useState<string>(initialUserId);
   const [activeTab, setActiveTab] = useState<
     'overview' | 'modules' | 'flags' | 'kill-switches' | 'ai-health' | 'approvals' | 'integration' | 'verification'
   >('overview');
@@ -132,67 +119,159 @@ export const V2AdminControlModule: React.FC<V2AdminControlModuleProps> = ({
 
   useEffect(() => {
     reloadData();
+    let isMounted = true;
+    getClientAuthToken().then((token) => {
+      if (!token) {
+        if (isMounted) {
+          setCurrentRole(null);
+          setCurrentUserId('');
+        }
+        return;
+      }
+      fetch('/api/v2/auth/verify-session', {
+        headers: { Authorization: `Bearer ${token}` },
+      })
+        .then((r) => (r.ok ? r.json() : null))
+        .then((data) => {
+          if (isMounted && data) {
+            const roles: V2UserRole[] = data.roles || [];
+            if (roles.length > 0) {
+              const primary = roles.includes('SUPER_ADMIN')
+                ? 'SUPER_ADMIN'
+                : roles[0];
+              setCurrentRole(primary);
+            } else {
+              setCurrentRole(null);
+            }
+            if (data.user_id) {
+              setCurrentUserId(data.user_id);
+            }
+          } else if (isMounted) {
+            setCurrentRole(null);
+            setCurrentUserId('');
+          }
+        })
+        .catch(() => {
+          if (isMounted) {
+            setCurrentRole(null);
+            setCurrentUserId('');
+          }
+        });
+    });
+    return () => {
+      isMounted = false;
+    };
   }, []);
 
-  const handleToggleFlag = (key: V2FeatureFlagKey, currentVal: boolean) => {
+  const handleToggleFlag = async (key: V2FeatureFlagKey, currentVal: boolean) => {
     setActionSuccess(null);
     setActionError(null);
 
-    const res = v2AdminEngine.setFeatureFlag({
-      key,
-      enabled: !currentVal,
-      actor_id: currentUserId,
-      actor_role: currentRole,
-      reason: `Toggled to ${!currentVal} via Admin Control Center by ${currentRole}`,
-    });
+    const token = await getClientAuthToken();
+    if (!token || !currentRole) {
+      setActionError('Unauthorized: Verified administrative role required to modify feature flags.');
+      return;
+    }
 
-    if (res.success) {
-      setActionSuccess(`Feature flag '${key}' set to ${!currentVal ? 'ENABLED' : 'DISABLED'}.`);
-      reloadData();
-    } else {
-      setActionError(res.error || 'Failed to update feature flag.');
+    try {
+      const res = await fetch('/api/v2/admin/flags', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          key,
+          enabled: !currentVal,
+          reason: `Toggled to ${!currentVal} via Admin Control Center by ${currentRole}`,
+        }),
+      });
+      const data = await res.json().catch(() => null);
+      if (res.ok && data?.success) {
+        setActionSuccess(`Feature flag '${key}' set to ${!currentVal ? 'ENABLED' : 'DISABLED'}.`);
+        reloadData();
+        return;
+      } else {
+        setActionError(data?.error || `Server authorization error (${res.status}).`);
+        return;
+      }
+    } catch (err: any) {
+      setActionError('Network error while communicating with server authority.');
     }
   };
 
-  const handleToggleKillSwitch = (key: V2KillSwitchKey, currentPaused: boolean) => {
+  const handleToggleKillSwitch = async (key: V2KillSwitchKey, currentPaused: boolean) => {
     setActionSuccess(null);
     setActionError(null);
 
-    const res = v2AdminEngine.setKillSwitch({
-      key,
-      isPaused: !currentPaused,
-      actor_id: currentUserId,
-      actor_role: currentRole,
-      reason: killSwitchReason || 'Emergency operational adjustment.',
-    });
+    const token = await getClientAuthToken();
+    if (!token || !currentRole) {
+      setActionError('Unauthorized: Verified administrative role required to trigger emergency kill switches.');
+      return;
+    }
 
-    if (res.success) {
-      setActionSuccess(`Emergency switch '${key}' ${!currentPaused ? 'PAUSED' : 'RESUMED'}. Future processing updated.`);
-      setSelectedKillSwitch(null);
-      reloadData();
-    } else {
-      setActionError(res.error || 'Failed to toggle emergency kill switch.');
+    try {
+      const res = await fetch('/api/v2/admin/kill-switches', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          key,
+          isPaused: !currentPaused,
+          reason: killSwitchReason || 'Emergency operational adjustment.',
+        }),
+      });
+      const data = await res.json().catch(() => null);
+      if (res.ok && data?.success) {
+        setActionSuccess(`Emergency switch '${key}' ${!currentPaused ? 'PAUSED' : 'RESUMED'}. Future processing updated.`);
+        setSelectedKillSwitch(null);
+        reloadData();
+        return;
+      } else {
+        setActionError(data?.error || `Server authorization error (${res.status}).`);
+        return;
+      }
+    } catch (err: any) {
+      setActionError('Network error while communicating with server authority.');
     }
   };
 
-  const handleApprovalDecision = (itemId: string, decision: 'APPROVED' | 'REJECTED') => {
+  const handleApprovalDecision = async (itemId: string, decision: 'APPROVED' | 'REJECTED') => {
     setActionSuccess(null);
     setActionError(null);
 
-    const res = v2AdminEngine.decideApproval({
-      itemId,
-      decision,
-      actor_id: currentUserId,
-      actor_role: currentRole,
-      notes: approvalNotes,
-    });
+    const token = await getClientAuthToken();
+    if (!token || !currentRole) {
+      setActionError('Unauthorized: Verified administrative role required to submit approval decisions.');
+      return;
+    }
 
-    if (res.success) {
-      setActionSuccess(`Item successfully marked as ${decision}. Audit record created.`);
-      setSelectedApprovalItem(null);
-      reloadData();
-    } else {
-      setActionError(res.error || 'Failed to submit approval decision.');
+    try {
+      const res = await fetch(`/api/v2/admin/approvals/${encodeURIComponent(itemId)}/decide`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          decision,
+          notes: approvalNotes,
+        }),
+      });
+      const data = await res.json().catch(() => null);
+      if (res.ok && data?.success) {
+        setActionSuccess(`Item successfully marked as ${decision}. Audit record created.`);
+        setSelectedApprovalItem(null);
+        reloadData();
+        return;
+      } else {
+        setActionError(data?.error || `Server authorization error (${res.status}).`);
+        return;
+      }
+    } catch (err: any) {
+      setActionError('Network error while communicating with server authority.');
     }
   };
 
@@ -266,28 +345,17 @@ export const V2AdminControlModule: React.FC<V2AdminControlModuleProps> = ({
             </div>
           </div>
 
-          {/* Role Switcher for Testing/Inspection */}
-          <div className="flex items-center gap-2 self-start sm:self-auto bg-slate-100 p-1.5 rounded-xl border border-slate-200">
-            <Shield className="w-4 h-4 text-slate-500 ml-1" />
-            <label htmlFor="role-select" className="text-xs font-medium text-slate-600">
-              Active Role:
-            </label>
-            <select
-              id="role-select"
-              value={currentRole}
-              onChange={(e) => {
-                setCurrentRole(e.target.value as V2UserRole);
-                setActionSuccess(null);
-                setActionError(null);
-              }}
-              className="bg-white border border-slate-300 text-slate-800 text-xs rounded-lg px-2 py-1 font-semibold focus:outline-none focus:ring-2 focus:ring-purple-500 cursor-pointer"
-            >
-              {AVAILABLE_ROLES.map((r) => (
-                <option key={r} value={r}>
-                  {r}
-                </option>
-              ))}
-            </select>
+          {/* Verified Authority Badge (Non-spoofable, server-verified) */}
+          <div className="flex items-center gap-2 self-start sm:self-auto bg-slate-100 px-3 py-1.5 rounded-xl border border-slate-200">
+            <Shield className={`w-4 h-4 ml-0.5 shrink-0 ${currentRole ? 'text-purple-600' : 'text-slate-400'}`} />
+            <span className="text-xs font-medium text-slate-600">
+              Authority Role:
+            </span>
+            <span className={`text-xs font-bold px-2.5 py-0.5 rounded-md font-mono shadow-2xs ${
+              currentRole ? 'text-purple-700 bg-purple-100' : 'text-rose-700 bg-rose-50 border border-rose-200'
+            }`}>
+              {currentRole || 'UNVERIFIED / NONE'}
+            </span>
           </div>
         </div>
 
@@ -606,14 +674,14 @@ export const V2AdminControlModule: React.FC<V2AdminControlModuleProps> = ({
                 </p>
               </div>
               <div className="text-xs text-slate-500">
-                Operating as: <span className="font-mono font-bold text-purple-700">{currentRole}</span>
+                Operating as: <span className="font-mono font-bold text-purple-700">{currentRole || 'Unverified'}</span>
               </div>
             </div>
 
             <div className="bg-white rounded-2xl border border-slate-200 shadow-2xs divide-y divide-slate-100">
               {v2AdminEngine.listFeatureFlags().map((flag) => {
                 const canEdit =
-                  currentRole === 'SUPER_ADMIN' || (flag.allowedRoles as V2UserRole[]).includes(currentRole);
+                  Boolean(currentRole && (currentRole === 'SUPER_ADMIN' || (flag.allowedRoles as V2UserRole[]).includes(currentRole)));
 
                 return (
                   <div
@@ -693,10 +761,12 @@ export const V2AdminControlModule: React.FC<V2AdminControlModuleProps> = ({
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               {v2AdminEngine.listKillSwitches().map((sw) => {
                 const isElevated =
-                  currentRole === 'SUPER_ADMIN' ||
-                  currentRole === 'ADMIN' ||
-                  (currentRole === 'FINANCE_ADMIN' &&
-                    (sw.key === 'payouts_paused' || sw.key === 'rewards_paused'));
+                  Boolean(currentRole && (
+                    currentRole === 'SUPER_ADMIN' ||
+                    currentRole === 'ADMIN' ||
+                    (currentRole === 'FINANCE_ADMIN' &&
+                      (sw.key === 'payouts_paused' || sw.key === 'rewards_paused'))
+                  ));
 
                 return (
                   <div
@@ -896,7 +966,7 @@ export const V2AdminControlModule: React.FC<V2AdminControlModuleProps> = ({
                 </p>
               </div>
               <div className="text-xs text-slate-500">
-                Operating as: <span className="font-mono font-bold text-purple-700">{currentRole}</span>
+                Operating as: <span className="font-mono font-bold text-purple-700">{currentRole || 'Unverified'}</span>
               </div>
             </div>
 
@@ -909,7 +979,7 @@ export const V2AdminControlModule: React.FC<V2AdminControlModuleProps> = ({
               ) : (
                 pendingApprovals.map((appr) => {
                   const canDecide =
-                    currentRole === 'SUPER_ADMIN' || (appr.requiredRoles as V2UserRole[]).includes(currentRole);
+                    Boolean(currentRole && (currentRole === 'SUPER_ADMIN' || (appr.requiredRoles as V2UserRole[]).includes(currentRole)));
 
                   return (
                     <div

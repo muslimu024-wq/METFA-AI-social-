@@ -9,6 +9,7 @@ import { v2RevenueEngine } from "./services/v2RevenueEngine";
 import { runV2RevenueEngineVerification } from "./tests/v2RevenueVerification";
 import { v2ContributionEngine } from "./services/v2ContributionEngine";
 import { runV2ContributionEngineVerification } from "./tests/v2ContributionVerification";
+import { v2AdminEngine } from "./services/v2AdminEngine";
 import { requireAuth, requireV2Role, getServerSupabaseClient } from "./services/serverAuth";
 import { runV2BackendAuthorityVerification } from "./tests/v2BackendAuthorityVerification";
 
@@ -2880,6 +2881,161 @@ Output strictly in JSON: {"replies": ["reply 1", "reply 2", "reply 3"]}`;
     });
   });
 
+  // 2b. Role-restricted Owner/Admin authorization check for V2 Owner Dashboard
+  app.get("/api/v2/auth/owner-check", requireAuth, requireV2Role(["SUPER_ADMIN", "ADMIN", "OPERATOR"]), (req, res) => {
+    res.json({
+      authorized: true,
+      user_id: req.v2Auth!.userId,
+      roles: req.v2Auth!.roles,
+    });
+  });
+
+  // =========================================================================
+  // METFA V2: AUTHORITATIVE ADMINISTRATIVE CONTROL APIS (PHASE 9)
+  // =========================================================================
+
+  // Helper middleware for Operator/Admin control
+  const requireV2AdminControlAuth = (req: express.Request, res: express.Response, next: express.NextFunction) => {
+    requireAuth(req, res, () => {
+      const allowedRoles = ["SUPER_ADMIN", "ADMIN", "OPERATOR"];
+      const userRoles = req.v2Auth?.roles || [];
+      const hasRole = userRoles.includes("SUPER_ADMIN") || userRoles.some((r) => allowedRoles.includes(r));
+      if (!hasRole) {
+        return res.status(403).json({ error: "Forbidden: Insufficient administrative privileges." });
+      }
+      next();
+    });
+  };
+
+  // 1. Get Administrative Overview & Attention Queue
+  app.get("/api/v2/admin/overview", requireV2AdminControlAuth, (_req, res) => {
+    try {
+      const overview = v2AdminEngine.getOverview();
+      const attentionQueue = v2AdminEngine.getAttentionQueue();
+      res.json({ overview, attentionQueue });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || "Failed to retrieve admin overview." });
+    }
+  });
+
+  // 2. List Feature Flags
+  app.get("/api/v2/admin/flags", requireV2AdminControlAuth, (_req, res) => {
+    try {
+      const flags = v2AdminEngine.listFeatureFlags();
+      res.json({ flags });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || "Failed to list feature flags." });
+    }
+  });
+
+  // 3. Mutate Feature Flag (Server-authoritative actor binding)
+  app.post("/api/v2/admin/flags", requireAuth, requireV2Role(["SUPER_ADMIN", "ADMIN"]), (req, res) => {
+    try {
+      const { key, enabled, reason } = req.body || {};
+      if (!key || typeof enabled !== "boolean") {
+        return res.status(400).json({ error: "Missing required parameter 'key' or boolean 'enabled'." });
+      }
+
+      // Authoritative actor binding strictly from verified session (ignoring client body)
+      const verifiedUserId = req.v2Auth!.userId;
+      const verifiedRole = req.v2Auth!.roles.includes("SUPER_ADMIN") ? "SUPER_ADMIN" : req.v2Auth!.roles[0] || "ADMIN";
+
+      const result = v2AdminEngine.setFeatureFlag({
+        key,
+        enabled,
+        actor_id: verifiedUserId,
+        actor_role: verifiedRole,
+        reason: reason || `Updated via server authority by ${verifiedRole}`,
+      });
+
+      if (!result.success) {
+        return res.status(400).json({ error: result.error || "Failed to update feature flag." });
+      }
+
+      res.json(result);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || "Failed to set feature flag." });
+    }
+  });
+
+  // 4. List Emergency Kill Switches
+  app.get("/api/v2/admin/kill-switches", requireV2AdminControlAuth, (_req, res) => {
+    try {
+      const killSwitches = v2AdminEngine.listKillSwitches();
+      res.json({ killSwitches });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || "Failed to list kill switches." });
+    }
+  });
+
+  // 5. Mutate Emergency Kill Switch (Server-authoritative actor binding)
+  app.post("/api/v2/admin/kill-switches", requireAuth, requireV2Role(["SUPER_ADMIN", "ADMIN", "FINANCE_ADMIN"]), (req, res) => {
+    try {
+      const { key, isPaused, reason } = req.body || {};
+      if (!key || typeof isPaused !== "boolean") {
+        return res.status(400).json({ error: "Missing required parameter 'key' or boolean 'isPaused'." });
+      }
+
+      const verifiedUserId = req.v2Auth!.userId;
+      const verifiedRole = req.v2Auth!.roles.includes("SUPER_ADMIN") ? "SUPER_ADMIN" : req.v2Auth!.roles[0] || "ADMIN";
+
+      const result = v2AdminEngine.setKillSwitch({
+        key,
+        isPaused,
+        actor_id: verifiedUserId,
+        actor_role: verifiedRole,
+        reason: reason || `Emergency operational toggle by ${verifiedRole}`,
+      });
+
+      if (!result.success) {
+        return res.status(400).json({ error: result.error || "Failed to toggle kill switch." });
+      }
+
+      res.json(result);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || "Failed to toggle kill switch." });
+    }
+  });
+
+  // 6. List and Resolve Pending Approvals
+  app.get("/api/v2/admin/approvals", requireV2AdminControlAuth, (_req, res) => {
+    try {
+      const approvals = v2AdminEngine.listPendingApprovals();
+      res.json({ approvals });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || "Failed to list pending approvals." });
+    }
+  });
+
+  app.post("/api/v2/admin/approvals/:id/decide", requireAuth, requireV2Role(["SUPER_ADMIN", "ADMIN", "OPERATOR"]), (req, res) => {
+    try {
+      const itemId = String(req.params.id);
+      const { decision, notes } = req.body || {};
+      if (!decision || (decision !== "APPROVED" && decision !== "REJECTED")) {
+        return res.status(400).json({ error: "Invalid decision. Must be 'APPROVED' or 'REJECTED'." });
+      }
+
+      const verifiedUserId = req.v2Auth!.userId;
+      const verifiedRole = req.v2Auth!.roles.includes("SUPER_ADMIN") ? "SUPER_ADMIN" : req.v2Auth!.roles[0] || "OPERATOR";
+
+      const result = v2AdminEngine.decideApproval({
+        itemId,
+        decision,
+        actor_id: verifiedUserId,
+        actor_role: verifiedRole,
+        notes: notes || `Decided by ${verifiedRole}`,
+      });
+
+      if (!result.success) {
+        return res.status(400).json({ error: result.error || "Failed to resolve approval." });
+      }
+
+      res.json(result);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || "Failed to process approval decision." });
+    }
+  });
+
   // 3. Automated Authority Verification Suite (Phase 13-A)
   app.get("/api/v2/auth/run-tests", async (_req, res) => {
     try {
@@ -3221,10 +3377,19 @@ Structure your response into 3 concise sections:
   });
 
   // 4. Get User Contribution Summary
-  app.get("/api/v2/contribution/user/:userId/summary", (req, res) => {
+  app.get("/api/v2/contribution/user/:userId/summary", requireAuth, (req, res) => {
     try {
-      const { userId } = req.params;
-      const summary = v2ContributionEngine.getUserSummary(userId);
+      const authUserId = (req as any).v2Auth?.userId;
+      const callerRoles: string[] = (req as any).v2Auth?.roles || [];
+      const isPrivileged = callerRoles.includes("SUPER_ADMIN") || callerRoles.includes("ADMIN") || callerRoles.includes("OPERATOR");
+      
+      // Strict privacy check: normal authenticated user cannot view another user's summary
+      if (!isPrivileged && req.params.userId !== authUserId) {
+        return res.status(403).json({ error: "Forbidden: You cannot view another user's contribution summary." });
+      }
+
+      const targetUserId = isPrivileged ? req.params.userId : authUserId;
+      const summary = v2ContributionEngine.getUserSummary(targetUserId);
       res.json(summary);
     } catch (err: any) {
       res.status(500).json({ error: err.message || "Failed to retrieve user contribution summary." });
@@ -3232,10 +3397,19 @@ Structure your response into 3 concise sections:
   });
 
   // 5. Query Immutable Contribution Ledger
-  app.get("/api/v2/contribution/ledger", (req, res) => {
+  app.get("/api/v2/contribution/ledger", requireAuth, (req, res) => {
     try {
-      const userId = req.query.user_id as string | undefined;
-      const entries = v2ContributionEngine.listLedger(userId);
+      const authUserId = (req as any).v2Auth?.userId;
+      const callerRoles: string[] = (req as any).v2Auth?.roles || [];
+      const isPrivileged = callerRoles.includes("SUPER_ADMIN") || callerRoles.includes("ADMIN") || callerRoles.includes("OPERATOR");
+      
+      // Strict privacy check: normal authenticated user cannot view another user's ledger
+      if (!isPrivileged && req.query.user_id && req.query.user_id !== authUserId) {
+        return res.status(403).json({ error: "Forbidden: You cannot view another user's contribution ledger." });
+      }
+
+      const targetUserId = isPrivileged ? (req.query.user_id as string | undefined) : authUserId;
+      const entries = v2ContributionEngine.listLedger(targetUserId);
       res.json(entries);
     } catch (err: any) {
       res.status(500).json({ error: err.message || "Failed to retrieve contribution ledger." });
@@ -3288,6 +3462,11 @@ Structure your response into 3 concise sections:
     } catch (err: any) {
       res.status(500).json({ error: err.message || "Test suite execution error." });
     }
+  });
+
+  // Hydrate in-memory ledger from live PostgreSQL database
+  v2ContributionEngine.hydrateFromDatabase().catch((err: any) => {
+    console.warn('[server] DB hydration warning:', err?.message || err);
   });
 
   // =========================================================================

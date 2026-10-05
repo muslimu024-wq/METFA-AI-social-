@@ -9,13 +9,14 @@
  * - Light/Dark adaptive styling matching the METFA Social shell
  */
 
-import React, { useState } from 'react';
-import { LayoutGrid, Shield, ArrowLeft } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { LayoutGrid, Shield, ArrowLeft, ShieldAlert, RefreshCw } from 'lucide-react';
 import BrandTitle from '../BrandTitle';
 import V2AppGrid from './V2AppGrid';
 import V2ModuleViewport from './V2ModuleViewport';
 import { V2ModuleId, V2ModuleMetadata } from '../../types/v2';
 import { V2_MODULE_REGISTRY } from '../../data/v2Registry';
+import { getClientAuthToken } from '../../services/supabaseClient';
 
 interface V2DashboardProps {
   onBackToSocial?: () => void;
@@ -23,6 +24,102 @@ interface V2DashboardProps {
 
 export const V2Dashboard: React.FC<V2DashboardProps> = ({ onBackToSocial }) => {
   const [selectedModuleId, setSelectedModuleId] = useState<V2ModuleId | null>(null);
+  const [isAuthorized, setIsAuthorized] = useState<boolean | null>(null);
+  const [authError, setAuthError] = useState<string | null>(null);
+
+  // Server-authoritative Owner / Admin role check
+  useEffect(() => {
+    let isMounted = true;
+    async function verifyAuthority() {
+      try {
+        const token = await getClientAuthToken();
+        if (!token) {
+          if (isMounted) {
+            setIsAuthorized(false);
+            setAuthError('Authentication required. Anonymous access to METFA Owner Dashboard is strictly denied.');
+          }
+          return;
+        }
+
+        const res = await fetch('/api/v2/auth/owner-check', {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+
+        if (res.ok) {
+          const data = await res.json().catch(() => null);
+          if (isMounted) {
+            if (data?.authorized) {
+              setIsAuthorized(true);
+            } else {
+              setIsAuthorized(false);
+              setAuthError('Access Denied: Your account does not possess verified METFA Owner or Administrator privileges.');
+            }
+          }
+        } else {
+          if (isMounted) {
+            setIsAuthorized(false);
+            setAuthError(
+              res.status === 401
+                ? 'Authentication required. Please sign in to verify administrative credentials.'
+                : 'Access Denied: Insufficient administrative privileges (403 Forbidden).'
+            );
+          }
+        }
+      } catch (err: any) {
+        if (isMounted) {
+          setIsAuthorized(false);
+          setAuthError('Authorization service unavailable. Failed to verify administrative credentials.');
+        }
+      }
+    }
+
+    verifyAuthority();
+    return () => {
+      isMounted = false;
+    };
+  }, []);
+
+  // 1. Loading state while verifying cryptographic authority
+  if (isAuthorized === null) {
+    return (
+      <div className="flex flex-col flex-1 items-center justify-center p-8 text-center bg-slate-50 min-h-0">
+        <RefreshCw className="w-8 h-8 rounded-full text-purple-600 animate-spin mb-3" />
+        <h3 className="text-sm font-bold text-slate-800">
+          Verifying METFA Owner Authority...
+        </h3>
+        <p className="text-xs text-slate-500 mt-1">
+          Cryptographically verifying authenticated identity and roles.
+        </p>
+      </div>
+    );
+  }
+
+  // 2. Denied state for unauthorized / non-admin users
+  if (!isAuthorized) {
+    return (
+      <div className="flex flex-col flex-1 items-center justify-center p-6 text-center bg-slate-50 min-h-0">
+        <div className="w-16 h-16 rounded-2xl bg-rose-50 border border-rose-200 flex items-center justify-center text-rose-600 mb-4 shadow-xs">
+          <ShieldAlert className="w-8 h-8" />
+        </div>
+        <h2 className="text-lg font-bold text-slate-900 mb-1">
+          Access Denied — Owner Authorization Required
+        </h2>
+        <p className="text-xs text-slate-600 max-w-md mb-6 leading-relaxed">
+          {authError || 'The METFA V2 Dashboard is restricted exclusively to verified platform owners and administrators.'}
+        </p>
+        {onBackToSocial && (
+          <button
+            type="button"
+            onClick={onBackToSocial}
+            className="px-5 py-2.5 bg-slate-900 text-white rounded-xl text-xs font-bold hover:bg-slate-800 transition shadow-xs cursor-pointer flex items-center gap-2"
+          >
+            <ArrowLeft className="w-4 h-4" />
+            <span>Return to Social Feed</span>
+          </button>
+        )}
+      </div>
+    );
+  }
 
   // Find metadata for the currently opened module
   const activeModule: V2ModuleMetadata | undefined = selectedModuleId

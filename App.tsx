@@ -7,6 +7,7 @@ import { getDailyCredits, addRewardCredits, DailyCreditsData } from './utils/cre
 import { useAuth } from './context/AuthContext';
 import { initV2IntegrationListeners } from './services/v2IntegrationAdapter';
 import { getSellmeShopUrl } from './services/marketplaceService';
+import { getClientAuthToken } from './services/supabaseClient';
 
 // Lazy-load genuinely heavy, non-initial features & modals
 const AIStudioModule = lazy(() => import('./features/ai-studio'));
@@ -26,13 +27,93 @@ export function App() {
       const params = new URLSearchParams(window.location.search);
       const tabParam = params.get('tab');
       if (tabParam === 'chat') return 'chat';
-      if (tabParam === 'v2') return 'v2';
+      // Do not allow initial unverified landing on 'v2'; default safely to 'feed'
       if (tabParam && ['feed', 'reels', 'notifications', 'live', 'pages', 'groups', 'profile'].includes(tabParam)) {
         return tabParam as SocialSubTab;
       }
     } catch {}
     return 'feed';
   });
+
+  // Track verified METFA Owner / Admin status and resolution state
+  const [isOwnerOrAdmin, setIsOwnerOrAdmin] = useState<boolean>(false);
+  const [isOwnerAuthSettled, setIsOwnerAuthSettled] = useState<boolean>(false);
+
+  // Authoritatively check METFA Owner/Admin privileges against /api/v2/auth/owner-check
+  useEffect(() => {
+    let isMounted = true;
+
+    async function checkOwnerPrivileges() {
+      try {
+        const token = await getClientAuthToken();
+        if (!token) {
+          if (isMounted) {
+            setIsOwnerOrAdmin(false);
+            setIsOwnerAuthSettled(true);
+          }
+          return;
+        }
+
+        const res = await fetch('/api/v2/auth/owner-check', {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+
+        if (res.ok) {
+          const data = await res.json().catch(() => null);
+          const authorized = !!data?.authorized;
+          if (isMounted) {
+            setIsOwnerOrAdmin(authorized);
+            setIsOwnerAuthSettled(true);
+            if (authorized) {
+              try {
+                const url = new URL(window.location.href);
+                const tab = url.searchParams.get('tab') || url.hash.replace('#', '').toLowerCase();
+                if (tab === 'v2') {
+                  setActiveTab('v2');
+                }
+              } catch {}
+            }
+          }
+        } else {
+          if (isMounted) {
+            setIsOwnerOrAdmin(false);
+            setIsOwnerAuthSettled(true);
+          }
+        }
+      } catch {
+        if (isMounted) {
+          setIsOwnerOrAdmin(false);
+          setIsOwnerAuthSettled(true);
+        }
+      }
+    }
+
+    checkOwnerPrivileges();
+
+    return () => {
+      isMounted = false;
+    };
+  }, [isAuthenticated]);
+
+  // Strict Security Enforcement: Only scrub and revert when verification has settled and user is unauthorized
+  useEffect(() => {
+    if (isOwnerAuthSettled && !isOwnerOrAdmin) {
+      if (activeTab === 'v2') {
+        console.warn('[Security] Unauthorized activeTab state for METFA V2 Owner Dashboard reverted.');
+        setActiveTab('feed');
+      }
+      try {
+        const url = new URL(window.location.href);
+        const tab = url.searchParams.get('tab') || url.hash.replace('#', '').toLowerCase();
+        if (tab === 'v2') {
+          console.warn('[Security] Unauthorized direct navigation to #v2 blocked.');
+          url.searchParams.delete('tab');
+          url.hash = '';
+          window.history.replaceState({}, '', url.toString());
+        }
+      } catch {}
+    }
+  }, [activeTab, isOwnerOrAdmin, isOwnerAuthSettled]);
 
   // Track if AI Studio module has been activated to defer downloading its heavy bundle until first accessed
   const [hasLoadedChat, setHasLoadedChat] = useState<boolean>(() => {
@@ -52,6 +133,10 @@ export function App() {
 
   // Keep URL search query aligned with active tab
   const handleNavigateTab = useCallback((tab: string) => {
+    if (tab === 'v2' && !isOwnerOrAdmin) {
+      console.warn('[Security] Unauthorized navigation to METFA V2 Owner Dashboard blocked.');
+      return;
+    }
     if (tab === 'marketplace') {
       window.open(getSellmeShopUrl(), '_blank', 'noopener,noreferrer');
       return;
@@ -68,7 +153,7 @@ export function App() {
       }
       window.history.replaceState({}, '', url.toString());
     } catch {}
-  }, []);
+  }, [isOwnerOrAdmin]);
 
   // Handle viewing another user's profile (e.g. from Chat screen)
   const handleViewProfile = useCallback((targetId: string) => {
@@ -180,7 +265,18 @@ export function App() {
           targetTab === 'v2' ||
           rawHash.replace('#', '').toLowerCase() === 'v2'
         ) {
-          setActiveTab('v2');
+          if (isOwnerOrAdmin) {
+            setActiveTab('v2');
+          } else if (!isOwnerAuthSettled) {
+            // Keep pending V2 route while verification is in-flight; do NOT scrub URL prematurely
+          } else {
+            console.warn('[Security] Unauthorized direct navigation to #v2 blocked.');
+            setActiveTab('feed');
+            const cleanUrl = new URL(window.location.href);
+            cleanUrl.searchParams.delete('tab');
+            cleanUrl.hash = '';
+            window.history.replaceState({}, '', cleanUrl.toString());
+          }
         } else if (
           targetTab === 'marketplace' ||
           rawHash.replace('#', '').toLowerCase() === 'marketplace' ||
@@ -246,7 +342,7 @@ export function App() {
       window.removeEventListener('metfa_open_auth_modal', handleOpenAuth);
       window.removeEventListener('metfa_open_api_keys_modal', handleOpenApiKeys);
     };
-  }, [handleViewProfile, handleNavigateTab, isAuthenticated]);
+  }, [handleViewProfile, handleNavigateTab, isAuthenticated, isOwnerOrAdmin, isOwnerAuthSettled]);
 
   const handleInstallPwa = async () => {
     if (!installPrompt) return;
@@ -329,6 +425,7 @@ export function App() {
           activeTab={activeTab}
           onNavigateTab={handleNavigateTab}
           creditsData={creditsData}
+          isOwnerOrAdmin={isOwnerOrAdmin}
           onWatchAdClick={() => setIsRewardedAdOpen(true)}
           onOpenAuthModal={() => {
             if (!isAuthenticated) setIsAuthModalOpen(true);
@@ -434,7 +531,7 @@ export function App() {
         </div>
 
         {/* Module C: METFA V2 Dashboard & Reusable Viewport Shell */}
-        {activeTab === 'v2' && (
+        {activeTab === 'v2' && isOwnerOrAdmin && (
           <div className="w-full h-full flex flex-col flex-1 min-h-0">
             <Suspense
               fallback={

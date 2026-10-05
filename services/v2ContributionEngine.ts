@@ -803,3 +803,4 @@ export class V2ContributionEngine {
 
 // Global Server-Authoritative Singleton Instance
 export const v2ContributionEngine = new V2ContributionEngine();
+v2ContributionEngine.setContributionEnabled(true);
