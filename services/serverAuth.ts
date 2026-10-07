@@ -51,6 +51,39 @@ declare global {
 // ============================================================================
 
 let serverSupabaseClient: SupabaseClient | null = null;
+let publicSupabaseClient: SupabaseClient | null = null;
+
+/**
+ * Returns the public server-side Supabase client (using anon key)
+ * for reading public RLS tables like profiles without service_role permission conflicts.
+ */
+export function getPublicSupabaseClient(): SupabaseClient | null {
+  if (publicSupabaseClient) {
+    return publicSupabaseClient;
+  }
+
+  const url = (process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || '').trim();
+  const anonKey = (
+    process.env.VITE_SUPABASE_ANON_KEY ||
+    process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY ||
+    process.env.SUPABASE_ANON_KEY ||
+    ''
+  ).trim();
+
+  if (!url || !anonKey) {
+    return null;
+  }
+
+  publicSupabaseClient = createClient(url, anonKey, {
+    auth: {
+      autoRefreshToken: false,
+      persistSession: false,
+      detectSessionInUrl: false,
+    },
+  });
+
+  return publicSupabaseClient;
+}
 
 /**
  * Returns the authoritative server-side Supabase client.

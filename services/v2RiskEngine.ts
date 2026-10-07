@@ -22,6 +22,7 @@
  * 6. Server-Authoritative: Operator actions require authorized roles; AI actors are strictly blocked from mutations.
  */
 
+import crypto from 'crypto';
 import { V2ModuleId, SignalSeverity, SignalStatus } from '../types/v2';
 import {
   V2RiskCategory,
@@ -42,6 +43,7 @@ import {
   V2RiskEngineHealth,
 } from '../types/v2Risk';
 import { V2DbSignal } from '../types/v2Database';
+import { getServerSupabaseClient } from './serverAuth';
 
 // ============================================================================
 // DEFAULT VERSIONED POLICY
@@ -324,6 +326,32 @@ export class V2RiskEngine {
             score: clampedScore,
           },
         });
+
+        // Authoritatively persist to live Supabase v2_risk_signals if user_id is UUID
+        const isUserUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(request.user_id);
+        if (isUserUuid) {
+          const supabase = getServerSupabaseClient();
+          if (supabase) {
+            const dbSignalId = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(signalId)
+              ? signalId
+              : crypto.randomUUID();
+            supabase
+              .from('v2_risk_signals')
+              .insert({
+                id: dbSignalId,
+                user_id: request.user_id,
+                signal_type: detection.signalType,
+                severity,
+                risk_score: clampedScore,
+                affected_module: request.affected_module,
+                evidence: detection.evidence || {},
+                status: 'ACTIVE',
+              })
+              .then(({ error }) => {
+                if (error) console.warn('[v2RiskEngine] Supabase risk signal insert error:', error.message);
+              });
+          }
+        }
       }
     }
 
@@ -1031,6 +1059,25 @@ export class V2RiskEngine {
       previous_state: { status: previousStatus },
       new_state: { status: params.resolution, resolved_by: params.actor_id },
     });
+
+    // Authoritatively persist resolution update to live Supabase v2_risk_signals
+    const isSignalUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(signal.id);
+    if (isSignalUuid) {
+      const supabase = getServerSupabaseClient();
+      if (supabase) {
+        supabase
+          .from('v2_risk_signals')
+          .update({
+            status: params.resolution,
+            resolved_at: signal.resolved_at,
+            resolved_by: /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(params.actor_id) ? params.actor_id : null,
+          })
+          .eq('id', signal.id)
+          .then(({ error }) => {
+            if (error) console.warn('[v2RiskEngine] Supabase risk signal update error:', error.message);
+          });
+      }
+    }
 
     return { success: true, signal: { ...signal } };
   }

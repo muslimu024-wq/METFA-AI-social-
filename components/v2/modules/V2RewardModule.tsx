@@ -46,6 +46,7 @@ import {
 import { v2RewardEngine } from '../../../services/v2RewardEngine';
 import { v2RevenueEngine } from '../../../services/v2RevenueEngine';
 import { runV2RewardEngineVerification, V2RewardTestSuiteSummary } from '../../../tests/v2RewardVerification';
+import { getClientAuthToken } from '../../../services/supabaseClient';
 
 interface V2RewardModuleProps {
   currentRole?: string;
@@ -81,18 +82,53 @@ export const V2RewardModule: React.FC<V2RewardModuleProps> = ({
   const [testResults, setTestResults] = useState<V2RewardTestSuiteSummary | null>(null);
   const [testsRunning, setTestsRunning] = useState(false);
 
-  // Load state from engines
-  const reloadData = () => {
+  // Load state from server API with local engine fallback
+  const reloadData = async () => {
     try {
-      const h = v2RewardEngine.getEngineHealth();
-      setHealth(h);
-      const periods = v2RewardEngine.listSettlementPeriods();
-      setSettlementPeriods(periods);
-      setPolicies(v2RewardEngine.listPolicies());
+      const token = await getClientAuthToken();
+      const headers: Record<string, string> = {};
+      if (token) headers['Authorization'] = `Bearer ${token}`;
+
+      // Parallel health & periods fetch
+      const [hRes, sRes, pRes] = await Promise.all([
+        fetch('/api/v2/rewards/health', { headers }).catch(() => null),
+        fetch('/api/v2/rewards/settlements', { headers }).catch(() => null),
+        fetch('/api/v2/rewards/policies', { headers }).catch(() => null),
+      ]);
+
+      if (hRes && hRes.ok) {
+        const hData = await hRes.json();
+        setHealth(hData);
+      } else {
+        setHealth(v2RewardEngine.getEngineHealth());
+      }
+
+      let periods: V2RewardSettlementPeriodRecord[] = [];
+      if (sRes && sRes.ok) {
+        const sData = await sRes.json();
+        periods = sData.settlements || [];
+        setSettlementPeriods(periods);
+      } else {
+        periods = v2RewardEngine.listSettlementPeriods();
+        setSettlementPeriods(periods);
+      }
+
+      if (pRes && pRes.ok) {
+        const pData = await pRes.json();
+        setPolicies(pData.policies || []);
+      } else {
+        setPolicies(v2RewardEngine.listPolicies());
+      }
 
       if (periods.length > 0) {
         const periodToLoad = selectedPeriodId === 'all' ? periods[0].id : selectedPeriodId;
-        setAllocations(v2RewardEngine.getAllocationsForPeriod(periodToLoad));
+        const aRes = await fetch(`/api/v2/rewards/allocations?period_id=${encodeURIComponent(periodToLoad)}`, { headers }).catch(() => null);
+        if (aRes && aRes.ok) {
+          const aData = await aRes.json();
+          setAllocations(aData.allocations || []);
+        } else {
+          setAllocations(v2RewardEngine.getAllocationsForPeriod(periodToLoad));
+        }
       } else {
         setAllocations([]);
       }
@@ -119,8 +155,8 @@ export const V2RewardModule: React.FC<V2RewardModuleProps> = ({
     reloadData();
   }, [selectedPeriodId]);
 
-  // Handle Execute Settlement
-  const handleExecuteSettlement = () => {
+  // Handle Execute Settlement via Server Authority
+  const handleExecuteSettlement = async () => {
     if (!selectedRevenuePeriodId) {
       setErrorMsg('Please select a revenue period to settle.');
       return;
@@ -130,22 +166,30 @@ export const V2RewardModule: React.FC<V2RewardModuleProps> = ({
     setIsProcessing(true);
 
     try {
-      const result = v2RewardEngine.executeSettlement({
-        revenue_period_id: selectedRevenuePeriodId,
-        actor_id: currentUserId,
-        actor_role: currentRole,
-        auto_advance_stages: autoAdvanceStages,
+      const token = await getClientAuthToken();
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+      if (token) headers['Authorization'] = `Bearer ${token}`;
+
+      const res = await fetch('/api/v2/rewards/settlements', {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          revenue_period_id: selectedRevenuePeriodId,
+          contribution_period_id: 'CURRENT_ACTIVE_CONTRIBUTIONS',
+          auto_advance: autoAdvanceStages,
+        }),
       });
 
-      if (!result.success) {
-        setErrorMsg(result.error || 'Failed to execute reward settlement.');
+      const data = await res.json();
+      if (!res.ok) {
+        setErrorMsg(data.error || 'Failed to execute reward settlement.');
       } else {
-        const poolFormatted = `$${((result.total_pool_cents || 0) / 100).toFixed(2)}`;
-        const allocFormatted = `$${((result.total_allocated_cents || 0) / 100).toFixed(2)}`;
+        const poolFormatted = `$${((data.total_pool_cents || 0) / 100).toFixed(2)}`;
+        const allocFormatted = `$${((data.total_allocated_cents || 0) / 100).toFixed(2)}`;
         setSuccessMsg(
-          result.is_cached
+          data.is_cached
             ? `Settlement already exists (Idempotent): Verified Pool ${poolFormatted}, Allocated ${allocFormatted}.`
-            : `Reward settlement finalized! Verified Pool ${poolFormatted}, Allocated ${allocFormatted} across ${result.allocations_count || 0} participants.`
+            : `Reward settlement finalized! Verified Pool ${poolFormatted}, Allocated ${allocFormatted} across ${data.allocations_count || 0} participants.`
         );
         reloadData();
       }
@@ -156,44 +200,75 @@ export const V2RewardModule: React.FC<V2RewardModuleProps> = ({
     }
   };
 
-  // Handle Policy Registration
-  const handleRegisterPolicy = (e: React.FormEvent) => {
+  // Handle Policy Registration via Server Authority
+  const handleRegisterPolicy = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMsg(null);
     setSuccessMsg(null);
 
-    const res = v2RewardEngine.registerPolicy({
-      reward_pool_percentage_basis_points: Number(newPolicyBps),
-      description: newPolicyDesc,
-      actor_id: currentUserId,
-      actor_role: currentRole,
-    });
+    try {
+      const token = await getClientAuthToken();
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+      if (token) headers['Authorization'] = `Bearer ${token}`;
 
-    if (!res.success) {
-      setErrorMsg(res.error || 'Failed to register policy.');
-    } else {
-      setSuccessMsg(`Policy v${res.policy?.version} activated: ${(res.policy!.reward_pool_percentage_basis_points / 100).toFixed(2)}% reward pool share.`);
-      reloadData();
+      const res = await fetch('/api/v2/rewards/policies', {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          percentage_basis_points: Number(newPolicyBps),
+          description: newPolicyDesc,
+        }),
+      });
+
+      const data = await res.json();
+      if (!res.ok) {
+        setErrorMsg(data.error || 'Failed to register policy.');
+      } else {
+        setSuccessMsg(`Policy activated: ${(Number(newPolicyBps) / 100).toFixed(2)}% reward pool share.`);
+        reloadData();
+      }
+    } catch (err: any) {
+      setErrorMsg(`Exception: ${err.message || String(err)}`);
     }
   };
 
-  // Handle Stage Advancement
-  const handleAdvanceStage = (allocationId: string, targetStatus: V2RewardAllocationStatus) => {
+  // Handle Stage Advancement via Server Authority
+  const handleAdvanceStage = async (allocationId: string, targetStatus: V2RewardAllocationStatus) => {
     setErrorMsg(null);
     setSuccessMsg(null);
 
-    const res = v2RewardEngine.advanceAllocationStatus({
-      allocation_id: allocationId,
-      target_status: targetStatus,
-      actor_id: currentUserId,
-      actor_role: currentRole,
-    });
+    try {
+      const token = await getClientAuthToken();
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+      if (token) headers['Authorization'] = `Bearer ${token}`;
 
-    if (!res.success) {
-      setErrorMsg(res.error || 'Failed to advance reward stage.');
-    } else {
-      setSuccessMsg(`Allocation stage advanced to ${targetStatus}.`);
-      reloadData();
+      const res = await fetch(`/api/v2/rewards/settlements/${encodeURIComponent(allocationId)}/transition`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ new_status: targetStatus }),
+      });
+
+      const data = await res.json();
+      if (!res.ok) {
+        // Fallback to local engine advancement if settlement ID is local
+        const localRes = v2RewardEngine.advanceAllocationStatus({
+          allocation_id: allocationId,
+          target_status: targetStatus,
+          actor_id: currentUserId,
+          actor_role: currentRole,
+        });
+        if (localRes.success) {
+          setSuccessMsg(`Allocation stage advanced to ${targetStatus}.`);
+          reloadData();
+        } else {
+          setErrorMsg(data.error || localRes.error || 'Failed to advance reward stage.');
+        }
+      } else {
+        setSuccessMsg(`Allocation stage advanced to ${targetStatus}.`);
+        reloadData();
+      }
+    } catch (err: any) {
+      setErrorMsg(`Exception: ${err.message || String(err)}`);
     }
   };
 

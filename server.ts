@@ -4,13 +4,17 @@ import fs from "fs";
 import crypto from "crypto";
 import { createServer as createViteServer } from "vite";
 import { GoogleGenAI } from "@google/genai";
+import { createClient } from "@supabase/supabase-js";
 import { checkContentSafety, METFA_AI_SAFETY_SYSTEM_INSTRUCTION } from "./utils/contentSafety";
 import { v2RevenueEngine } from "./services/v2RevenueEngine";
 import { runV2RevenueEngineVerification } from "./tests/v2RevenueVerification";
 import { v2ContributionEngine } from "./services/v2ContributionEngine";
 import { runV2ContributionEngineVerification } from "./tests/v2ContributionVerification";
+import { v2RewardEngine } from "./services/v2RewardEngine";
+import { v2WalletEngine } from "./services/v2WalletEngine";
+import { v2RiskEngine } from "./services/v2RiskEngine";
 import { v2AdminEngine } from "./services/v2AdminEngine";
-import { requireAuth, requireV2Role, getServerSupabaseClient } from "./services/serverAuth";
+import { requireAuth, requireV2Role, getServerSupabaseClient, getPublicSupabaseClient, extractBearerToken } from "./services/serverAuth";
 import { runV2BackendAuthorityVerification } from "./tests/v2BackendAuthorityVerification";
 
 async function startServer() {
@@ -3036,6 +3040,15 @@ Output strictly in JSON: {"replies": ["reply 1", "reply 2", "reply 3"]}`;
     }
   });
 
+  app.get("/api/v2/admin/audit-logs", requireV2AdminControlAuth, (_req, res) => {
+    try {
+      const logs = v2AdminEngine.getAuditLogs();
+      res.json({ audit_logs: logs });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || "Failed to list admin audit logs." });
+    }
+  });
+
   // 3. Automated Authority Verification Suite (Phase 13-A)
   app.get("/api/v2/auth/run-tests", async (_req, res) => {
     try {
@@ -3467,6 +3480,754 @@ Structure your response into 3 concise sections:
   // Hydrate in-memory ledger from live PostgreSQL database
   v2ContributionEngine.hydrateFromDatabase().catch((err: any) => {
     console.warn('[server] DB hydration warning:', err?.message || err);
+  });
+  v2RevenueEngine.hydrateFromDatabase().catch((err: any) => {
+    console.warn('[server] Revenue DB hydration warning:', err?.message || err);
+  });
+  v2RewardEngine.hydrateFromDatabase().catch((err: any) => {
+    console.warn('[server] Reward DB hydration warning:', err?.message || err);
+  });
+  v2WalletEngine.hydrateFromDatabase().catch((err: any) => {
+    console.warn('[server] Wallet DB hydration warning:', err?.message || err);
+  });
+
+  // =========================================================================
+  // METFA V2: SERVER-AUTHORITATIVE REWARD ENGINE API (PHASE 6)
+  // =========================================================================
+  app.get("/api/v2/rewards/health", (_req, res) => {
+    try {
+      const health = v2RewardEngine.getEngineHealth();
+      res.json(health);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || "Failed to get reward health." });
+    }
+  });
+
+  app.get("/api/v2/rewards/settlements", requireAuth, (_req, res) => {
+    try {
+      const settlements = v2RewardEngine.listSettlementPeriods();
+      res.json({ settlements });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || "Failed to list settlements." });
+    }
+  });
+
+  app.get("/api/v2/rewards/settlements/:id", requireAuth, (req, res) => {
+    try {
+      const settlementId = String(req.params.id);
+      const settlement = v2RewardEngine.getSettlementPeriod(settlementId);
+      if (!settlement) return res.status(404).json({ error: "Settlement not found." });
+      const allocations = v2RewardEngine.getAllocationsForPeriod(settlementId);
+      res.json({ settlement, allocations });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || "Failed to get settlement." });
+    }
+  });
+
+  app.get("/api/v2/rewards/allocations", requireAuth, (req, res) => {
+    try {
+      const authUserId = req.v2Auth!.userId;
+      const callerRoles = req.v2Auth!.roles;
+      const isPrivileged = callerRoles.some((r) => ["SUPER_ADMIN", "ADMIN", "FINANCE_ADMIN", "OPERATOR"].includes(r));
+      const periodId = req.query.period_id as string | undefined;
+      const targetUserId = req.query.user_id as string | undefined;
+
+      if (!isPrivileged && targetUserId && targetUserId !== authUserId) {
+        return res.status(403).json({ error: "Forbidden: Cannot view another user's allocations." });
+      }
+
+      let allocations: any[] = [];
+      if (periodId) {
+        allocations = v2RewardEngine.getAllocationsForPeriod(periodId);
+        if (!isPrivileged) {
+          allocations = allocations.filter((a) => a.user_id === authUserId);
+        }
+      } else {
+        allocations = v2RewardEngine.getAllocationsForUser(isPrivileged && targetUserId ? targetUserId : authUserId);
+      }
+      res.json({ allocations });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || "Failed to list allocations." });
+    }
+  });
+
+  app.get("/api/v2/rewards/policies", (_req, res) => {
+    try {
+      const policies = v2RewardEngine.listPolicies();
+      res.json({ policies });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || "Failed to list reward policies." });
+    }
+  });
+
+  app.post("/api/v2/rewards/settlements", requireV2FinanceAuth, (req, res) => {
+    try {
+      const { revenue_period_id, contribution_period_id, policy_version } = req.body || {};
+      if (!revenue_period_id) {
+        return res.status(400).json({ error: "Missing revenue_period_id." });
+      }
+      const verifiedUserId = req.v2Auth!.userId;
+      const verifiedRole = req.v2Auth!.roles[0] || "FINANCE_ADMIN";
+      const result = v2RewardEngine.executeSettlement({
+        revenue_period_id,
+        contribution_period_id: contribution_period_id || "CURRENT_ACTIVE_CONTRIBUTIONS",
+        policy_version: typeof policy_version === "number" ? policy_version : undefined,
+        actor_id: verifiedUserId,
+        actor_role: verifiedRole,
+      });
+      if (!result.success) {
+        return res.status(400).json({ error: result.error });
+      }
+      res.json(result);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || "Failed to execute reward settlement." });
+    }
+  });
+
+  app.post("/api/v2/rewards/settlements/:id/transition", requireV2FinanceAuth, (req, res) => {
+    try {
+      const { new_status } = req.body || {};
+      if (!new_status) {
+        return res.status(400).json({ error: "Missing new_status." });
+      }
+      const verifiedUserId = req.v2Auth!.userId;
+      const verifiedRole = req.v2Auth!.roles[0] || "FINANCE_ADMIN";
+      const result = v2RewardEngine.advanceAllocationStatus({
+        allocation_id: String(req.params.id),
+        target_status: new_status,
+        actor_id: verifiedUserId,
+        actor_role: verifiedRole,
+      });
+      if (!result.success) {
+        return res.status(400).json({ error: result.error });
+      }
+      res.json(result);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || "Failed to transition settlement status." });
+    }
+  });
+
+  app.post("/api/v2/rewards/policies", requireV2FinanceAuth, (req, res) => {
+    try {
+      const { percentage_basis_points, description } = req.body || {};
+      if (typeof percentage_basis_points !== "number" || percentage_basis_points <= 0 || percentage_basis_points > 10000) {
+        return res.status(400).json({ error: "Invalid percentage_basis_points (must be between 1 and 10000)." });
+      }
+      const verifiedUserId = req.v2Auth!.userId;
+      const verifiedRole = req.v2Auth!.roles[0] || "FINANCE_ADMIN";
+      const policy = v2RewardEngine.registerPolicy({
+        reward_pool_percentage_basis_points: percentage_basis_points,
+        description: description || "Administrative reward pool policy",
+        actor_id: verifiedUserId,
+        actor_role: verifiedRole,
+      });
+      res.json({ policy });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || "Failed to register reward policy." });
+    }
+  });
+
+  // =========================================================================
+  // METFA V2: SERVER-AUTHORITATIVE WALLET ENGINE API (PHASE 7)
+  // =========================================================================
+  app.get("/api/v2/wallet/health", (_req, res) => {
+    try {
+      const health = v2WalletEngine.getEngineHealth();
+      res.json(health);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || "Failed to get wallet health." });
+    }
+  });
+
+  app.get("/api/v2/wallet/account", requireAuth, (req, res) => {
+    try {
+      const authUserId = req.v2Auth!.userId;
+      const wallet = v2WalletEngine.getOrCreateWallet(authUserId);
+      res.json({ wallet });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || "Failed to retrieve wallet account." });
+    }
+  });
+
+  app.get("/api/v2/wallet/accounts", requireV2FinanceAuth, (_req, res) => {
+    try {
+      const accounts = v2WalletEngine.listWallets();
+      res.json({ accounts });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || "Failed to list wallet accounts." });
+    }
+  });
+
+  app.get("/api/v2/wallet/ledger", requireAuth, (req, res) => {
+    try {
+      const authUserId = req.v2Auth!.userId;
+      const callerRoles = req.v2Auth!.roles;
+      const isPrivileged = callerRoles.some((r) => ["SUPER_ADMIN", "ADMIN", "FINANCE_ADMIN"].includes(r));
+      const targetUserId = req.query.user_id as string | undefined;
+
+      if (!isPrivileged && targetUserId && targetUserId !== authUserId) {
+        return res.status(403).json({ error: "Forbidden: Cannot view another user's wallet ledger." });
+      }
+
+      const userIdToQuery = isPrivileged && targetUserId ? targetUserId : authUserId;
+      const entries = v2WalletEngine.getLedgerEntriesForUser(userIdToQuery);
+      res.json({ entries });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || "Failed to retrieve wallet ledger." });
+    }
+  });
+
+  app.post("/api/v2/wallet/credit-reward", requireV2FinanceAuth, (req, res) => {
+    try {
+      const { allocation_id } = req.body || {};
+      if (!allocation_id) {
+        return res.status(400).json({ error: "Missing allocation_id." });
+      }
+      const verifiedUserId = req.v2Auth!.userId;
+      const verifiedRole = req.v2Auth!.roles[0] || "FINANCE_ADMIN";
+      const result = v2WalletEngine.creditFromRewardAllocation({
+        allocation_id,
+        actor_id: verifiedUserId,
+        actor_role: verifiedRole,
+      });
+      if (!result.success) {
+        return res.status(400).json({ error: result.error });
+      }
+      res.json(result);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || "Failed to credit reward to wallet." });
+    }
+  });
+
+  app.post("/api/v2/wallet/hold", requireV2FinanceAuth, (req, res) => {
+    try {
+      const { wallet_id, reason, lock } = req.body || {};
+      if (!wallet_id || typeof lock !== "boolean") {
+        return res.status(400).json({ error: "Missing wallet_id or boolean lock flag." });
+      }
+      const verifiedUserId = req.v2Auth!.userId;
+      const verifiedRole = req.v2Auth!.roles[0] || "FINANCE_ADMIN";
+      const result = v2WalletEngine.setAuditLock({
+        wallet_id,
+        locked: lock,
+        reason: reason || "Administrative security lock",
+        actor_id: verifiedUserId,
+        actor_role: verifiedRole,
+      });
+      if (!result.success) {
+        return res.status(400).json({ error: result.error });
+      }
+      res.json(result);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || "Failed to toggle wallet hold." });
+    }
+  });
+
+  app.post("/api/v2/wallet/reconcile", requireV2FinanceAuth, (req, res) => {
+    try {
+      const { wallet_id } = req.body || {};
+      if (wallet_id) {
+        const result = v2WalletEngine.reconcileWallet(wallet_id);
+        return res.json(result);
+      }
+      const summary = v2WalletEngine.reconcileAllWallets();
+      res.json(summary);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || "Failed to reconcile wallets." });
+    }
+  });
+
+  app.post("/api/v2/wallet/payout-hold", requireV2FinanceAuth, (req, res) => {
+    try {
+      const { payout_request_id, user_id, amount_cents, currency } = req.body || {};
+      if (!payout_request_id || !user_id || typeof amount_cents !== "number" || amount_cents <= 0) {
+        return res.status(400).json({ error: "Missing required fields: payout_request_id, user_id, amount_cents (> 0)." });
+      }
+      const verifiedUserId = req.v2Auth!.userId;
+      const verifiedRole = req.v2Auth!.roles[0] || "FINANCE_ADMIN";
+      const result = v2WalletEngine.holdForPayout({
+        payout_request_id,
+        user_id,
+        amount_cents,
+        currency: currency || "USD",
+        actor_id: verifiedUserId,
+        actor_role: verifiedRole,
+      });
+      if (!result.success) return res.status(400).json({ error: result.error });
+      res.json(result);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || "Failed to place payout hold." });
+    }
+  });
+
+  app.post("/api/v2/wallet/payout-debit", requireV2FinanceAuth, (req, res) => {
+    try {
+      const { payout_request_id, user_id } = req.body || {};
+      if (!payout_request_id || !user_id) {
+        return res.status(400).json({ error: "Missing payout_request_id or user_id." });
+      }
+      const verifiedUserId = req.v2Auth!.userId;
+      const verifiedRole = req.v2Auth!.roles[0] || "FINANCE_ADMIN";
+      const result = v2WalletEngine.debitPayout({
+        payout_request_id,
+        user_id,
+        actor_id: verifiedUserId,
+        actor_role: verifiedRole,
+      });
+      if (!result.success) return res.status(400).json({ error: result.error });
+      res.json(result);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || "Failed to debit payout." });
+    }
+  });
+
+  app.post("/api/v2/wallet/payout-release", requireV2FinanceAuth, (req, res) => {
+    try {
+      const { payout_request_id, user_id, reason } = req.body || {};
+      if (!payout_request_id || !user_id) {
+        return res.status(400).json({ error: "Missing payout_request_id or user_id." });
+      }
+      const verifiedUserId = req.v2Auth!.userId;
+      const verifiedRole = req.v2Auth!.roles[0] || "FINANCE_ADMIN";
+      const result = v2WalletEngine.releasePayoutHold({
+        payout_request_id,
+        user_id,
+        reason: reason || "Manual release by authorized operator",
+        actor_id: verifiedUserId,
+        actor_role: verifiedRole,
+      });
+      if (!result.success) return res.status(400).json({ error: result.error });
+      res.json(result);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || "Failed to release payout hold." });
+    }
+  });
+
+  app.post("/api/v2/wallet/adjustment", requireV2FinanceAuth, (req, res) => {
+    try {
+      const { user_id, direction, amount_cents, reason } = req.body || {};
+      if (!user_id || !direction || typeof amount_cents !== "number" || amount_cents <= 0) {
+        return res.status(400).json({ error: "Missing required fields: user_id, direction, amount_cents (> 0)." });
+      }
+      const verifiedUserId = req.v2Auth!.userId;
+      const verifiedRole = req.v2Auth!.roles[0] || "FINANCE_ADMIN";
+      const wallet = v2WalletEngine.getWalletByUserId(user_id) || v2WalletEngine.getWallet(user_id);
+      if (!wallet) return res.status(404).json({ error: "Target wallet not found." });
+      const result = v2WalletEngine.adminCorrection({
+        wallet_id: wallet.id,
+        user_id: wallet.user_id,
+        direction,
+        amount_cents,
+        reason: reason || "Administrative correction",
+        actor_id: verifiedUserId,
+        actor_role: verifiedRole,
+      });
+      if (!result.success) return res.status(400).json({ error: result.error });
+      res.json(result);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || "Failed to apply wallet adjustment." });
+    }
+  });
+
+  app.post("/api/v2/wallet/reverse", requireV2FinanceAuth, (req, res) => {
+    try {
+      const { original_entry_id, reason } = req.body || {};
+      if (!original_entry_id) {
+        return res.status(400).json({ error: "Missing original_entry_id." });
+      }
+      const verifiedUserId = req.v2Auth!.userId;
+      const verifiedRole = req.v2Auth!.roles[0] || "FINANCE_ADMIN";
+      const result = v2WalletEngine.reverseLedgerEntry({
+        ledger_entry_id: original_entry_id,
+        reason: reason || "Compliance audit reversal",
+        actor_id: verifiedUserId,
+        actor_role: verifiedRole,
+      });
+      if (!result.success) return res.status(400).json({ error: result.error });
+      res.json(result);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || "Failed to reverse wallet entry." });
+    }
+  });
+
+  // =========================================================================
+  // METFA V2: SERVER-AUTHORITATIVE RISK & ANTI-FRAUD ENGINE API (PHASE 8)
+  // =========================================================================
+  app.get("/api/v2/risk/health", (_req, res) => {
+    try {
+      const health = v2RiskEngine.getEngineHealth();
+      res.json(health);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || "Failed to get risk engine health." });
+    }
+  });
+
+  app.get("/api/v2/risk/signals", requireV2OperatorAuth, (req, res) => {
+    try {
+      const severity = req.query.severity as any;
+      const status = req.query.status as any;
+      const signals = v2RiskEngine.listSignals({ severity, status });
+      res.json({ signals });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || "Failed to list risk signals." });
+    }
+  });
+
+  app.get("/api/v2/risk/policy", requireAuth, (_req, res) => {
+    try {
+      const policy = v2RiskEngine.getActivePolicy();
+      res.json({ policy });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || "Failed to retrieve risk policy." });
+    }
+  });
+
+  app.post("/api/v2/risk/evaluate", requireAuth, (req, res) => {
+    try {
+      const { user_id, event_type, category, affected_module, source_type, evidence } = req.body || {};
+      const authUserId = req.v2Auth!.userId;
+      const callerRoles = req.v2Auth!.roles;
+      const isPrivileged = callerRoles.some((r) => ["SUPER_ADMIN", "ADMIN", "OPERATOR"].includes(r));
+      const targetUserId = isPrivileged && user_id ? user_id : authUserId;
+
+      if (!event_type || !category || !affected_module || !source_type) {
+        return res.status(400).json({ error: "Missing required risk evaluation parameters." });
+      }
+
+      const result = v2RiskEngine.evaluateActivity({
+        user_id: targetUserId,
+        event_type,
+        category,
+        affected_module,
+        source_type,
+        payload: evidence || {},
+      });
+      res.json(result);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || "Failed to evaluate activity risk." });
+    }
+  });
+
+  app.post("/api/v2/risk/signals/:id/resolve", requireV2OperatorAuth, (req, res) => {
+    try {
+      const { resolution, notes } = req.body || {};
+      if (!resolution || !["RESOLVED", "DISMISSED"].includes(resolution)) {
+        return res.status(400).json({ error: "Invalid or missing resolution (must be RESOLVED or DISMISSED)." });
+      }
+      const verifiedUserId = req.v2Auth!.userId;
+      const verifiedRole = req.v2Auth!.roles[0] || "OPERATOR";
+      const result = v2RiskEngine.resolveSignal({
+        signal_id: String(req.params.id),
+        resolution,
+        notes: notes || "Resolved via server authority",
+        actor_id: verifiedUserId,
+        actor_role: verifiedRole,
+      });
+      if (!result.success) {
+        return res.status(400).json({ error: result.error });
+      }
+      res.json(result);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || "Failed to resolve risk signal." });
+    }
+  });
+
+  app.get("/api/v2/risk/summary/:userId", requireAuth, (req, res) => {
+    try {
+      const targetUserId = String(req.params.userId);
+      const authUserId = req.v2Auth!.userId;
+      const callerRoles = req.v2Auth!.roles;
+      const isPrivileged = callerRoles.some((r) => ["SUPER_ADMIN", "ADMIN", "OPERATOR"].includes(r));
+      if (!isPrivileged && targetUserId !== authUserId) {
+        return res.status(403).json({ error: "Forbidden: Cannot view another user's risk summary." });
+      }
+      const summary = v2RiskEngine.getUserRiskSummary(targetUserId);
+      res.json({ summary });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || "Failed to get user risk summary." });
+    }
+  });
+
+  app.post("/api/v2/risk/holds", requireV2OperatorAuth, (req, res) => {
+    try {
+      const { user_id, hold_type, active, reason } = req.body || {};
+      if (!user_id || !hold_type || typeof active !== "boolean") {
+        return res.status(400).json({ error: "Missing required fields: user_id, hold_type, active." });
+      }
+      const verifiedUserId = req.v2Auth!.userId;
+      const verifiedRole = req.v2Auth!.roles[0] || "OPERATOR";
+      const result = v2RiskEngine.setUserHold({
+        user_id,
+        hold_type,
+        active,
+        reason: reason || "Administrative risk compliance hold",
+        actor_id: verifiedUserId,
+        actor_role: verifiedRole,
+      });
+      if (!result.success) return res.status(400).json({ error: result.error });
+      res.json(result);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || "Failed to set risk hold." });
+    }
+  });
+
+  // =========================================================================
+  // METFA V2: TEAM, WORK, AUDIO, CREATOR AUTHORITATIVE APIS
+  // =========================================================================
+  const inMemoryTeamRoster: any[] = [];
+  const inMemoryWorkTasks: any[] = [];
+  const inMemoryAudioCatalog: any[] = [];
+  const inMemoryCreatorProfiles: any[] = [];
+
+  // Team
+  app.get("/api/v2/team/members", requireAuth, (_req, res) => {
+    try {
+      res.json({ members: inMemoryTeamRoster });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || "Failed to list team members." });
+    }
+  });
+
+  app.post("/api/v2/team/members", requireV2OperatorAuth, (req, res) => {
+    try {
+      const { name, role, domain, clearanceLevel } = req.body || {};
+      if (!name || !role || !domain) {
+        return res.status(400).json({ error: "Missing required team member fields: name, role, domain." });
+      }
+      const member = {
+        id: `team_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+        name,
+        role,
+        domain,
+        clearanceLevel: clearanceLevel || "TIER_1_STANDARD",
+        activeTasksCount: 0,
+        capacityPercentage: 100,
+        status: "ACTIVE",
+        verificationBadge: "Verified Contributor",
+        createdAt: new Date().toISOString(),
+      };
+      inMemoryTeamRoster.push(member);
+      res.json({ success: true, member });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || "Failed to add team member." });
+    }
+  });
+
+  // Work
+  app.get("/api/v2/work/tasks", requireAuth, (_req, res) => {
+    try {
+      res.json({ tasks: inMemoryWorkTasks });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || "Failed to list work tasks." });
+    }
+  });
+
+  app.post("/api/v2/work/tasks", requireAuth, (req, res) => {
+    try {
+      const { title, description, affectedModule, priority, requirements, deliverables } = req.body || {};
+      if (!title || !description || !affectedModule) {
+        return res.status(400).json({ error: "Missing required task fields: title, description, affectedModule." });
+      }
+      const verifiedUserId = req.v2Auth!.userId;
+      const task = {
+        id: `task_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+        title,
+        description,
+        affectedModule,
+        priority: priority || "MEDIUM",
+        requirements: Array.isArray(requirements) ? requirements : [],
+        deliverables: Array.isArray(deliverables) ? deliverables : [],
+        status: "OPEN",
+        createdBy: verifiedUserId,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      };
+      inMemoryWorkTasks.push(task);
+      res.json({ success: true, task });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || "Failed to create work task." });
+    }
+  });
+
+  app.post("/api/v2/work/tasks/:id/submit", requireAuth, (req, res) => {
+    try {
+      const taskId = req.params.id;
+      const task = inMemoryWorkTasks.find((t) => t.id === taskId);
+      if (!task) return res.status(404).json({ error: "Task not found." });
+      const { notes } = req.body || {};
+      task.status = "SUBMITTED";
+      task.submissionNotes = notes || "Deliverables submitted for review";
+      task.updatedAt = new Date().toISOString();
+      res.json({ success: true, task });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || "Failed to submit work deliverable." });
+    }
+  });
+
+  // Audio
+  app.get("/api/v2/audio/tracks", (_req, res) => {
+    try {
+      res.json({ tracks: inMemoryAudioCatalog });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || "Failed to list audio tracks." });
+    }
+  });
+
+  app.post("/api/v2/audio/tracks", requireAuth, (req, res) => {
+    try {
+      const { title, artist, genre, licenseType, audioUrl, coverUrl } = req.body || {};
+      if (!title || !artist || !audioUrl) {
+        return res.status(400).json({ error: "Missing required audio fields: title, artist, audioUrl." });
+      }
+      const verifiedUserId = req.v2Auth!.userId;
+      const track = {
+        id: `track_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+        title,
+        artist,
+        genre: genre || "General",
+        licenseType: licenseType || "Commercial Sync",
+        audioUrl,
+        coverUrl: coverUrl || "",
+        registeredBy: verifiedUserId,
+        createdAt: new Date().toISOString(),
+      };
+      inMemoryAudioCatalog.push(track);
+      res.json({ success: true, track });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || "Failed to register audio track." });
+    }
+  });
+
+  // Creator
+  app.get("/api/v2/creator/profiles", async (_req, res) => {
+    try {
+      const supabase = getPublicSupabaseClient() || getServerSupabaseClient();
+      if (supabase) {
+        const { data: dbProfiles, error } = await supabase
+          .from("profiles")
+          .select("id, display_name, username, avatar_url, is_verified, stats, created_at")
+          .limit(50);
+        if (!error && Array.isArray(dbProfiles) && dbProfiles.length > 0) {
+          const profiles = dbProfiles.map((p: any) => {
+            const stats = p.stats || {};
+            const cp = v2ContributionEngine.getUserSummary(p.id).total_qualified_points;
+            return {
+              id: `cr_${p.id.slice(0, 8)}`,
+              userId: p.id,
+              username: p.username || "creator",
+              displayName: p.display_name || p.username || "Creator",
+              avatarUrl: p.avatar_url || "https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=150&q=80",
+              tier: p.is_verified ? "VERIFIED" : cp > 10000 ? "CREATOR_PRO" : "BASIC",
+              accumulatedPoints: cp,
+              monthlyReach: Number(stats.followersCount || 0) * 10 + Number(stats.totalLikes || 0),
+              monetizationStatus: "ACTIVE",
+              qualityMultiplier: 1.0,
+              joinedDate: p.created_at ? p.created_at.slice(0, 10) : new Date().toISOString().slice(0, 10),
+              walletBindingId: `wal_${p.id.slice(0, 8)}`,
+            };
+          });
+          return res.json({ profiles });
+        }
+      }
+      res.json({ profiles: inMemoryCreatorProfiles });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || "Failed to list creator profiles." });
+    }
+  });
+
+  app.get("/api/v2/creator/me", requireAuth, async (req, res) => {
+    try {
+      const authUserId = req.v2Auth!.userId;
+      const supabase = getPublicSupabaseClient() || getServerSupabaseClient();
+      let profileData: any = null;
+      if (supabase) {
+        const { data } = await supabase
+          .from("profiles")
+          .select("id, display_name, username, avatar_url, is_verified, stats, created_at")
+          .eq("id", authUserId)
+          .maybeSingle();
+        profileData = data;
+      }
+      const inMem = inMemoryCreatorProfiles.find((p) => p.userId === authUserId);
+      const cp = v2ContributionEngine.getUserSummary(authUserId).total_qualified_points;
+      const profile = {
+        id: inMem?.id || `cr_${authUserId.slice(0, 8)}`,
+        userId: authUserId,
+        username: profileData?.username || inMem?.username || "creator",
+        displayName: profileData?.display_name || inMem?.displayName || "Creator",
+        avatarUrl: profileData?.avatar_url || inMem?.avatarUrl || "https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=150&q=80",
+        tier: profileData?.is_verified ? "VERIFIED" : inMem?.tier || (cp > 10000 ? "CREATOR_PRO" : "BASIC"),
+        accumulatedPoints: cp,
+        monthlyReach: profileData?.stats?.followersCount ? Number(profileData.stats.followersCount) * 10 : 0,
+        monetizationStatus: inMem?.monetizationStatus || "ACTIVE",
+        qualityMultiplier: inMem?.qualityMultiplier || 1.0,
+        joinedDate: profileData?.created_at ? profileData.created_at.slice(0, 10) : inMem?.joinedDate || new Date().toISOString().slice(0, 10),
+        walletBindingId: `wal_${authUserId.slice(0, 8)}`,
+      };
+      res.json({ profile });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || "Failed to retrieve creator profile." });
+    }
+  });
+
+  app.post("/api/v2/creator/profiles", requireAuth, async (req, res) => {
+    try {
+      const { username, displayName, tier, qualityMultiplier } = req.body || {};
+      const authUserId = req.v2Auth!.userId;
+      const cleanUsername = (username || "creator").replace(/^@/, "").trim();
+      const cleanDisplayName = (displayName || cleanUsername).trim();
+
+      // Persist to public.profiles via user bearer token if valid
+      const token = extractBearerToken(req);
+      const url = (process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || '').trim();
+      const anonKey = (
+        process.env.VITE_SUPABASE_ANON_KEY ||
+        process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY ||
+        process.env.SUPABASE_ANON_KEY ||
+        ''
+      ).trim();
+      if (token && url && anonKey) {
+        try {
+          const userClient = createClient(url, anonKey, {
+            auth: { autoRefreshToken: false, persistSession: false },
+            global: { headers: { Authorization: `Bearer ${token}` } },
+          });
+          await userClient.from("profiles").upsert({
+            id: authUserId,
+            username: cleanUsername,
+            display_name: cleanDisplayName,
+            updated_at: new Date().toISOString(),
+          });
+        } catch {
+          // Graceful fallback if user RLS rejects
+        }
+      }
+
+      const existingIdx = inMemoryCreatorProfiles.findIndex((p) => p.userId === authUserId);
+      const cp = v2ContributionEngine.getUserSummary(authUserId).total_qualified_points;
+      const profile = {
+        id: `cr_${authUserId.slice(0, 8)}`,
+        userId: authUserId,
+        username: cleanUsername,
+        displayName: cleanDisplayName,
+        avatarUrl: `https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=150&q=80`,
+        tier: tier || (cp > 10000 ? "CREATOR_PRO" : "BASIC"),
+        accumulatedPoints: cp,
+        monthlyReach: 0,
+        monetizationStatus: "ACTIVE",
+        qualityMultiplier: typeof qualityMultiplier === "number" ? qualityMultiplier : 1.0,
+        joinedDate: new Date().toISOString().slice(0, 10),
+        walletBindingId: `wal_${authUserId.slice(0, 8)}`,
+      };
+      if (existingIdx >= 0) {
+        inMemoryCreatorProfiles[existingIdx] = profile;
+      } else {
+        inMemoryCreatorProfiles.push(profile);
+      }
+      res.json({ success: true, profile });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || "Failed to update creator profile." });
+    }
   });
 
   // =========================================================================

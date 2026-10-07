@@ -23,16 +23,25 @@ import {
 } from 'lucide-react';
 import { V2ApprovalItem, V2UserRole } from '../../../types/v2Admin';
 import { v2AdminEngine } from '../../../services/v2AdminEngine';
+import { v2IntegrationAdapter } from '../../../services/v2IntegrationAdapter';
 import { getClientAuthToken } from '../../../services/supabaseClient';
 
 export const V2VerifiedModule: React.FC = () => {
-  const [activeTab, setActiveTab] = useState<'queue' | 'tiers' | 'audit'>('queue');
+  const [activeTab, setActiveTab] = useState<'queue' | 'submit' | 'tiers'>('queue');
   const [verificationItems, setVerificationItems] = useState<V2ApprovalItem[]>([]);
   const [selectedItem, setSelectedItem] = useState<V2ApprovalItem | null>(null);
   const [decisionNotes, setDecisionNotes] = useState<string>('Identity documents and portfolio verified.');
   const [actionSuccess, setActionSuccess] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState<string>('');
+
+  // Submit Application Form State
+  const [applicantUserId, setApplicantUserId] = useState<string>('usr_creator_01');
+  const [applicantUsername, setApplicantUsername] = useState<string>('alex.creator');
+  const [requestedTier, setRequestedTier] = useState<'VERIFIED' | 'CREATOR_PRO' | 'BUSINESS'>('VERIFIED');
+  const [evidenceRef, setEvidenceRef] = useState<string>('https://portfolio.metfa.social/alex');
+  const [portfolioCount, setPortfolioCount] = useState<number>(12);
+  const [country, setCountry] = useState<string>('US');
 
   const reloadData = () => {
     try {
@@ -99,6 +108,34 @@ export const V2VerifiedModule: React.FC = () => {
       reloadData();
     } else {
       setActionError(res.error || 'Failed to submit decision.');
+    }
+  };
+
+  const handleSubmitApplication = (e: React.FormEvent) => {
+    e.preventDefault();
+    setActionSuccess(null);
+    setActionError(null);
+
+    if (!applicantUserId.trim() || !applicantUsername.trim() || !evidenceRef.trim()) {
+      setActionError('User ID, handle, and evidence URL are required.');
+      return;
+    }
+
+    const res = v2IntegrationAdapter.submitVerificationApplication({
+      userId: applicantUserId.trim(),
+      username: applicantUsername.trim().replace(/^@/, ''),
+      requestedTier,
+      evidenceRef: evidenceRef.trim(),
+      portfolioCount,
+      country: country.trim().toUpperCase(),
+    });
+
+    if (res.success) {
+      setActionSuccess(`Verification application submitted for @${applicantUsername}. Now awaiting operator review.`);
+      reloadData();
+      setActiveTab('queue');
+    } else {
+      setActionError('Failed to submit application.');
     }
   };
 
