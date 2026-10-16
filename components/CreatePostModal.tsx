@@ -40,6 +40,9 @@ interface CreatePostModalProps {
   onPostCreated: (
     post: Omit<CommunityPost, 'id' | 'likesCount' | 'remixCount' | 'commentsCount' | 'sharesCount' | 'createdAt' | 'comments'>
   ) => Promise<any> | void;
+  initialVideoSrc?: string;
+  initialAudioTrack?: AudioTrack | null;
+  onOpenAiEditor?: () => void;
 }
 
 export const TEXT_GRADIENTS = [
@@ -56,6 +59,9 @@ export const CreatePostModal: React.FC<CreatePostModalProps> = ({
   onClose,
   userProfile,
   onPostCreated,
+  initialVideoSrc,
+  initialAudioTrack,
+  onOpenAiEditor,
 }) => {
   const [postMode, setPostMode] = useState<'text' | 'media'>('text');
   const [mediaType, setMediaType] = useState<'image' | 'video'>('image');
@@ -89,19 +95,34 @@ export const CreatePostModal: React.FC<CreatePostModalProps> = ({
   // Reset all fields when modal opens to ensure no lingering dummy or prior media
   React.useEffect(() => {
     if (isOpen) {
-      setPostMode('text');
+      if (initialVideoSrc) {
+        setPostMode('media');
+        setMediaType('video');
+        setVideoSrc(initialVideoSrc);
+        setVideoTitle('Edited Video');
+      } else {
+        setPostMode('text');
+        setMediaType('image');
+        setVideoSrc(undefined);
+        setVideoTitle('');
+      }
+
+      if (initialAudioTrack) {
+        setSelectedAudioTrack(initialAudioTrack);
+      } else {
+        setSelectedAudioTrack(null);
+      }
+
       setCaption('');
       setPrompt('');
       setSelectedGradient('none');
       setMediaGallery([]);
-      setVideoSrc(undefined);
-      setVideoTitle('');
       setVideoThumbnail(undefined);
       setValidationError(null);
       setIsPublishing(false);
       setUploadProgress(null);
     }
-  }, [isOpen]);
+  }, [isOpen, initialVideoSrc, initialAudioTrack]);
 
   const handleClose = () => {
     if (isPublishing) return;
@@ -130,29 +151,39 @@ export const CreatePostModal: React.FC<CreatePostModalProps> = ({
     for (let i = 0; i < files.length; i++) {
       const file = files[i];
       const isVideo = file.type.startsWith('video');
-      const rawBase64 = await fileToBase64(file);
-      const base64 = isVideo ? rawBase64 : await compressImageDataUrl(rawBase64, 900, 900, 0.75);
-
-      // Save media to persistent IndexedDB
-      await saveMediaItem({
-        userId: userProfile.id,
-        type: isVideo ? 'video' : 'image',
-        dataUrl: base64,
-        name: file.name,
-        sizeBytes: file.size,
-        mimeType: file.type,
-      });
 
       if (isVideo) {
         setMediaType('video');
-        setVideoSrc(base64);
         setPostMode('media');
-        // Crucial: When user uploads a video, completely clear photo gallery
         setMediaGallery([]);
+
+        // Zero-copy object URL ensures instant preview without memory blocking for videos of any duration and size
+        const blobUrl = URL.createObjectURL(file);
+        setVideoSrc(blobUrl);
+        saveMediaItem({
+          userId: userProfile.id,
+          type: 'video',
+          dataUrl: blobUrl,
+          name: file.name,
+          sizeBytes: file.size,
+          mimeType: file.type,
+        }).catch(() => {});
         break; // Only 1 video per post
       } else {
+        const rawBase64 = await fileToBase64(file);
+        const base64 = await compressImageDataUrl(rawBase64, 900, 900, 0.75);
+
+        // Save media to persistent IndexedDB
+        await saveMediaItem({
+          userId: userProfile.id,
+          type: 'image',
+          dataUrl: base64,
+          name: file.name,
+          sizeBytes: file.size,
+          mimeType: file.type,
+        });
+
         setMediaType('image');
-        // Crucial: When user uploads photos, completely clear any video
         setVideoSrc(undefined);
         setVideoTitle('');
         setVideoThumbnail(undefined);
@@ -311,6 +342,15 @@ export const CreatePostModal: React.FC<CreatePostModalProps> = ({
     setIsPublishing(true);
     setUploadProgress(videoSrc ? 'Uploading video to secure storage & publishing...' : 'Publishing post to feed...');
 
+    let isFinished = false;
+    const publishWatchdog = setTimeout(() => {
+      if (!isFinished) {
+        setIsPublishing(false);
+        setUploadProgress(null);
+        setValidationError('Publishing timed out. Your media is preserved. Please check your connection and try again.');
+      }
+    }, 28000);
+
     try {
       await onPostCreated({
         author: {
@@ -340,6 +380,9 @@ export const CreatePostModal: React.FC<CreatePostModalProps> = ({
         feedType: 'for_you',
       });
 
+      isFinished = true;
+      clearTimeout(publishWatchdog);
+
       // Successful publish -> reset and close cleanly
       setVideoSrc(undefined);
       setVideoTitle('');
@@ -351,6 +394,8 @@ export const CreatePostModal: React.FC<CreatePostModalProps> = ({
       setUploadProgress(null);
       onClose();
     } catch (err: any) {
+      isFinished = true;
+      clearTimeout(publishWatchdog);
       console.error('[CreatePostModal] Error publishing post:', err);
       setIsPublishing(false);
       setUploadProgress(null);
@@ -686,7 +731,7 @@ export const CreatePostModal: React.FC<CreatePostModalProps> = ({
                   </div>
                 </div>
               ) : (
-                /* Upload Buttons for Video and Photos */
+                /* Upload Buttons for Video and Photos + AI Editor */
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <label className="border-2 border-dashed border-purple-200 hover:border-purple-600 rounded-2xl p-5 flex flex-col items-center justify-center cursor-pointer bg-purple-50/30 hover:bg-purple-50 transition group">
                     <input type="file" accept="video/*" onChange={handleMediaUpload} className="hidden" />
@@ -709,6 +754,26 @@ export const CreatePostModal: React.FC<CreatePostModalProps> = ({
                     </span>
                     <span className="text-[10px] text-slate-400 mt-0.5">Single or multi-photo gallery</span>
                   </label>
+
+                  {onOpenAiEditor && (
+                    <button
+                      type="button"
+                      onClick={onOpenAiEditor}
+                      className="sm:col-span-2 border-2 border-dashed border-purple-300 hover:border-purple-600 rounded-2xl p-4 flex items-center justify-center gap-3 cursor-pointer bg-gradient-to-r from-purple-50/80 via-indigo-50/80 to-teal-50/80 hover:from-purple-100 hover:to-teal-100 transition group shadow-2xs"
+                    >
+                      <div className="w-9 h-9 rounded-xl bg-gradient-to-tr from-purple-600 to-teal-500 text-white flex items-center justify-center group-hover:scale-110 transition shadow-xs">
+                        <Sparkles className="w-4 h-4" />
+                      </div>
+                      <div className="text-left">
+                        <span className="text-xs font-bold text-slate-800 group-hover:text-purple-700 block">
+                          Open AI Video & Audio Editor
+                        </span>
+                        <span className="text-[10px] text-slate-500">
+                          Trim unwanted parts, clean voice, boost clarity, or crop to a Reel
+                        </span>
+                      </div>
+                    </button>
+                  )}
                 </div>
               )}
             </div>

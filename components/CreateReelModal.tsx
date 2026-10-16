@@ -29,6 +29,8 @@ interface CreateReelModalProps {
   onClose: () => void;
   userProfile: UserProfile;
   onReelCreated: (reel: ReelHighlight) => void;
+  initialVideoSrc?: string;
+  onOpenAiEditor?: () => void;
 }
 
 export const CreateReelModal: React.FC<CreateReelModalProps> = ({
@@ -36,14 +38,24 @@ export const CreateReelModal: React.FC<CreateReelModalProps> = ({
   onClose,
   userProfile,
   onReelCreated,
+  initialVideoSrc,
+  onOpenAiEditor,
 }) => {
   const [title, setTitle] = useState('');
   const [caption, setCaption] = useState('');
   const [promptUsed, setPromptUsed] = useState('');
-  const [videoSrc, setVideoSrc] = useState('https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerBlazes.mp4');
+  const [videoSrc, setVideoSrc] = useState(
+    initialVideoSrc || 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerBlazes.mp4'
+  );
   const [thumbnailSrc, setThumbnailSrc] = useState('https://images.unsplash.com/photo-1508739773434-c26b3d09e071?w=600');
-  const [duration, setDuration] = useState(15);
+  const [duration, setDuration] = useState(0);
   const [selectedAudioTrack, setSelectedAudioTrack] = useState<AudioTrack | null>(null);
+
+  React.useEffect(() => {
+    if (isOpen && initialVideoSrc) {
+      setVideoSrc(initialVideoSrc);
+    }
+  }, [isOpen, initialVideoSrc]);
 
   // Audio Mixer & Alignment settings
   const [showAudioMixer, setShowAudioMixer] = useState(false);
@@ -62,11 +74,23 @@ export const CreateReelModal: React.FC<CreateReelModalProps> = ({
   const handleVideoUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
-    const reader = new FileReader();
-    reader.onload = () => {
-      setVideoSrc(reader.result as string);
-    };
-    reader.readAsDataURL(file);
+    setVideoSrc(URL.createObjectURL(file));
+  };
+
+  const handleVideoLoadedMetadata = (e: React.SyntheticEvent<HTMLVideoElement>) => {
+    const video = e.currentTarget;
+    let d = video.duration;
+    if (!isFinite(d) || isNaN(d) || d <= 0) {
+      if (video.seekable && video.seekable.length > 0) {
+        try {
+          const sEnd = video.seekable.end(video.seekable.length - 1);
+          if (isFinite(sEnd) && sEnd > 0) d = sEnd;
+        } catch {}
+      }
+    }
+    if (isFinite(d) && !isNaN(d) && d > 0) {
+      setDuration(Math.round(d));
+    }
   };
 
   const handleThumbnailUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -90,6 +114,8 @@ export const CreateReelModal: React.FC<CreateReelModalProps> = ({
 
     let resolvedTrack = selectedAudioTrack;
 
+    const finalDuration = duration > 0 ? duration : 15;
+
     if (resolvedTrack) {
       recordTrackUsage(resolvedTrack.id);
     } else {
@@ -100,7 +126,7 @@ export const CreateReelModal: React.FC<CreateReelModalProps> = ({
         userAvatar: userProfile.avatar,
         reelId: tempReelId,
         videoSrc,
-        duration,
+        duration: finalDuration,
         title: `Original sound — @${userProfile.username.replace('@', '')}`,
       });
     }
@@ -113,7 +139,7 @@ export const CreateReelModal: React.FC<CreateReelModalProps> = ({
       volume: musicVolume / 100,
       originalVolume: originalAudioVolume / 100,
       startTime: audioStartTime,
-      duration: duration,
+      duration: finalDuration,
       fadeIn,
       fadeOut,
     };
@@ -124,7 +150,7 @@ export const CreateReelModal: React.FC<CreateReelModalProps> = ({
       promptUsed: promptUsed.trim() || undefined,
       videoSrc,
       thumbnailSrc: compressedThumb,
-      duration,
+      duration: finalDuration,
       isLiked: false,
       musicTrack: musicTrackName,
       audioTrack: resolvedTrack || undefined,
@@ -175,9 +201,21 @@ export const CreateReelModal: React.FC<CreateReelModalProps> = ({
           <form onSubmit={handleSubmit} className="space-y-4 overflow-y-auto pr-1 pt-3 flex-1">
             {/* Video Upload Box */}
             <div>
-              <label className="text-xs font-bold text-gray-300 block mb-1.5 uppercase tracking-wider">
-                Upload Video Clip (MP4 / WebM)
-              </label>
+              <div className="flex items-center justify-between mb-1.5">
+                <label className="text-xs font-bold text-gray-300 block uppercase tracking-wider">
+                  Upload Video Clip (MP4 / WebM)
+                </label>
+                {onOpenAiEditor && (
+                  <button
+                    type="button"
+                    onClick={onOpenAiEditor}
+                    className="text-[11px] font-bold text-purple-400 hover:text-purple-300 flex items-center gap-1 transition cursor-pointer"
+                  >
+                    <Sparkles className="w-3.5 h-3.5" />
+                    <span>AI Video Editor</span>
+                  </button>
+                )}
+              </div>
               <label className="border-2 border-dashed border-gray-700 hover:border-purple-500 rounded-2xl p-4 flex flex-col items-center justify-center cursor-pointer bg-gray-950/60 transition group">
                 <input
                   type="file"
@@ -189,12 +227,17 @@ export const CreateReelModal: React.FC<CreateReelModalProps> = ({
                 <span className="text-xs font-bold text-gray-300 group-hover:text-white">
                   Choose Video File
                 </span>
-                <span className="text-[10px] text-gray-500">Up to 90 seconds</span>
+                <span className="text-[10px] text-gray-500">MP4, WebM, or MOV video</span>
               </label>
 
               {/* Video preview */}
               <div className="mt-2.5 rounded-2xl overflow-hidden border border-gray-800 bg-black aspect-video flex items-center justify-center">
-                <video src={videoSrc} controls className="w-full h-full object-cover" />
+                <video
+                  src={videoSrc}
+                  controls
+                  onLoadedMetadata={handleVideoLoadedMetadata}
+                  className="w-full h-full object-cover"
+                />
               </div>
             </div>
 

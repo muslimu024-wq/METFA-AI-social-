@@ -51,6 +51,25 @@ export async function uploadMediaItem(
         const ext = mimeType.split('/')[1] || (options.type === 'video' ? 'mp4' : 'jpg');
         rawFileName = `upload_${Date.now()}.${ext}`;
       }
+    } else if (source.startsWith('blob:')) {
+      try {
+        const res = await fetch(source);
+        blob = await res.blob();
+        mimeType = blob.type || (options.type === 'video' ? 'video/mp4' : 'image/jpeg');
+        if (!rawFileName) {
+          const ext = (mimeType.split('/')[1] || '').split(';')[0] || (options.type === 'video' ? 'mp4' : 'jpg');
+          rawFileName = `upload_${Date.now()}.${ext}`;
+        }
+      } catch (blobErr) {
+        console.warn('[StorageService] Error fetching blob URL:', blobErr);
+        return {
+          url: source,
+          storageType: 'indexeddb',
+          fileName: rawFileName || 'existing_media',
+          sizeBytes: 0,
+          mimeType: options.type === 'video' ? 'video/mp4' : 'image/jpeg',
+        };
+      }
     } else {
       // It's already an HTTP URL or relative path
       return {

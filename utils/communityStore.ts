@@ -441,8 +441,8 @@ export const createPostAsync = async (
   let resolvedAuthorId = authorId;
   const postToSave = { ...post };
 
-  // 1. Upload Base64 video if present to get permanent HTTP URL
-  if (postToSave.videoSrc && postToSave.videoSrc.startsWith('data:')) {
+  // 1. Upload Base64 or Blob video if present to get permanent HTTP URL
+  if (postToSave.videoSrc && (postToSave.videoSrc.startsWith('data:') || postToSave.videoSrc.startsWith('blob:'))) {
     try {
       const upload = await uploadMediaItem(postToSave.videoSrc, {
         userId: resolvedAuthorId,
@@ -457,8 +457,8 @@ export const createPostAsync = async (
     }
   }
 
-  // 2. Upload Base64 image if present
-  if (postToSave.imageSrc && postToSave.imageSrc.startsWith('data:')) {
+  // 2. Upload Base64 or Blob image if present
+  if (postToSave.imageSrc && (postToSave.imageSrc.startsWith('data:') || postToSave.imageSrc.startsWith('blob:'))) {
     try {
       const upload = await uploadMediaItem(postToSave.imageSrc, {
         userId: resolvedAuthorId,

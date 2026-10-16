@@ -14,7 +14,11 @@ const CreatePageModal = lazy(() => import('../../components/CreatePageModal'));
 const CreateGroupModal = lazy(() => import('../../components/CreateGroupModal'));
 const ShareToFeedModal = lazy(() => import('../../components/ShareToFeedModal'));
 const MessagesModule = lazy(() => import('../../components/messaging/MessagesModule'));
+const AiEditorModal = lazy(() => import('../ai-editor'));
 import { CommunityPost, ReelHighlight, UserProfile } from '../../types/community';
+import { AudioTrack } from '../../types/audio';
+import { ProcessedMediaResult } from '../ai-editor/types';
+import { createOriginalSoundRecord } from '../../utils/audioStore';
 import {
   getCommunityPosts,
   saveCommunityPosts,
@@ -85,6 +89,9 @@ export const SocialEcosystemModule: React.FC<SocialEcosystemProps> = ({
   const [isCreateReelOpen, setIsCreateReelOpen] = useState(false);
   const [isCreatePageOpen, setIsCreatePageOpen] = useState(false);
   const [isCreateGroupOpen, setIsCreateGroupOpen] = useState(false);
+  const [isAiEditorOpen, setIsAiEditorOpen] = useState(false);
+  const [editorInitialVideo, setEditorInitialVideo] = useState<{ src: string; isReel: boolean; title?: string } | null>(null);
+  const [editorInitialAudio, setEditorInitialAudio] = useState<AudioTrack | null>(null);
 
   // Automatically load and synchronize posts from Supabase database
   useEffect(() => {
@@ -240,6 +247,14 @@ export const SocialEcosystemModule: React.FC<SocialEcosystemProps> = ({
               return;
             }
             setIsCreatePostOpen(true);
+          }}
+          onOpenAiEditor={() => {
+            if (!isAuthenticated) {
+              if (onOpenAuthModal) onOpenAuthModal();
+              else window.dispatchEvent(new CustomEvent('metfa_open_auth_modal'));
+              return;
+            }
+            setIsAiEditorOpen(true);
           }}
           targetSharedPostId={targetSharedPostId}
           isLoadingPosts={isLoadingPosts}
@@ -410,18 +425,80 @@ export const SocialEcosystemModule: React.FC<SocialEcosystemProps> = ({
       {/* Creation Modals */}
       <CreatePostModal
         isOpen={isCreatePostOpen}
-        onClose={() => setIsCreatePostOpen(false)}
+        onClose={() => {
+          setIsCreatePostOpen(false);
+          setEditorInitialVideo(null);
+          setEditorInitialAudio(null);
+        }}
         userProfile={userProfile}
         onPostCreated={handlePostCreated}
+        initialVideoSrc={editorInitialVideo && !editorInitialVideo.isReel ? editorInitialVideo.src : undefined}
+        initialAudioTrack={editorInitialAudio}
+        onOpenAiEditor={() => {
+          setIsCreatePostOpen(false);
+          if (!isAuthenticated) {
+            if (onOpenAuthModal) onOpenAuthModal();
+            else window.dispatchEvent(new CustomEvent('metfa_open_auth_modal'));
+            return;
+          }
+          setIsAiEditorOpen(true);
+        }}
       />
 
       {isCreateReelOpen && (
         <Suspense fallback={null}>
           <CreateReelModal
             isOpen={isCreateReelOpen}
-            onClose={() => setIsCreateReelOpen(false)}
+            onClose={() => {
+              setIsCreateReelOpen(false);
+              setEditorInitialVideo(null);
+            }}
             userProfile={userProfile}
             onReelCreated={handleReelCreated}
+            initialVideoSrc={editorInitialVideo && editorInitialVideo.isReel ? editorInitialVideo.src : undefined}
+            onOpenAiEditor={() => {
+              setIsCreateReelOpen(false);
+              if (!isAuthenticated) {
+                if (onOpenAuthModal) onOpenAuthModal();
+                else window.dispatchEvent(new CustomEvent('metfa_open_auth_modal'));
+                return;
+              }
+              setIsAiEditorOpen(true);
+            }}
+          />
+        </Suspense>
+      )}
+
+      {/* AI Video & Audio Editor Modal */}
+      {isAiEditorOpen && (
+        <Suspense fallback={null}>
+          <AiEditorModal
+            isOpen={isAiEditorOpen}
+            onClose={() => setIsAiEditorOpen(false)}
+            onPostVideo={(dataUrl, isReel, title) => {
+              setIsAiEditorOpen(false);
+              if (isReel) {
+                setEditorInitialVideo({ src: dataUrl, isReel: true, title });
+                setIsCreateReelOpen(true);
+              } else {
+                setEditorInitialVideo({ src: dataUrl, isReel: false, title });
+                setIsCreatePostOpen(true);
+              }
+            }}
+            onPostAudio={(result) => {
+              setIsAiEditorOpen(false);
+              const soundTrack = createOriginalSoundRecord({
+                userId: userProfile.id,
+                username: userProfile.username,
+                userAvatar: userProfile.avatar,
+                reelId: `sound_${Date.now()}`,
+                title: result.name.replace(/\.[^/.]+$/, ''),
+                audioUrl: result.dataUrl,
+                duration: Math.round(result.durationSeconds),
+              });
+              setEditorInitialAudio(soundTrack);
+              setIsCreatePostOpen(true);
+            }}
           />
         </Suspense>
       )}

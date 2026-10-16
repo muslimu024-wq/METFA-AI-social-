@@ -86,6 +86,7 @@ interface CommunityFeedProps {
   userProfile: UserProfile;
   onRemixPrompt: (prompt: string, stylePreset?: string) => void;
   onCreatePostClick: () => void;
+  onOpenAiEditor?: () => void;
   targetSharedPostId?: string | null;
   isLoadingPosts?: boolean;
   onClearSharedPost?: () => void;
@@ -114,6 +115,7 @@ export const CommunityFeed: React.FC<CommunityFeedProps> = ({
   userProfile,
   onRemixPrompt,
   onCreatePostClick,
+  onOpenAiEditor,
   targetSharedPostId,
   isLoadingPosts = false,
   onClearSharedPost,
@@ -968,14 +970,14 @@ export const CommunityFeed: React.FC<CommunityFeedProps> = ({
           </button>
         </div>
 
-        <div className="flex items-center justify-between pt-2 border-t border-slate-100 gap-1">
+        <div className="flex items-center justify-between pt-2 border-t border-slate-100 gap-1 flex-wrap sm:flex-nowrap">
           <button
             type="button"
             onClick={onCreatePostClick}
             className="flex-1 py-1.5 px-2 rounded-xl text-xs font-bold text-slate-700 hover:text-slate-900 hover:bg-slate-100 transition flex items-center justify-center gap-1.5 cursor-pointer"
           >
             <ImageIcon className="w-4 h-4 text-emerald-600" />
-            <span>Photo / Video</span>
+            <span>Photo/Video</span>
           </button>
 
           <button
@@ -984,7 +986,7 @@ export const CommunityFeed: React.FC<CommunityFeedProps> = ({
             className="flex-1 py-1.5 px-2 rounded-xl text-xs font-bold text-slate-700 hover:text-slate-900 hover:bg-slate-100 transition flex items-center justify-center gap-1.5 cursor-pointer"
           >
             <Type className="w-4 h-4 text-purple-600" />
-            <span>Text Post</span>
+            <span>Text</span>
           </button>
 
           <button
@@ -995,6 +997,17 @@ export const CommunityFeed: React.FC<CommunityFeedProps> = ({
             <Sparkles className="w-4 h-4 text-teal-600" />
             <span>AI Magic</span>
           </button>
+
+          {onOpenAiEditor && (
+            <button
+              type="button"
+              onClick={onOpenAiEditor}
+              className="flex-1 py-1.5 px-2 rounded-xl text-xs font-bold text-indigo-700 hover:text-indigo-900 hover:bg-indigo-50/60 transition flex items-center justify-center gap-1.5 cursor-pointer"
+            >
+              <Film className="w-4 h-4 text-indigo-600" />
+              <span>AI Editor</span>
+            </button>
+          )}
         </div>
       </div>
 

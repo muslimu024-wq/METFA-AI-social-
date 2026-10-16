@@ -896,8 +896,8 @@ ${METFA_AI_SAFETY_SYSTEM_INSTRUCTION}`;
     if (buffer.subarray(0, 4).toString("ascii") === "OggS") {
       return { ext: "ogg", mime: "audio/ogg" };
     }
-    // MP4 / MOV / M4A: offset 4-8 has "ftyp"
-    if (buffer.subarray(4, 8).toString("ascii") === "ftyp") {
+    // MP4 / MOV / M4A: look for "ftyp" in first 64 bytes (standard ISO-BMFF brand box)
+    if (buffer.subarray(0, 64).toString("ascii").includes("ftyp")) {
       return { ext: "mp4", mime: "video/mp4" };
     }
     // WebM / Matroska: 1A 45 DF A3
@@ -932,10 +932,10 @@ ${METFA_AI_SAFETY_SYSTEM_INSTRUCTION}`;
         buffer = Buffer.from(fileBase64, "base64");
       }
 
-      // Enforce 15 MB file size limit
-      const MAX_UPLOAD_SIZE = 15 * 1024 * 1024;
+      // Enforce file size limit based on server capacity (35 MB binary fits in 50MB json body limit)
+      const MAX_UPLOAD_SIZE = 35 * 1024 * 1024;
       if (buffer.length > MAX_UPLOAD_SIZE) {
-        return res.status(413).json({ error: "Payload Too Large: File exceeds 15MB limit." });
+        return res.status(413).json({ error: `Payload Too Large: File exceeds server upload limit of ${Math.round(MAX_UPLOAD_SIZE / (1024 * 1024))}MB.` });
       }
 
       // Inspect binary magic bytes to authenticate media format
