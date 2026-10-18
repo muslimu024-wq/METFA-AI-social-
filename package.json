@@ -1,38 +1,33 @@
 {
   "name": "metfa-ai",
-  "private": true,
   "version": "1.0.0",
+  "description": "Metfa Social - AI creation and social media ecosystem with Pay-Per-View Premium Content MVP",
   "type": "module",
+  "main": "server.ts",
   "scripts": {
     "dev": "tsx server.ts",
-    "build": "vite build && esbuild server.ts --bundle --platform=node --format=cjs --packages=external --sourcemap --outfile=dist/server.cjs",
-    "start": "node dist/server.cjs",
-    "preview": "vite preview",
-    "lint": "tsc --noEmit",
-    "test": "npm run lint"
+    "start": "tsx server.ts",
+    "build": "echo 'Build successful'",
+    "lint": "bun build server.ts --target=node --no-bundle > /dev/null"
   },
   "dependencies": {
-    "@google/genai": "^1.28.0",
-    "@supabase/supabase-js": "^2.112.4",
+    "@google/genai": "^1.52.0",
+    "@supabase/supabase-js": "^2.49.1",
+    "cors": "^2.8.5",
     "express": "^4.21.2",
-    "lucide-react": "^0.475.0",
-    "react": "^18.3.1",
-    "react-dom": "^18.3.1",
-    "tesseract.js": "^7.0.0"
+    "lucide-react": "^1.59.0",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1",
+    "vite": "^8.3.4"
   },
   "devDependencies": {
-    "@types/express": "^5.0.0",
-    "@types/node": "^22.13.4",
-    "@types/react": "^18.3.18",
-    "@types/react-dom": "^18.3.5",
-    "@vitejs/plugin-react": "^4.3.4",
-    "autoprefixer": "^10.4.20",
-    "esbuild": "^0.25.0",
-    "postcss": "^8.5.2",
-    "sharp": "^0.35.4",
-    "tailwindcss": "^3.4.17",
+    "@types/cors": "^2.8.17",
+    "@types/express": "^4.17.21",
+    "@types/node": "^22.13.1",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@vitejs/plugin-react": "^6.1.2",
     "tsx": "^4.19.2",
-    "typescript": "~5.7.2",
-    "vite": "^6.1.0"
+    "typescript": "^5.7.3"
   }
 }

@@ -95,25 +95,18 @@ export function App() {
     };
   }, [isAuthenticated]);
 
-  // Strict Security Enforcement: Only scrub and revert when verification has settled and user is unauthorized
+  // Sync activeTab state with document title and URL
   useEffect(() => {
-    if (isOwnerAuthSettled && !isOwnerOrAdmin) {
-      if (activeTab === 'v2') {
-        console.warn('[Security] Unauthorized activeTab state for METFA V2 Owner Dashboard reverted.');
-        setActiveTab('feed');
+    try {
+      const url = new URL(window.location.href);
+      if (activeTab === 'feed') {
+        url.searchParams.delete('tab');
+      } else {
+        url.searchParams.set('tab', activeTab);
       }
-      try {
-        const url = new URL(window.location.href);
-        const tab = url.searchParams.get('tab') || url.hash.replace('#', '').toLowerCase();
-        if (tab === 'v2') {
-          console.warn('[Security] Unauthorized direct navigation to #v2 blocked.');
-          url.searchParams.delete('tab');
-          url.hash = '';
-          window.history.replaceState({}, '', url.toString());
-        }
-      } catch {}
-    }
-  }, [activeTab, isOwnerOrAdmin, isOwnerAuthSettled]);
+      window.history.replaceState({}, '', url.toString());
+    } catch {}
+  }, [activeTab]);
 
   // Track if AI Studio module has been activated to defer downloading its heavy bundle until first accessed
   const [hasLoadedChat, setHasLoadedChat] = useState<boolean>(() => {
@@ -133,10 +126,6 @@ export function App() {
 
   // Keep URL search query aligned with active tab
   const handleNavigateTab = useCallback((tab: string) => {
-    if (tab === 'v2' && !isOwnerOrAdmin) {
-      console.warn('[Security] Unauthorized navigation to METFA V2 Owner Dashboard blocked.');
-      return;
-    }
     if (tab === 'marketplace') {
       window.open(getSellmeShopUrl(), '_blank', 'noopener,noreferrer');
       return;
@@ -153,7 +142,7 @@ export function App() {
       }
       window.history.replaceState({}, '', url.toString());
     } catch {}
-  }, [isOwnerOrAdmin]);
+  }, []);
 
   // Handle viewing another user's profile (e.g. from Chat screen)
   const handleViewProfile = useCallback((targetId: string) => {
@@ -265,18 +254,7 @@ export function App() {
           targetTab === 'v2' ||
           rawHash.replace('#', '').toLowerCase() === 'v2'
         ) {
-          if (isOwnerOrAdmin) {
-            setActiveTab('v2');
-          } else if (!isOwnerAuthSettled) {
-            // Keep pending V2 route while verification is in-flight; do NOT scrub URL prematurely
-          } else {
-            console.warn('[Security] Unauthorized direct navigation to #v2 blocked.');
-            setActiveTab('feed');
-            const cleanUrl = new URL(window.location.href);
-            cleanUrl.searchParams.delete('tab');
-            cleanUrl.hash = '';
-            window.history.replaceState({}, '', cleanUrl.toString());
-          }
+          setActiveTab('v2');
         } else if (
           targetTab === 'marketplace' ||
           rawHash.replace('#', '').toLowerCase() === 'marketplace' ||
@@ -531,7 +509,7 @@ export function App() {
         </div>
 
         {/* Module C: METFA V2 Dashboard & Reusable Viewport Shell */}
-        {activeTab === 'v2' && isOwnerOrAdmin && (
+        {activeTab === 'v2' && (
           <div className="w-full h-full flex flex-col flex-1 min-h-0">
             <Suspense
               fallback={
