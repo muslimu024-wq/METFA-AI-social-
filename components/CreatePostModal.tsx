@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import {
   Plus,
   X,
@@ -30,6 +30,7 @@ import { recordTrackUsage } from '../utils/audioStore';
 import { generateAICaptionAndHashtags, refineTextWithAI } from '../services/aiAssistantService';
 import { saveMediaItem, fileToBase64 } from '../utils/mediaStorage';
 import { compressImageDataUrl } from '../utils/storageUtils';
+import { uploadMediaItem } from '../services/storageService';
 import AudioTrackPickerModal from './AudioTrackPickerModal';
 import AudioLicenseInfoModal from './AudioLicenseInfoModal';
 
@@ -91,6 +92,40 @@ export const CreatePostModal: React.FC<CreatePostModalProps> = ({
   const [validationError, setValidationError] = useState<string | null>(null);
   const [isPublishing, setIsPublishing] = useState(false);
   const [uploadProgress, setUploadProgress] = useState<string | null>(null);
+  const [hasVideoPreviewError, setHasVideoPreviewError] = useState(false);
+  const [videoPreviewErrorDetails, setVideoPreviewErrorDetails] = useState<{
+    code?: number;
+    message?: string;
+  } | null>(null);
+
+  // Selected Video Original File and Metadata
+  const selectedVideoFileRef = useRef<File | null>(null);
+  const [selectedVideoMetadata, setSelectedVideoMetadata] = useState<{
+    name: string;
+    size: number;
+    type: string;
+  } | null>(null);
+
+  // References for safe object URL cleanup and preventing duplicate submissions
+  const videoBlobUrlRef = useRef<string | null>(null);
+  const isSubmittingRef = useRef<boolean>(false);
+  const uploadAbortControllerRef = useRef<AbortController | null>(null);
+
+  // Clean up any in-flight upload and remaining object URL when the modal unmounts
+  useEffect(() => {
+    return () => {
+      if (uploadAbortControllerRef.current) {
+        uploadAbortControllerRef.current.abort();
+        uploadAbortControllerRef.current = null;
+      }
+      if (videoBlobUrlRef.current && videoBlobUrlRef.current.startsWith('blob:')) {
+        try {
+          URL.revokeObjectURL(videoBlobUrlRef.current);
+        } catch {}
+        videoBlobUrlRef.current = null;
+      }
+    };
+  }, []);
 
   // Reset all fields when modal opens to ensure no lingering dummy or prior media
   React.useEffect(() => {
@@ -121,11 +156,30 @@ export const CreatePostModal: React.FC<CreatePostModalProps> = ({
       setValidationError(null);
       setIsPublishing(false);
       setUploadProgress(null);
+      setHasVideoPreviewError(false);
+      setVideoPreviewErrorDetails(null);
+      selectedVideoFileRef.current = null;
+      setSelectedVideoMetadata(null);
+      isSubmittingRef.current = false;
     }
   }, [isOpen, initialVideoSrc, initialAudioTrack]);
 
   const handleClose = () => {
-    if (isPublishing) return;
+    if (isPublishing) {
+      if (uploadAbortControllerRef.current) {
+        uploadAbortControllerRef.current.abort();
+        uploadAbortControllerRef.current = null;
+      }
+      isSubmittingRef.current = false;
+      setIsPublishing(false);
+      setUploadProgress(null);
+    }
+    if (videoBlobUrlRef.current && videoBlobUrlRef.current.startsWith('blob:')) {
+      try {
+        URL.revokeObjectURL(videoBlobUrlRef.current);
+      } catch {}
+      videoBlobUrlRef.current = null;
+    }
     setValidationError(null);
     setIsPublishing(false);
     setUploadProgress(null);
@@ -135,6 +189,11 @@ export const CreatePostModal: React.FC<CreatePostModalProps> = ({
     setMediaGallery([]);
     setCaption('');
     setPrompt('');
+    setHasVideoPreviewError(false);
+    setVideoPreviewErrorDetails(null);
+    selectedVideoFileRef.current = null;
+    setSelectedVideoMetadata(null);
+    isSubmittingRef.current = false;
     onClose();
   };
 
@@ -150,23 +209,44 @@ export const CreatePostModal: React.FC<CreatePostModalProps> = ({
 
     for (let i = 0; i < files.length; i++) {
       const file = files[i];
-      const isVideo = file.type.startsWith('video');
+      const isVideo = file.type.startsWith('video') || /\.(mp4|webm|mov|m4v|mkv|avi|ogv)$/i.test(file.name);
 
       if (isVideo) {
         setMediaType('video');
         setPostMode('media');
         setMediaGallery([]);
 
-        // Zero-copy object URL ensures instant preview without memory blocking for videos of any duration and size
+        // Revoke prior blob URL to prevent memory leaks while ensuring preview reliability
+        if (videoBlobUrlRef.current && videoBlobUrlRef.current.startsWith('blob:')) {
+          try {
+            URL.revokeObjectURL(videoBlobUrlRef.current);
+          } catch {}
+        }
         const blobUrl = URL.createObjectURL(file);
+        videoBlobUrlRef.current = blobUrl;
+        selectedVideoFileRef.current = file;
+        setSelectedVideoMetadata({
+          name: file.name,
+          size: file.size,
+          type: file.type || 'video/mp4',
+        });
         setVideoSrc(blobUrl);
+        // Reset preview error states whenever a new video is selected
+        setHasVideoPreviewError(false);
+        setVideoPreviewErrorDetails(null);
+
+        if (!videoTitle.trim()) {
+          const cleanName = file.name.replace(/\.[^/.]+$/, '');
+          setVideoTitle(cleanName);
+        }
+
         saveMediaItem({
           userId: userProfile.id,
           type: 'video',
           dataUrl: blobUrl,
           name: file.name,
           sizeBytes: file.size,
-          mimeType: file.type,
+          mimeType: file.type || 'video/mp4',
         }).catch(() => {});
         break; // Only 1 video per post
       } else {
@@ -183,6 +263,16 @@ export const CreatePostModal: React.FC<CreatePostModalProps> = ({
           mimeType: file.type,
         });
 
+        if (videoBlobUrlRef.current && videoBlobUrlRef.current.startsWith('blob:')) {
+          try {
+            URL.revokeObjectURL(videoBlobUrlRef.current);
+          } catch {}
+          videoBlobUrlRef.current = null;
+        }
+        selectedVideoFileRef.current = null;
+        setSelectedVideoMetadata(null);
+        setHasVideoPreviewError(false);
+        setVideoPreviewErrorDetails(null);
         setMediaType('image');
         setVideoSrc(undefined);
         setVideoTitle('');
@@ -212,6 +302,16 @@ export const CreatePostModal: React.FC<CreatePostModalProps> = ({
 
   const handleRemoveVideo = () => {
     setValidationError(null);
+    if (videoBlobUrlRef.current && videoBlobUrlRef.current.startsWith('blob:')) {
+      try {
+        URL.revokeObjectURL(videoBlobUrlRef.current);
+      } catch {}
+      videoBlobUrlRef.current = null;
+    }
+    selectedVideoFileRef.current = null;
+    setSelectedVideoMetadata(null);
+    setHasVideoPreviewError(false);
+    setVideoPreviewErrorDetails(null);
     setVideoSrc(undefined);
     setVideoTitle('');
     setVideoThumbnail(undefined);
@@ -223,6 +323,16 @@ export const CreatePostModal: React.FC<CreatePostModalProps> = ({
   const handleClearAllMedia = () => {
     setValidationError(null);
     setMediaGallery([]);
+    if (videoBlobUrlRef.current && videoBlobUrlRef.current.startsWith('blob:')) {
+      try {
+        URL.revokeObjectURL(videoBlobUrlRef.current);
+      } catch {}
+      videoBlobUrlRef.current = null;
+    }
+    selectedVideoFileRef.current = null;
+    setSelectedVideoMetadata(null);
+    setHasVideoPreviewError(false);
+    setVideoPreviewErrorDetails(null);
     setVideoSrc(undefined);
     setVideoTitle('');
     setVideoThumbnail(undefined);
@@ -288,8 +398,41 @@ export const CreatePostModal: React.FC<CreatePostModalProps> = ({
     }
   };
 
+  /**
+   * Diagnostic video preview error handler.
+   * Captures error code and message from HTMLMediaElement before UI state transition.
+   */
+  const handleVideoError = (e: React.SyntheticEvent<HTMLVideoElement, Event>) => {
+    const mediaErr = e.currentTarget.error;
+    const errCode = mediaErr?.code;
+    const errMsg = mediaErr?.message || '';
+
+    console.warn('[CreatePostModal] Video preview decode error:', {
+      code: errCode,
+      message: errMsg,
+      src: videoSrc,
+      fileName: selectedVideoMetadata?.name || selectedVideoFileRef.current?.name,
+      fileSize: selectedVideoMetadata?.size || selectedVideoFileRef.current?.size,
+      fileType: selectedVideoMetadata?.type || selectedVideoFileRef.current?.type,
+    });
+
+    setVideoPreviewErrorDetails({
+      code: errCode,
+      message: errMsg || (errCode === 4
+        ? 'Media format or codec is not supported for inline preview in this browser'
+        : errCode === 3
+        ? 'A decoding error occurred while loading this video'
+        : errCode === 2
+        ? 'A network error occurred while reading the media'
+        : errCode === 1
+        ? 'Media loading was aborted'
+        : 'Inline preview unavailable'),
+    });
+    setHasVideoPreviewError(true);
+  };
+
   const handleSubmit = async () => {
-    if (isPublishing) return;
+    if (isPublishing || isSubmittingRef.current) return;
     setValidationError(null);
 
     // Validation 1: Video Post must have a video title
@@ -339,19 +482,54 @@ export const CreatePostModal: React.FC<CreatePostModalProps> = ({
       ? (videoTitle.trim() || caption.trim().slice(0, 80) || 'Metfa Video Post')
       : (prompt.trim() || caption.trim().slice(0, 80) || 'Metfa Social Update');
 
+    isSubmittingRef.current = true;
     setIsPublishing(true);
-    setUploadProgress(videoSrc ? 'Uploading video to secure storage & publishing...' : 'Publishing post to feed...');
+    setUploadProgress(videoSrc ? 'Uploading video to secure storage...' : 'Publishing post to feed...');
 
+    // Adaptive network timeout: 180 seconds rather than blind 28s interruption
     let isFinished = false;
-    const publishWatchdog = setTimeout(() => {
+    const abortController = new AbortController();
+    uploadAbortControllerRef.current = abortController;
+    const publishTimeout = setTimeout(() => {
       if (!isFinished) {
-        setIsPublishing(false);
-        setUploadProgress(null);
-        setValidationError('Publishing timed out. Your media is preserved. Please check your connection and try again.');
+        abortController.abort();
       }
-    }, 28000);
+    }, 180000);
 
     try {
+      let permanentVideoUrl = videoSrc;
+
+      // Ensure video is persistently uploaded BEFORE post is published
+      // Never allow an ephemeral 'blob:' URL to be stored as a published post URL
+      // Use the preserved native File if available to ensure accurate MIME type and binary stream
+      if (videoSrc && (videoSrc.startsWith('blob:') || videoSrc.startsWith('data:'))) {
+        setUploadProgress('Uploading video to permanent storage...');
+        const mediaSourceToUpload = selectedVideoFileRef.current || videoSrc;
+        const uploadResult = await uploadMediaItem(mediaSourceToUpload, {
+          userId: userProfile.id,
+          type: 'video',
+          fileName: selectedVideoMetadata?.name || `${videoTitle.trim() || 'video'}.mp4`,
+          signal: abortController.signal,
+        });
+
+        // Guard against late upload completion if operation was aborted or cancelled
+        if (abortController.signal.aborted || !isSubmittingRef.current) {
+          throw new DOMException('The upload operation was aborted.', 'AbortError');
+        }
+
+        if (!uploadResult?.url || uploadResult.url.startsWith('blob:') || uploadResult.url.startsWith('data:')) {
+          throw new Error('Upload failed: Could not persist video to permanent storage. Post was not published to prevent broken media.');
+        }
+        permanentVideoUrl = uploadResult.url;
+      }
+
+      // Guard: do not publish if aborted while upload was completing
+      if (abortController.signal.aborted || !isSubmittingRef.current) {
+        throw new DOMException('The upload operation was aborted.', 'AbortError');
+      }
+
+      setUploadProgress('Finalizing post publication...');
+
       await onPostCreated({
         author: {
           id: userProfile.id,
@@ -372,7 +550,7 @@ export const CreatePostModal: React.FC<CreatePostModalProps> = ({
         // Crucial: When video is uploaded, NEVER attach old photos or dummy cover
         imageSrc: videoSrc ? (videoThumbnail || undefined) : primaryImage,
         imageGallery: videoSrc ? undefined : (mediaGallery.length > 0 ? mediaGallery : undefined),
-        videoSrc: videoSrc || undefined,
+        videoSrc: permanentVideoUrl || undefined,
         textBackgroundPreset: postMode === 'text' && selectedGradient !== 'none' ? selectedGradient : undefined,
         postType: postMode === 'text' ? 'text' : 'media',
         audioTrack: selectedAudioTrack || undefined,
@@ -381,9 +559,23 @@ export const CreatePostModal: React.FC<CreatePostModalProps> = ({
       });
 
       isFinished = true;
-      clearTimeout(publishWatchdog);
+      clearTimeout(publishTimeout);
+      uploadAbortControllerRef.current = null;
+      isSubmittingRef.current = false;
+
+      // Successful publish: revoke blob URL now that media is permanently stored
+      if (videoBlobUrlRef.current && videoBlobUrlRef.current.startsWith('blob:')) {
+        try {
+          URL.revokeObjectURL(videoBlobUrlRef.current);
+        } catch {}
+        videoBlobUrlRef.current = null;
+      }
 
       // Successful publish -> reset and close cleanly
+      selectedVideoFileRef.current = null;
+      setSelectedVideoMetadata(null);
+      setHasVideoPreviewError(false);
+      setVideoPreviewErrorDetails(null);
       setVideoSrc(undefined);
       setVideoTitle('');
       setVideoThumbnail(undefined);
@@ -395,11 +587,19 @@ export const CreatePostModal: React.FC<CreatePostModalProps> = ({
       onClose();
     } catch (err: any) {
       isFinished = true;
-      clearTimeout(publishWatchdog);
+      clearTimeout(publishTimeout);
+      uploadAbortControllerRef.current = null;
+      isSubmittingRef.current = false;
       console.error('[CreatePostModal] Error publishing post:', err);
       setIsPublishing(false);
       setUploadProgress(null);
-      setValidationError(err?.message || 'Failed to publish post. Please check your connection and try again.');
+
+      // CRITICAL: On upload or publish failure, preserve caption, prompt, title, and selected video in composer
+      if (err?.name === 'AbortError' || abortController.signal.aborted) {
+        setValidationError('Publishing timed out after 3 minutes. Your video and caption have been preserved. Please check your connection and try again.');
+      } else {
+        setValidationError(err?.message || 'Failed to publish post. Your media and caption have been preserved. Please check your connection and try again.');
+      }
     }
   };
 
@@ -641,13 +841,93 @@ export const CreatePostModal: React.FC<CreatePostModalProps> = ({
                       </button>
                     </div>
 
-                    <div className="relative rounded-2xl overflow-hidden bg-black border border-slate-300 max-h-80 flex items-center justify-center">
-                      <video
-                        src={videoSrc}
-                        controls
-                        poster={videoThumbnail}
-                        className="w-full max-h-80 object-contain"
-                      />
+                    <div className="relative rounded-2xl overflow-hidden bg-black border border-slate-300 min-h-48 flex items-center justify-center">
+                      {hasVideoPreviewError ? (
+                        <div className="w-full bg-slate-900 rounded-2xl p-4 sm:p-5 text-slate-200 border border-slate-800 space-y-3.5">
+                          <div className="flex items-start gap-3">
+                            <div className="w-9 h-9 rounded-xl bg-amber-500/15 border border-amber-500/30 flex items-center justify-center text-amber-400 shrink-0 mt-0.5">
+                              <AlertCircle className="w-5 h-5" />
+                            </div>
+                            <div className="flex-1 min-w-0">
+                              <div className="flex flex-wrap items-center gap-2">
+                                <span className="text-xs font-bold text-slate-100">Video Preview Unavailable</span>
+                                {videoPreviewErrorDetails?.code && (
+                                  <span className="text-[10px] font-mono px-2 py-0.5 rounded-md bg-slate-800 text-amber-300 border border-slate-700 font-semibold">
+                                    Error Code {videoPreviewErrorDetails.code}
+                                  </span>
+                                )}
+                              </div>
+                              <p className="text-[11px] text-slate-300 mt-1 leading-relaxed">
+                                The current browser cannot decode this video for inline playback. Your original file remains attached and ready to upload to secure storage.
+                              </p>
+                              {videoPreviewErrorDetails?.message && (
+                                <p className="text-[10px] font-mono text-slate-400 mt-1 bg-slate-950/60 p-2 rounded-lg border border-slate-800/80 break-words">
+                                  {videoPreviewErrorDetails.message}
+                                </p>
+                              )}
+                            </div>
+                          </div>
+
+                          {/* File info banner */}
+                          {selectedVideoMetadata && (
+                            <div className="bg-slate-950/90 rounded-xl p-3 border border-slate-800 flex items-center justify-between text-[11px] gap-2">
+                              <div className="flex items-center gap-2 min-w-0">
+                                <Film className="w-4 h-4 text-purple-400 shrink-0" />
+                                <span className="font-semibold text-slate-100 truncate" title={selectedVideoMetadata.name}>
+                                  {selectedVideoMetadata.name}
+                                </span>
+                              </div>
+                              <div className="flex items-center gap-2 text-slate-400 font-mono text-[10px] shrink-0">
+                                <span className="text-slate-300">{(selectedVideoMetadata.size / (1024 * 1024)).toFixed(2)} MB</span>
+                                {selectedVideoMetadata.type && (
+                                  <span className="px-1.5 py-0.5 bg-slate-800 rounded text-purple-300 font-medium">
+                                    {selectedVideoMetadata.type}
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+                          )}
+
+                          {/* Actions: Continue to Upload or Remove */}
+                          <div className="flex flex-wrap items-center justify-between gap-2 pt-1 border-t border-slate-800">
+                            <span className="text-[11px] text-slate-400">
+                              Continue to upload this video file directly.
+                            </span>
+                            <div className="flex items-center gap-2 ml-auto">
+                              <button
+                                type="button"
+                                onClick={handleRemoveVideo}
+                                className="px-3 py-1.5 text-xs font-semibold text-slate-400 hover:text-slate-200 hover:bg-slate-800 rounded-xl transition cursor-pointer"
+                              >
+                                Replace File
+                              </button>
+                              <button
+                                type="button"
+                                onClick={handleSubmit}
+                                disabled={isPublishing}
+                                className="px-4 py-2 bg-gradient-to-r from-purple-600 to-teal-500 hover:from-purple-500 hover:to-teal-400 text-white text-xs font-bold rounded-xl shadow-md transition flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+                              >
+                                <UploadCloud className="w-4 h-4" />
+                                <span>Continue to Upload</span>
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+                      ) : (
+                        <video
+                          src={videoSrc}
+                          controls
+                          playsInline
+                          preload="metadata"
+                          poster={videoThumbnail}
+                          className="w-full max-h-80 object-contain"
+                          onError={handleVideoError}
+                        >
+                          {selectedVideoMetadata?.type && (
+                            <source src={videoSrc} type={selectedVideoMetadata.type} />
+                          )}
+                        </video>
+                      )}
                     </div>
                   </div>
 

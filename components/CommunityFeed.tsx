@@ -64,6 +64,7 @@ import { executeNativeShare, SharePayload } from '../utils/shareUtils';
 import { generateQuickAIReply } from '../services/aiAssistantService';
 import { AiRecipeBox } from './AiRecipeBox';
 import { PostContent } from './PostContent';
+import { CommunityVideoPlayer } from './CommunityPostCard';
 import { useAuth } from '../context/AuthContext';
 import {
   createComment as createCommentRemote,
@@ -1400,11 +1401,10 @@ export const CommunityFeed: React.FC<CommunityFeedProps> = ({
                 /* Photo / Video / Gallery */
                 <div className="relative group bg-slate-950 max-h-[520px] overflow-hidden flex items-center justify-center">
                   {post.videoSrc ? (
-                    <video
+                    <CommunityVideoPlayer
                       src={post.videoSrc}
-                      controls
-                      playsInline
-                      poster={post.imageSrc}
+                      poster={post.videoThumbnail || post.imageSrc}
+                      title={post.videoTitle || post.prompt}
                       className="w-full max-h-[520px] object-cover bg-black"
                     />
                   ) : post.imageGallery && post.imageGallery.length > 1 ? (
