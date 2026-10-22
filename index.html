@@ -2,7 +2,7 @@
 <html lang="en" class="light">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
     <title>METFA Social - Multimodal AI Studio & Creative Community</title>
     <meta name="description" content="METFA Social - Next-gen Multimodal AI Assistant, Scene Transformation, Reels, Groups, Creator Pages, and Live Streaming." />
     <!-- Standard & Favicon Icons (derived directly from official master logo) -->
@@ -98,6 +98,16 @@
         padding: 0;
         overflow-x: hidden;
       }
+      /* Minimal CSS fallback for images before external styling parses */
+      img {
+        max-width: 100%;
+        height: auto;
+      }
+      img[src*="logo"], img[src*="icon"], img[src*="emblem"] {
+        max-width: 48px;
+        max-height: 48px;
+        object-fit: cover;
+      }
       code, pre {
         font-family: 'JetBrains Mono', monospace;
       }
@@ -144,13 +154,24 @@
           navigator.serviceWorker.register('/sw.js', { scope: '/' })
             .then((registration) => {
               console.log('Metfa Social ServiceWorker registered successfully:', registration.scope);
+
+              // Detect if an update is already waiting in the background on load
+              if (registration.waiting && navigator.serviceWorker.controller) {
+                console.log('[PWA] Waiting ServiceWorker detected on launch.');
+                const payload = { registration, waiting: registration.waiting };
+                window.dispatchEvent(new CustomEvent('metfa_pwa_update_available', { detail: payload }));
+                window.dispatchEvent(new CustomEvent('swUpdated', { detail: payload }));
+              }
+
               registration.onupdatefound = () => {
                 const installingWorker = registration.installing;
                 if (installingWorker) {
                   installingWorker.onstatechange = () => {
                     if (installingWorker.state === 'installed' && navigator.serviceWorker.controller) {
-                      console.log('[PWA] New version of Metfa Social available.');
-                      window.dispatchEvent(new CustomEvent('metfa_pwa_update_available', { detail: { registration } }));
+                      console.log('[PWA] New version of Metfa Social installed & ready.');
+                      const payload = { registration, waiting: registration.waiting || installingWorker };
+                      window.dispatchEvent(new CustomEvent('metfa_pwa_update_available', { detail: payload }));
+                      window.dispatchEvent(new CustomEvent('swUpdated', { detail: payload }));
                     }
                   };
                 }

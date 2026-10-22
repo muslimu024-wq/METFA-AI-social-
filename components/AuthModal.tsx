@@ -248,6 +248,9 @@ export const AuthModal: React.FC<AuthModalProps> = ({
             <img
               src="/logo.png"
               alt="Metfa Social"
+              width={40}
+              height={40}
+              style={{ width: 40, height: 40, minWidth: 40, minHeight: 40, maxWidth: 40, maxHeight: 40 }}
               className="w-10 h-10 min-w-[40px] max-w-[40px] min-h-[40px] max-h-[40px] rounded-2xl shadow-md object-cover block shrink-0 pointer-events-none"
               onError={(e) => {
                 (e.currentTarget as HTMLImageElement).src = '/metfa-emblem.png';

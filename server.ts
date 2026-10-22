@@ -609,6 +609,47 @@ app.get("/api/v2/premium/run-tests", async (_req, res) => {
   }
 });
 
+// Public Author Profile Resolver (preserves RLS while safely providing author identity for posts)
+app.get("/api/authors/:id", async (req, res) => {
+  try {
+    const authorId = req.params.id;
+    if (!authorId || typeof authorId !== "string") {
+      return res.status(400).json({ success: false, error: "Invalid author ID" });
+    }
+
+    const supabase = getServerSupabaseClient();
+    if (!supabase || !supabase.auth?.admin) {
+      return res.status(503).json({ success: false, error: "Database authority unavailable" });
+    }
+
+    const { data, error } = await supabase.auth.admin.getUserById(authorId);
+    if (error || !data?.user) {
+      return res.status(404).json({ success: false, error: "Author profile not found" });
+    }
+
+    const u = data.user;
+    const meta = u.user_metadata || {};
+    const displayName = (meta.full_name || meta.name || (u.email ? u.email.split("@")[0] : "Metfa Creator")).trim();
+    const username = (meta.username || meta.user_name || "creator").trim().replace(/^@/, "");
+    const avatarUrl = meta.avatar_url || "";
+    const metfaId = meta.metfa_id || "";
+
+    res.json({
+      success: true,
+      profile: {
+        id: u.id,
+        name: displayName,
+        username,
+        avatar: avatarUrl,
+        metfaId,
+        isVerified: true
+      }
+    });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message || "Failed to retrieve author profile" });
+  }
+});
+
 app.get(["/manifest.json","/manifest.webmanifest"],(_req,res)=>{res.setHeader("Content-Type","application/manifest+json");res.setHeader("Cache-Control","public, max-age=3600");const manifestPath=path.join(process.cwd(),"public","manifest.json");res.sendFile(manifestPath)});app.get("/sw.js",(_req,res)=>{res.setHeader("Service-Worker-Allowed","/");res.setHeader("Cache-Control","no-cache, no-store, must-revalidate");res.setHeader("Content-Type","application/javascript");const swPath=path.join(process.cwd(),"public","sw.js");res.sendFile(swPath)});app.get("/favicon.ico",(_req,res)=>{res.setHeader("Content-Type","image/x-icon");res.setHeader("Cache-Control","public, max-age=86400");const icoPath=path.join(process.cwd(),"public","favicon.ico");res.sendFile(icoPath)});app.get("/robots.txt",(req,res)=>{const protocol=req.headers["x-forwarded-proto"]||req.protocol||"https";const host=req.headers.host||"localhost:3000";const baseUrl=process.env.APP_URL?.trim()||`${protocol}://${host}`;res.setHeader("Content-Type","text/plain");res.setHeader("Cache-Control","public, max-age=86400");res.send(`User-agent: *
 Allow: /
 Disallow: /api/
@@ -646,4 +687,4 @@ Sitemap: ${baseUrl}/sitemap.xml
     <changefreq>weekly</changefreq>
     <priority>0.7</priority>
   </url>
-</urlset>`)});if(process.env.NODE_ENV!=="production"){const vite=await createViteServer({server:{middlewareMode:true},appType:"spa"});app.use(vite.middlewares);app.use("*",async(req,res,next)=>{const url=req.originalUrl;try{const indexPath=path.resolve(process.cwd(),"index.html");let template=fs.readFileSync(indexPath,"utf-8");const supabaseUrl=(process.env.VITE_SUPABASE_URL||process.env.SUPABASE_URL||"").trim();const supabaseAnonKey=(process.env.VITE_SUPABASE_ANON_KEY||process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY||process.env.SUPABASE_ANON_KEY||"").trim();const envSnippet=`<script>window.__ENV__=Object.assign(window.__ENV__||{},{VITE_SUPABASE_URL:${JSON.stringify(supabaseUrl)},VITE_SUPABASE_ANON_KEY:${JSON.stringify(supabaseAnonKey)}});<\/script>`;template=template.replace("<head>",`<head>${envSnippet}`);template=await vite.transformIndexHtml(url,template);res.status(200).set({"Content-Type":"text/html"}).end(template)}catch(e){vite.ssrFixStacktrace(e);next(e)}})}else{const distPath=path.join(process.cwd(),"dist");app.use(express.static(distPath));app.get("*",(_req,res)=>{const indexFile=path.join(distPath,"index.html");if(fs.existsSync(indexFile)){let content=fs.readFileSync(indexFile,"utf-8");const supabaseUrl=(process.env.VITE_SUPABASE_URL||process.env.SUPABASE_URL||"").trim();const supabaseAnonKey=(process.env.VITE_SUPABASE_ANON_KEY||process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY||process.env.SUPABASE_ANON_KEY||"").trim();const envSnippet=`<script>window.__ENV__=Object.assign(window.__ENV__||{},{VITE_SUPABASE_URL:${JSON.stringify(supabaseUrl)},VITE_SUPABASE_ANON_KEY:${JSON.stringify(supabaseAnonKey)}});<\/script>`;content=content.replace("<head>",`<head>${envSnippet}`);res.status(200).set({"Content-Type":"text/html"}).send(content)}else{res.sendFile(indexFile)}})}app.listen(PORT,"0.0.0.0",()=>{console.log(`Metfa Social Server running on http://0.0.0.0:${PORT} (Primary model: gemini-3.8-flash)`)})}__name(startServer,"startServer");startServer();
+</urlset>`)});const distPath=path.join(process.cwd(),"dist");app.use("/assets",express.static(path.join(distPath,"assets")));app.use("/assets",(_req,res)=>{res.status(404).type("text/plain").send("Asset Not Found")});if(process.env.NODE_ENV!=="production"){const vite=await createViteServer({server:{middlewareMode:true},appType:"spa"});app.use(vite.middlewares);app.use("*",async(req,res,next)=>{const url=req.originalUrl||req.url;try{const indexPath=path.resolve(process.cwd(),"index.html");let template=fs.readFileSync(indexPath,"utf-8");const supabaseUrl=(process.env.VITE_SUPABASE_URL||process.env.SUPABASE_URL||"").trim();const supabaseAnonKey=(process.env.VITE_SUPABASE_ANON_KEY||process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY||process.env.SUPABASE_ANON_KEY||"").trim();const envSnippet=`<script>window.__ENV__=Object.assign(window.__ENV__||{},{VITE_SUPABASE_URL:${JSON.stringify(supabaseUrl)},VITE_SUPABASE_ANON_KEY:${JSON.stringify(supabaseAnonKey)}});<\/script>`;template=template.replace("<head>",`<head>${envSnippet}`);template=await vite.transformIndexHtml(url,template);res.status(200).set({"Content-Type":"text/html"}).end(template)}catch(e){vite.ssrFixStacktrace(e);next(e)}})}else{app.use(express.static(distPath,{index:false}));app.get("*",(_req,res)=>{const indexFile=path.join(distPath,"index.html");if(fs.existsSync(indexFile)){let content=fs.readFileSync(indexFile,"utf-8");const supabaseUrl=(process.env.VITE_SUPABASE_URL||process.env.SUPABASE_URL||"").trim();const supabaseAnonKey=(process.env.VITE_SUPABASE_ANON_KEY||process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY||process.env.SUPABASE_ANON_KEY||"").trim();const envSnippet=`<script>window.__ENV__=Object.assign(window.__ENV__||{},{VITE_SUPABASE_URL:${JSON.stringify(supabaseUrl)},VITE_SUPABASE_ANON_KEY:${JSON.stringify(supabaseAnonKey)}});<\/script>`;content=content.replace("<head>",`<head>${envSnippet}`);res.status(200).set({"Content-Type":"text/html"}).send(content)}else{const rootIndex=path.join(process.cwd(),"index.html");if(fs.existsSync(rootIndex)){res.sendFile(rootIndex)}else{res.status(503).send("Application static bundle is compiling or unavailable.")}}})}app.listen(PORT,"0.0.0.0",()=>{console.log(`Metfa Social Server running on http://0.0.0.0:${PORT} (Primary model: gemini-3.8-flash)`)})}__name(startServer,"startServer");startServer();

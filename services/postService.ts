@@ -47,14 +47,51 @@ export interface SupabasePostRow {
   } | null;
 }
 
+export const authorProfileCache = new Map<string, {
+  id: string;
+  display_name: string;
+  username: string;
+  avatar_url: string;
+  is_verified: boolean;
+}>();
+
+export async function fetchAuthorProfileById(authorId: string) {
+  if (!authorId) return null;
+  if (authorProfileCache.has(authorId)) {
+    return authorProfileCache.get(authorId)!;
+  }
+  try {
+    const res = await fetch(`/api/authors/${encodeURIComponent(authorId)}`);
+    if (res.ok) {
+      const json = await res.json();
+      if (json.success && json.profile) {
+        const p = {
+          id: json.profile.id,
+          display_name: json.profile.name,
+          username: json.profile.username,
+          avatar_url: json.profile.avatar,
+          is_verified: json.profile.isVerified ?? true,
+        };
+        authorProfileCache.set(authorId, p);
+        return p;
+      }
+    }
+  } catch (e) {
+    console.warn('[PostService] Error resolving author profile:', e);
+  }
+  return null;
+}
+
 /**
  * Maps a database post row (with joined profiles author) to the client CommunityPost model
  */
 export function mapSupabaseRowToCommunityPost(row: SupabasePostRow): CommunityPost {
-  const authorName = row.author?.display_name || row.author?.username || 'Metfa User';
-  const authorUsername = row.author?.username || 'user';
+  const cachedAuthor = row.author_id ? authorProfileCache.get(row.author_id) : null;
+  const authorName = row.author?.display_name || cachedAuthor?.display_name || row.author?.username || cachedAuthor?.username || 'Metfa Creator';
+  const authorUsername = row.author?.username || cachedAuthor?.username || 'creator';
   const authorAvatar =
     row.author?.avatar_url?.trim() ||
+    cachedAuthor?.avatar_url?.trim() ||
     getDefaultAvatar(authorUsername);
 
   // Compute a human-readable relative time or formatted date string
@@ -190,6 +227,26 @@ export async function fetchSupabasePosts(): Promise<{ posts: CommunityPost[]; er
 
     const postIds = data.map((row: any) => row.id).filter(Boolean);
     const engagementMap = await batchFetchEngagement(postIds);
+
+    // Resolve author profiles for any rows where joined author profile is null (e.g. unauthenticated visitor)
+    const missingAuthorIds = Array.from(new Set(
+      data
+        .filter((row: any) => (!row.author || !row.author.display_name) && row.author_id)
+        .map((row: any) => row.author_id as string)
+    ));
+
+    if (missingAuthorIds.length > 0) {
+      await Promise.all(missingAuthorIds.map(async (authorId) => {
+        const resolved = await fetchAuthorProfileById(authorId);
+        if (resolved) {
+          for (const row of data) {
+            if (row.author_id === authorId && (!row.author || !row.author.display_name)) {
+              row.author = resolved;
+            }
+          }
+        }
+      }));
+    }
 
     const mappedPosts: CommunityPost[] = data.map((row: any) => {
       const post = mapSupabaseRowToCommunityPost(row as SupabasePostRow);

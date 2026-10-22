@@ -271,6 +271,42 @@ export const persistSSOSession = (user: AuthUser, profileOverride?: UserProfile)
   }
 };
 
+export async function fetchAuthorProfileFromServer(userId: string): Promise<(UserProfile & { metfaId?: string }) | null> {
+  if (!userId) return null;
+  try {
+    const res = await fetch(`/api/authors/${encodeURIComponent(userId)}`);
+    if (res.ok) {
+      const json = await res.json();
+      if (json.success && json.profile) {
+        const p = json.profile;
+        const resolvedAvatar = sanitizeAvatarUrl(p.avatar, p.username || p.name);
+        return {
+          id: p.id,
+          metfaId: p.metfaId || generateUnifiedMetfaId(p.id),
+          name: p.name || 'Metfa Creator',
+          username: p.username || 'creator',
+          avatar: resolvedAvatar,
+          bio: 'AI Creator & Visual Explorer on Metfa Social.',
+          location: 'Global Creator',
+          website: `https://metfa.ai/@${p.username}`,
+          isVerified: p.isVerified ?? true,
+          joinDate: 'Joined Recently',
+          stats: {
+            postsCount: 0,
+            followersCount: 0,
+            followingCount: 0,
+            totalLikes: 0,
+            reelsCount: 0,
+          },
+        };
+      }
+    }
+  } catch (err) {
+    console.warn('[METFA AUTH] Error fetching author profile from server:', err);
+  }
+  return null;
+}
+
 /**
  * Fetch profile from Supabase Database
  */
@@ -285,15 +321,17 @@ export async function fetchSupabaseProfile(userId: string): Promise<(UserProfile
       .maybeSingle();
 
     if (error) {
-      console.warn('[METFA AUTH] Failed to fetch profile:', error.message);
-      return null;
+      console.warn('[METFA AUTH] Failed to fetch profile from DB, checking server authority:', error.message);
+      return await fetchAuthorProfileFromServer(userId);
     }
-    if (!data) return null;
+    if (!data) {
+      return await fetchAuthorProfileFromServer(userId);
+    }
     console.log(`[METFA AUTH] Profile ID: ${data.id}`);
     return mapSupabaseRowToUserProfile(data);
   } catch (err) {
     console.warn('[METFA AUTH] Error reading profile:', err);
-    return null;
+    return await fetchAuthorProfileFromServer(userId);
   }
 }
 

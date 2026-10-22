@@ -1,5 +1,5 @@
-const CACHE_NAME = 'metfa-social-v3';
-const MEDIA_CACHE_NAME = 'metfa-media-v3';
+const CACHE_NAME = 'metfa-social-v4';
+const MEDIA_CACHE_NAME = 'metfa-media-v4';
 
 const STATIC_ASSETS = [
   '/',
@@ -46,7 +46,6 @@ self.addEventListener('install', (event) => {
           )
         );
       })
-      .then(() => self.skipWaiting())
   );
 });
 
@@ -77,7 +76,7 @@ self.addEventListener('message', (event) => {
   }
 });
 
-// Fetch Event - Network first for navigations, Stale-while-revalidate for assets, Cache-first for fonts
+// Fetch Event - Network first for navigations, Stale-while-revalidate for assets, Cache-first for fonts & CDN
 self.addEventListener('fetch', (event) => {
   const { request } = event;
   const url = new URL(request.url);
@@ -110,24 +109,50 @@ self.addEventListener('fetch', (event) => {
       fetch(request)
         .then((networkResponse) => {
           if (networkResponse && networkResponse.status === 200) {
-            const copy = networkResponse.clone();
-            caches.open(CACHE_NAME).then((cache) => {
-              cache.put('/index.html', copy);
-            });
+            const contentType = networkResponse.headers.get('content-type') || '';
+            if (contentType.includes('text/html')) {
+              const copy = networkResponse.clone();
+              caches.open(CACHE_NAME).then((cache) => {
+                cache.put('/index.html', copy);
+              });
+            }
           }
           return networkResponse;
         })
         .catch(async () => {
           const cachedShell = await caches.match('/index.html');
           if (cachedShell) return cachedShell;
-          return caches.match('/');
+          const rootMatch = await caches.match('/');
+          if (rootMatch) return rootMatch;
+          return new Response('Application shell offline', {
+            status: 503,
+            statusText: 'Service Unavailable',
+            headers: { 'Content-Type': 'text/plain' },
+          });
         })
     );
     return;
   }
 
-  // Strategy 2: Google Fonts (Cache-First with network fallback for offline typography)
+  // Strategy 2a: Google Fonts (Cache-First with network fallback for offline typography)
   if (url.hostname === 'fonts.googleapis.com' || url.hostname === 'fonts.gstatic.com') {
+    event.respondWith(
+      caches.match(request).then((cached) => {
+        if (cached) return cached;
+        return fetch(request).then((networkRes) => {
+          if (networkRes && networkRes.status === 200) {
+            const clone = networkRes.clone();
+            caches.open(CACHE_NAME).then((cache) => cache.put(request, clone));
+          }
+          return networkRes;
+        });
+      })
+    );
+    return;
+  }
+
+  // Strategy 2b: Tailwind CSS Runtime CDN (Cache-First with network fallback)
+  if (url.hostname === 'cdn.tailwindcss.com') {
     event.respondWith(
       caches.match(request).then((cached) => {
         if (cached) return cached;
@@ -169,18 +194,48 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // Strategy 4: Local Static Assets (Network-first with cache fallback for images/icons)
+  // Strategy 4: Local Static Assets (Network-first with cache fallback, hardened against HTML pollution)
   if (url.origin === self.location.origin) {
     event.respondWith(
       fetch(request)
         .then((networkResponse) => {
           if (networkResponse && networkResponse.status === 200) {
+            const contentType = networkResponse.headers.get('content-type') || '';
+            const pathname = url.pathname.toLowerCase();
+
+            // CRITICAL GUARD: Never cache an HTML response as a JS, CSS, or asset bundle!
+            const isAssetPath =
+              pathname.startsWith('/assets/') ||
+              pathname.endsWith('.js') ||
+              pathname.endsWith('.css') ||
+              pathname.endsWith('.png') ||
+              pathname.endsWith('.svg') ||
+              pathname.endsWith('.ico') ||
+              pathname.endsWith('.woff2');
+
+            if (isAssetPath && contentType.includes('text/html')) {
+              console.warn('[SW] Rejected HTML response for static asset path:', url.pathname);
+              return new Response('Asset Not Found', {
+                status: 404,
+                statusText: 'Not Found',
+                headers: { 'Content-Type': 'text/plain' },
+              });
+            }
+
             const copy = networkResponse.clone();
             caches.open(CACHE_NAME).then((cache) => cache.put(request, copy));
           }
           return networkResponse;
         })
-        .catch(() => caches.match(request))
+        .catch(async () => {
+          const cached = await caches.match(request);
+          if (cached) return cached;
+          return new Response('Asset unavailable offline', {
+            status: 404,
+            statusText: 'Not Found',
+            headers: { 'Content-Type': 'text/plain' },
+          });
+        })
     );
   }
 });

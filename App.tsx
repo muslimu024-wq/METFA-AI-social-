@@ -226,15 +226,17 @@ export function App() {
     };
 
     const handleSwUpdated = (e: any) => {
-      if (e.detail && e.detail.waiting) {
-        setWaitingWorker(e.detail.waiting);
-        setPwaUpdateAvailable(true);
+      const worker = e.detail?.waiting || e.detail?.registration?.waiting;
+      if (worker) {
+        setWaitingWorker(worker);
       }
+      setPwaUpdateAvailable(true);
     };
 
     window.addEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
     window.addEventListener('appinstalled', handleAppInstalled);
     window.addEventListener('swUpdated', handleSwUpdated);
+    window.addEventListener('metfa_pwa_update_available', handleSwUpdated);
 
     // Cross-app navigation & deep link listener (for Social Posts, Sellme & AliExpress Marketplace)
     const handleCheckHashRoute = () => {
@@ -313,6 +315,7 @@ export function App() {
       window.removeEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
       window.removeEventListener('appinstalled', handleAppInstalled);
       window.removeEventListener('swUpdated', handleSwUpdated);
+      window.removeEventListener('metfa_pwa_update_available', handleSwUpdated);
       window.removeEventListener('hashchange', handleCheckHashRoute);
       window.removeEventListener('metfa_open_marketplace', handleOpenMarketplace);
       window.removeEventListener('metfa_open_chat', handleOpenChat);

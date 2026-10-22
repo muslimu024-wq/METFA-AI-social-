@@ -170,6 +170,9 @@ export const Header: React.FC<HeaderProps> = ({
                   <img
                     src="/logo.png"
                     alt="METFA Official Logo"
+                    width={36}
+                    height={36}
+                    style={{ width: 36, height: 36, minWidth: 36, minHeight: 36, maxWidth: 36, maxHeight: 36 }}
                     decoding="async"
                     className="w-9 h-9 min-w-[36px] max-w-[36px] min-h-[36px] max-h-[36px] rounded-2xl shadow-xs group-hover:scale-105 transition-transform shrink-0 object-cover block pointer-events-none"
                     onError={(e) => {
@@ -277,6 +280,9 @@ export const Header: React.FC<HeaderProps> = ({
                   <img
                     src="/logo.png"
                     alt="Metfa Social"
+                    width={32}
+                    height={32}
+                    style={{ width: 32, height: 32, minWidth: 32, minHeight: 32, maxWidth: 32, maxHeight: 32 }}
                     loading="lazy"
                     decoding="async"
                     className="w-8 h-8 min-w-[32px] max-w-[32px] min-h-[32px] max-h-[32px] rounded-xl shadow-xs shrink-0 object-cover block pointer-events-none"
