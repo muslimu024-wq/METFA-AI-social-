@@ -218,6 +218,24 @@ export const Header: React.FC<HeaderProps> = ({
               </Suspense>
             )}
 
+            {/* [PWA Install Action] — Visible only when beforeinstallprompt is active and not already running in standalone mode */}
+            {onInstallPwa && installPrompt && !isStandalone && (
+              <button
+                type="button"
+                id="header-install-pwa-btn"
+                onClick={onInstallPwa}
+                className="h-9 sm:h-10 px-2.5 sm:px-3 rounded-2xl flex items-center gap-1.5 transition shrink-0 active:scale-95 shadow-xs group cursor-pointer border font-bold text-xs bg-gradient-to-r from-teal-50 to-purple-50 hover:from-teal-100 hover:to-purple-100 border-teal-300 text-teal-900"
+                title="Install METFA Social App"
+                aria-label="Install App"
+              >
+                <Download className="w-4 h-4 text-teal-700 group-hover:translate-y-0.5 transition-transform" />
+                <span className="hidden md:inline font-bold">Install</span>
+                <span className="text-[10px] bg-teal-200 text-teal-900 px-1.5 py-0.2 rounded-full font-semibold">
+                  App
+                </span>
+              </button>
+            )}
+
             {/* [METFA V2 Owner Dashboard Launcher] — Visible ONLY to verified Owner/Admin */}
             {isOwnerOrAdmin && (
               <button

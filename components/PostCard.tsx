@@ -27,6 +27,7 @@ import {
   Minimize2,
   Wand2,
   Repeat,
+  TrendingUp,
 } from 'lucide-react';
 import { CommunityPost, UserProfile } from '../types/community';
 import { AudioTrack } from '../types/audio';
@@ -37,6 +38,8 @@ import { isPostSaved, toggleSavePost } from '../utils/bookmarkStore';
 import { formatDuration } from '../utils/audioStore';
 import { AiRecipeBox } from './AiRecipeBox';
 import AudioLicenseInfoModal from './AudioLicenseInfoModal';
+import VideoAnalyticsModal from './VideoAnalyticsModal';
+import { VideoPlaybackSessionTracker } from '../utils/videoTracker';
 import { PostContent } from './PostContent';
 import {
   createComment as createCommentRemote,
@@ -728,6 +731,7 @@ export const PostCard: React.FC<PostCardProps> = ({
                 {/* 2. Copy Link */}
                 <button
                   type="button"
+                  id={`copy-link-menu-btn-${post.id}`}
                   onClick={handleCopyLink}
                   className="w-full px-3.5 py-2 text-left text-slate-700 hover:text-slate-900 hover:bg-slate-50 flex items-center gap-2.5 transition cursor-pointer"
                 >
@@ -735,7 +739,56 @@ export const PostCard: React.FC<PostCardProps> = ({
                   <span>Copy Link</span>
                 </button>
 
-                {/* 3. Author Only Actions: Edit Post & Delete Post */}
+                {/* 3. AI Recipe */}
+                <button
+                  type="button"
+                  id={`ai-recipe-menu-btn-${post.id}`}
+                  onClick={() => {
+                    setIsMenuOpen(false);
+                    setShowAiRecipe((prev) => !prev);
+                  }}
+                  className="w-full px-3.5 py-2 text-left text-purple-700 hover:text-purple-900 hover:bg-purple-50 flex items-center gap-2.5 transition font-medium cursor-pointer"
+                  title="View AI Prompt Recipe & Parameters"
+                >
+                  <Sparkles className="w-4 h-4 text-purple-600 shrink-0" />
+                  <span>AI Recipe</span>
+                </button>
+
+                {/* 4. Remix in Studio */}
+                <button
+                  type="button"
+                  id={`remix-menu-btn-${post.id}`}
+                  onClick={() => {
+                    setIsMenuOpen(false);
+                    onRemixPrompt?.(post.prompt || post.caption || '', post.stylePreset);
+                  }}
+                  className="w-full px-3.5 py-2 text-left text-teal-700 hover:text-teal-900 hover:bg-teal-50 flex items-center gap-2.5 transition font-medium cursor-pointer"
+                  title="Remix prompt directly in AI Studio"
+                >
+                  <Wand2 className="w-4 h-4 text-teal-600 shrink-0" />
+                  <span>Remix in Studio</span>
+                </button>
+
+                {/* 5. Copyright & Rights */}
+                <button
+                  type="button"
+                  id={`copyright-menu-btn-${post.id}`}
+                  onClick={() => {
+                    setIsMenuOpen(false);
+                    if (post.audioTrack) {
+                      setIsLicenseModalOpen(true);
+                    } else {
+                      onShowToast?.('Original Content Copyright • Protected under METFA Creator Rights');
+                    }
+                  }}
+                  className="w-full px-3.5 py-2 text-left text-slate-700 hover:text-slate-900 hover:bg-slate-50 flex items-center gap-2.5 transition font-medium cursor-pointer"
+                  title="View copyright & licensing details"
+                >
+                  <ShieldCheck className="w-4 h-4 text-teal-600 shrink-0" />
+                  <span>{post.audioTrack?.license_type ? `License: ${post.audioTrack.license_type}` : 'Copyright & Rights'}</span>
+                </button>
+
+                {/* Author Only Actions: Edit Post & Delete Post */}
                 {isOwner ? (
                   <>
                     <div className="h-px bg-slate-100 my-1" />
@@ -1021,135 +1074,82 @@ export const PostCard: React.FC<PostCardProps> = ({
         </div>
       )}
 
-      {/* 4. Action Bar (Single horizontal row with no wrap) */}
-      <div className="px-4 py-2 border-t border-slate-100 flex items-center justify-between gap-1 sm:gap-1.5 flex-nowrap w-full overflow-x-auto no-scrollbar text-xs text-slate-600">
-        {/* 1. Like + count */}
-        <div
-          className="relative shrink-0"
-          data-reaction-container={post.id}
-          onMouseLeave={() => setShowReactionPicker(false)}
-        >
-          {showReactionPicker && (
-            <div className="absolute -top-12 left-0 z-30 bg-white border border-slate-200 rounded-full px-2 py-1.5 shadow-xl flex items-center gap-1.5 animate-fadeIn">
-              {Object.entries(REACTION_ICONS).map(([key, item]) => (
-                <button
-                  key={key}
-                  type="button"
-                  onClick={() => handleReactionSelectInternal(key as any)}
-                  className="text-lg hover:scale-125 transform transition duration-150 p-1 cursor-pointer"
-                  title={item.label}
-                >
-                  {item.emoji}
-                </button>
-              ))}
-            </div>
-          )}
+      {/* 4. Action Bar (Clean, mobile-friendly primary engagement actions: Like, Comment, Share) */}
+      <div className="px-4 py-2 border-t border-slate-100 flex items-center justify-between w-full text-xs text-slate-600">
+        <div className="flex items-center gap-3 sm:gap-6">
+          {/* 1. Like + count */}
+          <div
+            className="relative shrink-0"
+            data-reaction-container={post.id}
+            onMouseLeave={() => setShowReactionPicker(false)}
+          >
+            {showReactionPicker && (
+              <div className="absolute -top-12 left-0 z-30 bg-white border border-slate-200 rounded-full px-2 py-1.5 shadow-xl flex items-center gap-1.5 animate-fadeIn">
+                {Object.entries(REACTION_ICONS).map(([key, item]) => (
+                  <button
+                    key={key}
+                    type="button"
+                    onClick={() => handleReactionSelectInternal(key as any)}
+                    className="text-lg hover:scale-125 transform transition duration-150 p-1 cursor-pointer"
+                    title={item.label}
+                  >
+                    {item.emoji}
+                  </button>
+                ))}
+              </div>
+            )}
 
+            <button
+              type="button"
+              id={`like-post-${post.id}`}
+              onClick={() => onToggleLike ? onToggleLike(post.id) : handleReactionSelectInternal('like')}
+              onMouseEnter={() => setShowReactionPicker(true)}
+              className={`px-2 py-1.5 rounded-lg flex items-center gap-1.5 text-xs font-semibold transition cursor-pointer shrink-0 select-none ${
+                post.userReaction
+                  ? `${REACTION_ICONS[post.userReaction]?.color || 'text-rose-600'} font-bold`
+                  : post.isLiked
+                  ? 'bg-rose-50 text-rose-600 border border-rose-200'
+                  : 'hover:bg-slate-100 text-slate-700'
+              }`}
+              title="Like or React"
+            >
+              {post.userReaction && REACTION_ICONS[post.userReaction] ? (
+                <span className="text-base leading-none">{REACTION_ICONS[post.userReaction].emoji}</span>
+              ) : (
+                <Heart className={`w-4 h-4 ${post.isLiked ? 'fill-current text-rose-600' : ''}`} />
+              )}
+              <span>{post.likesCount}</span>
+            </button>
+          </div>
+
+          {/* 2. Comment + count */}
           <button
             type="button"
-            id={`like-post-${post.id}`}
-            onClick={() => onToggleLike ? onToggleLike(post.id) : handleReactionSelectInternal('like')}
-            onMouseEnter={() => setShowReactionPicker(true)}
-            className={`px-1.5 py-1 rounded-lg flex items-center gap-1 text-xs font-semibold transition cursor-pointer shrink-0 whitespace-nowrap ${
-              post.userReaction
-                ? `${REACTION_ICONS[post.userReaction]?.color || 'text-rose-600'} font-bold`
-                : post.isLiked
-                ? 'bg-rose-50 text-rose-600 border border-rose-200'
-                : 'hover:bg-slate-100 text-slate-700'
+            id={`comments-toggle-${post.id}`}
+            onClick={() => setShowComments((prev) => !prev)}
+            className={`px-2 py-1.5 rounded-lg flex items-center gap-1.5 text-xs font-semibold transition cursor-pointer shrink-0 ${
+              showComments ? 'bg-purple-50 text-purple-700 border border-purple-200' : 'hover:bg-slate-100 text-slate-700'
             }`}
-            title="Like"
+            title="Comments"
           >
-            {post.userReaction && REACTION_ICONS[post.userReaction] ? (
-              <span className="text-sm leading-none">{REACTION_ICONS[post.userReaction].emoji}</span>
-            ) : (
-              <Heart className={`w-3.5 h-3.5 sm:w-4 sm:h-4 ${post.isLiked ? 'fill-current text-rose-600' : ''}`} />
-            )}
-            <span>{post.likesCount}</span>
+            <MessageCircle className="w-4 h-4" />
+            <span>{Math.max(post.commentsCount || 0, (post.comments?.length || 0) + (post.voiceComments?.length || 0))}</span>
           </button>
         </div>
 
-        {/* 2. Comment + count */}
-        <button
-          type="button"
-          id={`comments-toggle-${post.id}`}
-          onClick={() => setShowComments((prev) => !prev)}
-          className={`px-1.5 py-1 rounded-lg flex items-center gap-1 text-xs font-semibold transition cursor-pointer shrink-0 whitespace-nowrap ${
-            showComments ? 'bg-purple-50 text-purple-700 border border-purple-200' : 'hover:bg-slate-100 text-slate-700'
-          }`}
-          title="Comments"
-        >
-          <MessageCircle className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
-          <span>{Math.max(post.commentsCount || 0, (post.comments?.length || 0) + (post.voiceComments?.length || 0))}</span>
-        </button>
-
-        {/* 3. Repost + count */}
-        <button
-          type="button"
-          onClick={() => onRemixPrompt?.(post.prompt || post.caption || '', post.stylePreset)}
-          className="px-1.5 py-1 rounded-lg flex items-center gap-1 text-xs font-semibold text-slate-700 hover:bg-slate-100 transition cursor-pointer shrink-0 whitespace-nowrap"
-          title="Repost"
-        >
-          <Repeat className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
-          <span>{post.remixCount || 0}</span>
-        </button>
-
-        {/* 4. AI Recipe */}
-        <button
-          type="button"
-          onClick={() => setShowAiRecipe((prev) => !prev)}
-          className={`inline-flex items-center gap-1 px-2 py-1 border text-xs font-semibold rounded-lg sm:rounded-xl transition cursor-pointer shadow-xs shrink-0 whitespace-nowrap ${
-            showAiRecipe
-              ? 'bg-purple-600 text-white border-purple-600'
-              : 'bg-purple-50 hover:bg-purple-100 border-purple-200 hover:border-purple-300 text-purple-700 hover:text-purple-800'
-          }`}
-          title="View AI Prompt Recipe & Parameters"
-        >
-          <Sparkles
-            className={`w-3.5 h-3.5 ${
-              showAiRecipe ? 'text-white' : 'text-purple-600'
-            }`}
-          />
-          <span>AI Recipe</span>
-        </button>
-
-        {/* 5. Remix */}
-        <button
-          type="button"
-          onClick={(e) => {
-            e.stopPropagation();
-            onRemixPrompt?.(post.prompt || post.caption || '', post.stylePreset);
-          }}
-          className="inline-flex items-center gap-1 px-2 py-1 bg-slate-100 hover:bg-slate-200 border border-slate-200 hover:border-slate-300 text-slate-700 hover:text-slate-900 text-xs font-medium rounded-lg sm:rounded-xl transition cursor-pointer shrink-0 whitespace-nowrap"
-          title="Remix prompt directly in AI Studio"
-        >
-          <Wand2 className="w-3 h-3 text-teal-600" />
-          <span>Remix</span>
-        </button>
-
-        {/* 6. Share + count */}
-        {onSharePost ? (
+        <div className="flex items-center gap-2">
+          {/* 3. Share + count */}
           <button
             type="button"
             id={`share-post-${post.id}`}
-            onClick={() => onSharePost(post)}
-            className="px-1.5 py-1 rounded-lg hover:bg-slate-100 text-slate-700 flex items-center gap-1 text-xs font-semibold transition cursor-pointer shrink-0 whitespace-nowrap"
+            onClick={() => onSharePost ? onSharePost(post) : undefined}
+            className="px-2.5 py-1.5 rounded-lg hover:bg-slate-100 text-slate-700 flex items-center gap-1.5 text-xs font-semibold transition cursor-pointer shrink-0"
             title="Share Post"
           >
-            <Share2 className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
+            <Share2 className="w-4 h-4" />
             <span>{post.sharesCount || 0}</span>
           </button>
-        ) : (
-          <button
-            type="button"
-            id={`share-post-${post.id}`}
-            onClick={() => {}}
-            className="px-1.5 py-1 rounded-lg hover:bg-slate-100 text-slate-700 flex items-center gap-1 text-xs font-semibold transition cursor-pointer shrink-0 whitespace-nowrap"
-            title="Share Post"
-          >
-            <Share2 className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
-            <span>{post.sharesCount || 0}</span>
-          </button>
-        )}
+        </div>
       </div>
 
       {/* Expanded AI Recipe & Prompt Box when toggled open */}

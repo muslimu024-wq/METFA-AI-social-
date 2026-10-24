@@ -17,6 +17,7 @@ import {
   Music,
   Check,
   ShieldCheck,
+  TrendingUp,
 } from 'lucide-react';
 import { ReelHighlight, UserProfile } from '../types/community';
 import { AudioTrack } from '../types/audio';
@@ -24,6 +25,8 @@ import { isContentOwner } from '../utils/communityStore';
 import { isReelSaved, toggleSaveReel } from '../utils/bookmarkStore';
 import { getAudioTracks } from '../utils/audioStore';
 import AudioLicenseInfoModal from './AudioLicenseInfoModal';
+import VideoAnalyticsModal from './VideoAnalyticsModal';
+import { VideoPlaybackSessionTracker } from '../utils/videoTracker';
 
 export interface ReelCardProps {
   reel: ReelHighlight;
@@ -61,8 +64,30 @@ export const ReelCard: React.FC<ReelCardProps> = ({
   const [editCaption, setEditCaption] = useState(reel.caption);
   const [editTitle, setEditTitle] = useState(reel.title);
   const [isLicenseModalOpen, setIsLicenseModalOpen] = useState(false);
+  const [isAnalyticsModalOpen, setIsAnalyticsModalOpen] = useState(false);
 
   const videoRef = useRef<HTMLVideoElement | null>(null);
+  const trackerRef = useRef<VideoPlaybackSessionTracker | null>(null);
+
+  // Initialize and attach genuine video playback session tracker
+  useEffect(() => {
+    const tracker = new VideoPlaybackSessionTracker({
+      videoId: reel.id,
+      videoType: 'reel',
+      creatorId: reel.author.id,
+      viewerId: userProfile?.id,
+    });
+    trackerRef.current = tracker;
+
+    if (videoRef.current) {
+      tracker.attach(videoRef.current);
+    }
+
+    return () => {
+      tracker.detach();
+      trackerRef.current = null;
+    };
+  }, [reel.id, reel.author.id, userProfile?.id]);
 
   const isOwner = isContentOwner(reel.author.id, userProfile.id);
   const isSaved = reel.isSaved ?? isReelSaved(reel.id);
@@ -264,6 +289,22 @@ export const ReelCard: React.FC<ReelCardProps> = ({
               >
                 <Copy className="w-4 h-4 text-teal-400" />
                 <span>Copy Link</span>
+              </button>
+
+              {/* 3. View Video Analytics */}
+              <button
+                type="button"
+                id={`view-analytics-reel-${reel.id}`}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setIsMenuOpen(false);
+                  setIsAnalyticsModalOpen(true);
+                }}
+                className="w-full px-3.5 py-2 text-left text-teal-400 hover:text-teal-300 hover:bg-gray-900 flex items-center gap-2.5 transition font-medium cursor-pointer"
+                title="View real video analytics and watch time"
+              >
+                <TrendingUp className="w-4 h-4 text-teal-400" />
+                <span>Video Analytics</span>
               </button>
 
               {/* 3. Author actions */}
@@ -502,6 +543,23 @@ export const ReelCard: React.FC<ReelCardProps> = ({
           isOpen={isLicenseModalOpen}
           track={resolvedAudioTrack}
           onClose={() => setIsLicenseModalOpen(false)}
+        />
+      )}
+
+      {/* Video Analytics Modal */}
+      {isAnalyticsModalOpen && (
+        <VideoAnalyticsModal
+          isOpen={isAnalyticsModalOpen}
+          onClose={() => setIsAnalyticsModalOpen(false)}
+          videoId={reel.id}
+          videoTitle={reel.title}
+          videoThumbnail={reel.thumbnailSrc}
+          videoType="reel"
+          creatorId={reel.author.id}
+          initialLikes={reel.likesCount}
+          initialComments={reel.commentsCount}
+          initialShares={reel.sharesCount}
+          initialSaves={savesCount}
         />
       )}
     </div>

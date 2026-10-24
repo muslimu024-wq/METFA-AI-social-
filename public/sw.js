@@ -1,5 +1,5 @@
-const CACHE_NAME = 'metfa-social-v4';
-const MEDIA_CACHE_NAME = 'metfa-media-v4';
+const CACHE_NAME = 'metfa-social-v5';
+const MEDIA_CACHE_NAME = 'metfa-media-v5';
 
 const STATIC_ASSETS = [
   '/',
@@ -26,8 +26,6 @@ const STATIC_ASSETS = [
   '/metfa-emblem.png',
   '/metfa-emblem-128.png',
   '/metfa-emblem.svg',
-  '/screenshot-wide.png',
-  '/screenshot-narrow.png',
   '/asset-manifest.json',
 ];
 
@@ -194,26 +192,28 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // Strategy 4: Local Static Assets (Network-first with cache fallback, hardened against HTML pollution)
-  if (url.origin === self.location.origin) {
+  // Strategy 4a: Immutable Hashed Assets (/assets/*) - Cache-First with network fallback
+  if (url.origin === self.location.origin && url.pathname.startsWith('/assets/')) {
     event.respondWith(
-      fetch(request)
-        .then((networkResponse) => {
+      caches.open(CACHE_NAME).then(async (cache) => {
+        const cached = await cache.match(request);
+        if (cached) {
+          const cachedType = cached.headers.get('content-type') || '';
+          // Self-healing guard: If previously corrupted by an HTML response, purge it immediately
+          if (cachedType.includes('text/html')) {
+            console.warn('[SW] Purging corrupted HTML from assets cache:', url.pathname);
+            await cache.delete(request);
+          } else {
+            return cached;
+          }
+        }
+
+        try {
+          const networkResponse = await fetch(request);
           if (networkResponse && networkResponse.status === 200) {
             const contentType = networkResponse.headers.get('content-type') || '';
-            const pathname = url.pathname.toLowerCase();
-
             // CRITICAL GUARD: Never cache an HTML response as a JS, CSS, or asset bundle!
-            const isAssetPath =
-              pathname.startsWith('/assets/') ||
-              pathname.endsWith('.js') ||
-              pathname.endsWith('.css') ||
-              pathname.endsWith('.png') ||
-              pathname.endsWith('.svg') ||
-              pathname.endsWith('.ico') ||
-              pathname.endsWith('.woff2');
-
-            if (isAssetPath && contentType.includes('text/html')) {
+            if (contentType.includes('text/html')) {
               console.warn('[SW] Rejected HTML response for static asset path:', url.pathname);
               return new Response('Asset Not Found', {
                 status: 404,
@@ -221,21 +221,56 @@ self.addEventListener('fetch', (event) => {
                 headers: { 'Content-Type': 'text/plain' },
               });
             }
-
-            const copy = networkResponse.clone();
-            caches.open(CACHE_NAME).then((cache) => cache.put(request, copy));
+            cache.put(request, networkResponse.clone());
           }
           return networkResponse;
-        })
-        .catch(async () => {
-          const cached = await caches.match(request);
-          if (cached) return cached;
+        } catch (fetchErr) {
           return new Response('Asset unavailable offline', {
             status: 404,
             statusText: 'Not Found',
             headers: { 'Content-Type': 'text/plain' },
           });
-        })
+        }
+      })
+    );
+    return;
+  }
+
+  // Strategy 4b: Other Local Static Assets (Root shell, icons, manifest) - Stale-While-Revalidate
+  if (url.origin === self.location.origin) {
+    event.respondWith(
+      caches.open(CACHE_NAME).then(async (cache) => {
+        const cached = await cache.match(request);
+        const fetchPromise = fetch(request)
+          .then((networkResponse) => {
+            if (networkResponse && networkResponse.status === 200) {
+              const contentType = networkResponse.headers.get('content-type') || '';
+              const pathname = url.pathname.toLowerCase();
+              const isAssetPath =
+                pathname.endsWith('.js') ||
+                pathname.endsWith('.css') ||
+                pathname.endsWith('.png') ||
+                pathname.endsWith('.svg') ||
+                pathname.endsWith('.ico') ||
+                pathname.endsWith('.woff2');
+
+              if (isAssetPath && contentType.includes('text/html')) {
+                console.warn('[SW] Rejected HTML response for static asset path:', url.pathname);
+                return new Response('Asset Not Found', {
+                  status: 404,
+                  statusText: 'Not Found',
+                  headers: { 'Content-Type': 'text/plain' },
+                });
+              }
+
+              cache.put(request, networkResponse.clone());
+            }
+            return networkResponse;
+          })
+          .catch(() => cached);
+
+        return cached || fetchPromise;
+      })
     );
   }
 });

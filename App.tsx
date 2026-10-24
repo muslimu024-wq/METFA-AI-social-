@@ -213,8 +213,20 @@ export function App() {
   // Active Viewed Profile User ID (distinguishes own profile vs another user's profile)
   const [viewedProfileUserId, setViewedProfileUserId] = useState<string | null>(null);
 
-  // Listen for PWA Install Prompt
+  // Dedicated PWA Install and Service Worker Update Lifecycle Listener
   useEffect(() => {
+    // 1. Proactively inspect registration.waiting to prevent missed updates on mount
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.getRegistration().then((reg) => {
+        if (reg?.waiting && navigator.serviceWorker.controller) {
+          setWaitingWorker(reg.waiting);
+          setPwaUpdateAvailable(true);
+        }
+      }).catch((err) => {
+        console.warn('[PWA] Registration check warning:', err);
+      });
+    }
+
     const handleBeforeInstallPrompt = (e: Event) => {
       e.preventDefault();
       setInstallPrompt(e);
@@ -238,6 +250,16 @@ export function App() {
     window.addEventListener('swUpdated', handleSwUpdated);
     window.addEventListener('metfa_pwa_update_available', handleSwUpdated);
 
+    return () => {
+      window.removeEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
+      window.removeEventListener('appinstalled', handleAppInstalled);
+      window.removeEventListener('swUpdated', handleSwUpdated);
+      window.removeEventListener('metfa_pwa_update_available', handleSwUpdated);
+    };
+  }, []);
+
+  // Global App Navigation, Deep Linking & V2 Integration Listeners
+  useEffect(() => {
     // Cross-app navigation & deep link listener (for Social Posts, Sellme & AliExpress Marketplace)
     const handleCheckHashRoute = () => {
       try {
@@ -312,10 +334,6 @@ export function App() {
 
     return () => {
       cleanupV2();
-      window.removeEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
-      window.removeEventListener('appinstalled', handleAppInstalled);
-      window.removeEventListener('swUpdated', handleSwUpdated);
-      window.removeEventListener('metfa_pwa_update_available', handleSwUpdated);
       window.removeEventListener('hashchange', handleCheckHashRoute);
       window.removeEventListener('metfa_open_marketplace', handleOpenMarketplace);
       window.removeEventListener('metfa_open_chat', handleOpenChat);
@@ -341,8 +359,13 @@ export function App() {
   const handleReloadApp = () => {
     if (waitingWorker) {
       waitingWorker.postMessage({ type: 'SKIP_WAITING' });
+      navigator.serviceWorker?.addEventListener('controllerchange', () => {
+        window.location.reload();
+      }, { once: true });
     }
-    window.location.reload();
+    setTimeout(() => {
+      window.location.reload();
+    }, 350);
   };
 
   // Sync credits when updated anywhere in the app
