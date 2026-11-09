@@ -18,6 +18,7 @@
 import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
+import os from 'os';
 import { v2PremiumContentEngine } from './v2PremiumContentEngine';
 import { getServerSupabaseClient } from './serverAuth';
 
@@ -153,15 +154,27 @@ export class VideoAnalyticsEngine {
   public readonly TRACKING_EPOCH = '2026-10-23T06:34:00Z';
 
   private dataFilePath: string;
+  public readonly isIsolatedTest: boolean;
 
-  constructor() {
-    const dataDir = path.join(process.cwd(), 'data');
-    if (!fs.existsSync(dataDir)) {
-      try {
-        fs.mkdirSync(dataDir, { recursive: true });
-      } catch {}
+  constructor(options?: { dataFilePath?: string; isIsolatedTest?: boolean }) {
+    this.isIsolatedTest = options?.isIsolatedTest === true;
+    if (options?.dataFilePath) {
+      this.dataFilePath = options.dataFilePath;
+      const dir = path.dirname(this.dataFilePath);
+      if (!fs.existsSync(dir)) {
+        try {
+          fs.mkdirSync(dir, { recursive: true });
+        } catch {}
+      }
+    } else {
+      const dataDir = path.join(process.cwd(), 'data');
+      if (!fs.existsSync(dataDir)) {
+        try {
+          fs.mkdirSync(dataDir, { recursive: true });
+        } catch {}
+      }
+      this.dataFilePath = path.join(dataDir, 'video_analytics_sessions.json');
     }
-    this.dataFilePath = path.join(dataDir, 'video_analytics_sessions.json');
     this.loadFromDisk();
   }
 
@@ -223,6 +236,7 @@ export class VideoAnalyticsEngine {
   }
 
   private async syncToSupabaseAsync(session: VideoWatchSession): Promise<void> {
+    if (this.isIsolatedTest) return;
     try {
       const supabase = getServerSupabaseClient();
       if (!supabase) return;
@@ -603,6 +617,9 @@ export class VideoAnalyticsEngine {
 
   /**
    * Resets internal in-memory index (for testing only)
+   * Safe isolated cleanup: Production singleton and data/video_analytics_sessions.json
+   * can NEVER be unlinked. Only allowed when isIsolatedTest is true AND
+   * dataFilePath resides within os.tmpdir().
    */
   public resetForTesting(): void {
     this.sessions.clear();
@@ -610,7 +627,11 @@ export class VideoAnalyticsEngine {
     this.creatorIndex.clear();
     this.deduplicationIndex.clear();
     try {
-      if (fs.existsSync(this.dataFilePath)) {
+      if (
+        this.isIsolatedTest &&
+        this.dataFilePath.startsWith(os.tmpdir()) &&
+        fs.existsSync(this.dataFilePath)
+      ) {
         fs.unlinkSync(this.dataFilePath);
       }
     } catch {}

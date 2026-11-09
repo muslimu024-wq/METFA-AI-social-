@@ -1,0 +1,36 @@
+{
+  "baselineName": "METFA_PHASE_10_VERIFIED_BASELINE_2026-11-08",
+  "createdAt": "2026-11-08T16:49:00.000Z",
+  "verificationStatus": "VERIFIED_PASS",
+  "metrics": {
+    "phase10TestsTotal": 24,
+    "phase10TestsPassed": 24,
+    "phase10TestsFailed": 0,
+    "phase10Status": "PASS",
+    "offlineSuitesTotal": 13,
+    "offlineSuitesPassed": 13,
+    "offlineSuitesFailed": 0,
+    "individualAssertionsTotal": 244,
+    "individualAssertionsPassed": 244,
+    "individualAssertionsFailed": 0,
+    "wal06Status": "PASS",
+    "wal06SuiteTotal": 25,
+    "wal06SuitePassed": 25,
+    "supabaseCalls": 0,
+    "outboundNetworkCalls": 0,
+    "runtimePreserved": true,
+    "serverRestartCount": 0
+  },
+  "fileHashes": {
+    "services/v2RewardEngine.ts": "7258cb342e153fb5bb6cf401db84014d6108b0ecc2fa4c3c8752064f12a5ba7a",
+    "services/v2IntegrationAdapter.ts": "5759a7225efb119f6bac2d2e8ce49ae7b5562def4fb0c36acefc897ae26aa1cb",
+    "tests/v2Phase10IntegrationVerification.ts": "9e2eb1be31cc973e2f3d112547b4ffd9d94064409f1a57c28f0055c4ac9abac8"
+  },
+  "architecturalIsolationBoundaries": {
+    "financialSettlementPath": "HERMETICALLY_ISOLATED",
+    "revenueEngine": "Dedicated in-memory test instance (isIsolatedTest: true); 0 contact with Production v2RevenueEngine singleton",
+    "rewardEngine": "Dedicated in-memory test instance (isIsolatedTest: true, injected revenue & contribution engines)",
+    "adapterControlledPipeline": "Dedicated test adapter with 4 injected test engines",
+    "socialAndAdminTests": "In-memory contact with Production singletons (v2ContributionEngine, v2AdminEngine, v2RewardEngine.getActivePolicy); 0 database or external network side-effects"
+  }
+}

@@ -20,13 +20,13 @@
  * 14. Confirmation that Phase 11 and Phase 12 are NOT started
  */
 
-import { v2IntegrationAdapter } from '../services/v2IntegrationAdapter';
-import { v2ContributionEngine } from '../services/v2ContributionEngine';
-import { v2RevenueEngine } from '../services/v2RevenueEngine';
-import { v2RewardEngine } from '../services/v2RewardEngine';
+import { v2IntegrationAdapter, V2IntegrationAdapter } from '../services/v2IntegrationAdapter';
+import { v2ContributionEngine, V2ContributionEngine } from '../services/v2ContributionEngine';
+import { V2RevenueEngine } from '../services/v2RevenueEngine';
+import { v2RewardEngine, V2RewardEngine } from '../services/v2RewardEngine';
 import { v2WalletEngine } from '../services/v2WalletEngine';
 import { v2RiskEngine } from '../services/v2RiskEngine';
-import { v2AdminEngine } from '../services/v2AdminEngine';
+import { v2AdminEngine, V2AdminEngine } from '../services/v2AdminEngine';
 import { V2_MODULE_REGISTRY } from '../data/v2Registry';
 import { V2ModuleMetadata } from '../types/v2';
 
@@ -70,6 +70,22 @@ export interface V2Phase10TestSuiteSummary {
 }
 
 export function runV2Phase10IntegrationVerification(): V2Phase10TestSuiteSummary {
+  // Hermetically isolated test engines for Phase 10 verification
+  const localAdminEngine = new V2AdminEngine();
+  const localContributionEngine = new V2ContributionEngine();
+  const localRevenueEngine = new V2RevenueEngine({ isIsolatedTest: true });
+  const localRewardEngine = new V2RewardEngine({
+    isIsolatedTest: true,
+    revenueEngine: localRevenueEngine,
+    contributionEngine: localContributionEngine,
+  });
+  const localAdapter = new V2IntegrationAdapter({
+    adminEngine: localAdminEngine,
+    revenueEngine: localRevenueEngine,
+    rewardEngine: localRewardEngine,
+    contributionEngine: localContributionEngine,
+  });
+
   const results: V2Phase10TestCaseResult[] = [];
 
   const recordTest = (
@@ -518,7 +534,7 @@ export function runV2Phase10IntegrationVerification(): V2Phase10TestSuiteSummary
     'Settlement pipeline strictly rejects unauthorized roles (e.g. DEVELOPER, FREELANCER)',
     'REVENUE_REWARD_WALLET',
     () => {
-      const res = v2IntegrationAdapter.executeControlledRevenueToRewardPipeline({
+      const res = localAdapter.executeControlledRevenueToRewardPipeline({
         revenuePeriodId: 'rev_2026_q3',
         operatorId: 'freelancer_01',
         operatorRole: 'FREELANCER' as any,
@@ -539,8 +555,8 @@ export function runV2Phase10IntegrationVerification(): V2Phase10TestSuiteSummary
     'Mandated rule: Reward distribution must never exceed verified eligible revenue in reward pool',
     'REVENUE_REWARD_WALLET',
     () => {
-      // Create and finalize a controlled revenue period
-      const newPeriod = v2RevenueEngine.createRevenuePeriod({
+      // Create and finalize a controlled revenue period on dedicated isolated engine
+      const newPeriod = localRevenueEngine.createRevenuePeriod({
         period_name: 'P10 Test Period',
         period_start: '2026-09-01T00:00:00Z',
         period_end: '2026-09-30T23:59:59Z',
@@ -549,7 +565,7 @@ export function runV2Phase10IntegrationVerification(): V2Phase10TestSuiteSummary
         actor_role: 'SUPER_ADMIN',
       });
 
-      v2RevenueEngine.recordRevenueEntry({
+      localRevenueEngine.recordRevenueEntry({
         period_id: newPeriod.id,
         source: 'AI',
         entry_type: 'GROSS_INCOME',
@@ -562,20 +578,20 @@ export function runV2Phase10IntegrationVerification(): V2Phase10TestSuiteSummary
         actor_role: 'SUPER_ADMIN',
       });
 
-      v2RevenueEngine.lockRevenuePeriod({
+      localRevenueEngine.lockRevenuePeriod({
         period_id: newPeriod.id,
         actor_id: 'admin_sys',
         actor_role: 'SUPER_ADMIN',
       });
 
-      v2RevenueEngine.finalizeRevenuePeriod({
+      localRevenueEngine.finalizeRevenuePeriod({
         period_id: newPeriod.id,
         actor_id: 'admin_sys',
         actor_role: 'SUPER_ADMIN',
       });
 
-      // Execute pipeline
-      const pipelineRes = v2IntegrationAdapter.executeControlledRevenueToRewardPipeline({
+      // Execute pipeline on dedicated isolated adapter
+      const pipelineRes = localAdapter.executeControlledRevenueToRewardPipeline({
         revenuePeriodId: newPeriod.id,
         operatorId: 'admin_sys',
         operatorRole: 'FINANCE_ADMIN',
@@ -717,7 +733,7 @@ export function runV2Phase10IntegrationVerification(): V2Phase10TestSuiteSummary
     'No dummy users, fake revenue, fake posts, fake balances, or simulated ads exist',
     'SAFETY_INVARIANTS',
     () => {
-      const revHealth = v2RevenueEngine.getRevenueHealth();
+      const revHealth = localRevenueEngine.getRevenueHealth();
       const contHealth = v2ContributionEngine.getEngineHealth();
       const walletHealth = v2WalletEngine.getEngineHealth();
 

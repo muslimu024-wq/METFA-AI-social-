@@ -19,7 +19,7 @@ const AISettingsModal = lazy(() => import('./components/AISettingsModal'));
 const V2Dashboard = lazy(() => import('./components/v2/V2Dashboard'));
 
 export function App() {
-  const { userProfile, isAuthenticated, metfaId, authNotification, clearAuthNotification } = useAuth();
+  const { user, userProfile, isAuthenticated, isSupabaseConnected, sessionToken, metfaId, authNotification, clearAuthNotification } = useAuth();
 
   // App Navigation: Social-First Architecture - Sync with PWA shortcuts and URL query params
   const [activeTab, setActiveTab] = useState<'chat' | 'v2' | SocialSubTab>(() => {
@@ -43,9 +43,15 @@ export function App() {
   useEffect(() => {
     let isMounted = true;
 
+    async function fetchOwnerCheck(bearerToken: string): Promise<Response> {
+      return fetch('/api/v2/auth/owner-check', {
+        headers: { Authorization: `Bearer ${bearerToken}` },
+      });
+    }
+
     async function checkOwnerPrivileges() {
       try {
-        const token = await getClientAuthToken();
+        let token = await getClientAuthToken(false);
         if (!token) {
           if (isMounted) {
             setIsOwnerOrAdmin(false);
@@ -54,9 +60,16 @@ export function App() {
           return;
         }
 
-        const res = await fetch('/api/v2/auth/owner-check', {
-          headers: { Authorization: `Bearer ${token}` },
-        });
+        let res = await fetchOwnerCheck(token);
+
+        // At most one controlled session refresh & retry if token rotated/expired or held stale header bloat
+        if (res.status === 401 || res.status === 400) {
+          const refreshedToken = await getClientAuthToken(true);
+          if (refreshedToken && refreshedToken !== token) {
+            token = refreshedToken;
+            res = await fetchOwnerCheck(token);
+          }
+        }
 
         if (res.ok) {
           const data = await res.json().catch(() => null);
@@ -93,7 +106,7 @@ export function App() {
     return () => {
       isMounted = false;
     };
-  }, [isAuthenticated]);
+  }, [isAuthenticated, sessionToken, user.id, isSupabaseConnected]);
 
   // Sync activeTab state with document title and URL
   useEffect(() => {
@@ -213,8 +226,20 @@ export function App() {
   // Active Viewed Profile User ID (distinguishes own profile vs another user's profile)
   const [viewedProfileUserId, setViewedProfileUserId] = useState<string | null>(null);
 
-  // Listen for PWA Install Prompt
+  // Dedicated PWA Install and Service Worker Update Lifecycle Listener
   useEffect(() => {
+    // 1. Proactively inspect registration.waiting to prevent missed updates on mount
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.getRegistration().then((reg) => {
+        if (reg?.waiting && navigator.serviceWorker.controller) {
+          setWaitingWorker(reg.waiting);
+          setPwaUpdateAvailable(true);
+        }
+      }).catch((err) => {
+        console.warn('[PWA] Registration check warning:', err);
+      });
+    }
+
     const handleBeforeInstallPrompt = (e: Event) => {
       e.preventDefault();
       setInstallPrompt(e);
@@ -238,6 +263,16 @@ export function App() {
     window.addEventListener('swUpdated', handleSwUpdated);
     window.addEventListener('metfa_pwa_update_available', handleSwUpdated);
 
+    return () => {
+      window.removeEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
+      window.removeEventListener('appinstalled', handleAppInstalled);
+      window.removeEventListener('swUpdated', handleSwUpdated);
+      window.removeEventListener('metfa_pwa_update_available', handleSwUpdated);
+    };
+  }, []);
+
+  // Global App Navigation, Deep Linking & V2 Integration Listeners
+  useEffect(() => {
     // Cross-app navigation & deep link listener (for Social Posts, Sellme & AliExpress Marketplace)
     const handleCheckHashRoute = () => {
       try {
@@ -312,10 +347,6 @@ export function App() {
 
     return () => {
       cleanupV2();
-      window.removeEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
-      window.removeEventListener('appinstalled', handleAppInstalled);
-      window.removeEventListener('swUpdated', handleSwUpdated);
-      window.removeEventListener('metfa_pwa_update_available', handleSwUpdated);
       window.removeEventListener('hashchange', handleCheckHashRoute);
       window.removeEventListener('metfa_open_marketplace', handleOpenMarketplace);
       window.removeEventListener('metfa_open_chat', handleOpenChat);
@@ -341,8 +372,13 @@ export function App() {
   const handleReloadApp = () => {
     if (waitingWorker) {
       waitingWorker.postMessage({ type: 'SKIP_WAITING' });
+      navigator.serviceWorker?.addEventListener('controllerchange', () => {
+        window.location.reload();
+      }, { once: true });
     }
-    window.location.reload();
+    setTimeout(() => {
+      window.location.reload();
+    }, 350);
   };
 
   // Sync credits when updated anywhere in the app

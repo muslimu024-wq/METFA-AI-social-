@@ -38,13 +38,18 @@ export class V2PremiumContentEngine {
     details: any;
   }> = [];
 
+  public readonly isIsolatedTest: boolean;
+
   constructor(
     private walletEngine: V2WalletEngine = v2WalletEngine,
-    private revenueEngine: V2RevenueEngine = v2RevenueEngine
-  ) {}
+    private revenueEngine: V2RevenueEngine = v2RevenueEngine,
+    options?: { isIsolatedTest?: boolean }
+  ) {
+    this.isIsolatedTest = options?.isIsolatedTest === true;
+  }
 
   public async hydrateFromDatabase(): Promise<void> {
-    const supabase = getServerSupabaseClient();
+    const supabase = this.isIsolatedTest ? null : getServerSupabaseClient();
     if (!supabase) return;
 
     try {
@@ -251,7 +256,7 @@ export class V2PremiumContentEngine {
     this.contents.set(contentId, content);
 
     // Asynchronously synchronize to Supabase
-    const supabase = getServerSupabaseClient();
+    const supabase = this.isIsolatedTest ? null : getServerSupabaseClient();
     if (supabase) {
       supabase.from("premium_content").insert({
         id: content.id,
@@ -537,7 +542,7 @@ export class V2PremiumContentEngine {
     this.entitlements.get(params.viewer_id)!.add(content.id);
 
     // Synchronize to Supabase
-    const supabase = getServerSupabaseClient();
+    const supabase = this.isIsolatedTest ? null : getServerSupabaseClient();
     if (supabase) {
       supabase.from("premium_purchases").insert({
         id: purchase.id,
@@ -647,7 +652,7 @@ export class V2PremiumContentEngine {
       };
     }
 
-    const supabase = getServerSupabaseClient();
+    const supabase = this.isIsolatedTest ? null : getServerSupabaseClient();
     let streamUrl = content.full_video_storage_path;
 
     if (supabase) {
@@ -1006,90 +1011,143 @@ export class V2PremiumContentEngine {
     return { success: true, session, refunded_users_count: refundCount };
   }
 
-  // Cancel live session & 100% refund all ticket holders
+  // Phase 2A Security Containment: Fail-closed live session cancellation (zero mutations / zero ledger entries)
   public cancelLiveSession(params: {
     session_id: string;
     reason: string;
     actor_id: string;
     actor_role: string;
-  }): { success: boolean; error?: string; session?: PremiumLiveSession; refunded_tickets_count: number } {
+    actor_roles?: string[];
+  }): {
+    success: boolean;
+    code?: "UNAUTHORIZED" | "FORBIDDEN" | "SERVICE_UNAVAILABLE";
+    statusCode?: 401 | 403 | 503;
+    error?: string;
+    blocker_details?: {
+      containment_phase: "PHASE_2A_FAIL_CLOSED";
+      mutations_performed: false;
+      ledger_entries_posted: 0;
+      required_guarantees: string[];
+    };
+    session?: PremiumLiveSession;
+    refunded_tickets_count: number;
+  } {
+    if (!params.actor_id || !params.actor_id.trim()) {
+      return {
+        success: false,
+        code: "UNAUTHORIZED",
+        statusCode: 401,
+        error: "Unauthorized: Verified actor identity is required.",
+        refunded_tickets_count: 0
+      };
+    }
+
+    const normalizedRoles = Array.from(
+      new Set(
+        [params.actor_role, ...(Array.isArray(params.actor_roles) ? params.actor_roles : [])]
+          .filter((r): r is string => typeof r === "string" && r.trim().length > 0)
+          .map(r => r.trim().toUpperCase())
+      )
+    );
+
+    if (normalizedRoles.some(r => this.isAiActor(r))) {
+      return {
+        success: false,
+        code: "FORBIDDEN",
+        statusCode: 403,
+        error: "METFA AI Boundary Violation: AI agents cannot cancel monetized live sessions or execute financial refunds.",
+        refunded_tickets_count: 0
+      };
+    }
+
     const session = this.liveSessions.get(params.session_id);
-    if (!session) return { success: false, error: "Live session not found.", refunded_tickets_count: 0 };
+    if (session) {
+      const isCreator = session.creator_id === params.actor_id;
+      const isAuthorizedAdmin = normalizedRoles.some(r =>
+        ["SUPER_ADMIN", "ADMIN", "FINANCE_ADMIN"].includes(r)
+      );
 
-    session.status = "CANCELLED";
-    session.recording_status = "NONE";
-    session.retention_protected = false;
-    session.updated_at = new Date().toISOString();
-
-    let refundedCount = 0;
-    for (const p of this.livePurchases.values()) {
-      if (p.session_id === session.id && p.status === "COMPLETED") {
-        // Refund full ticket price to viewer
-        const viewerWallet = this.walletEngine.getOrCreateWallet(p.viewer_id, p.currency);
-        const refEntryId = `ledg_canc_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
-        this.walletEngine.postLedgerEntry({
-          id: refEntryId,
-          wallet_id: viewerWallet.id,
-          user_id: p.viewer_id,
-          entry_type: "PREMIUM_LIVE_REFUND",
-          amount_cents: p.amount_cents,
-          currency: p.currency,
-          direction: "CREDIT",
-          source_type: "PREMIUM_LIVE",
-          source_id: session.id,
-          idempotency_key: `cancel_refund:${p.id}`,
-          status: "POSTED",
-          balance_after_cents: viewerWallet.available_balance_cents + p.amount_cents,
-          description: `Full refund: Live session cancelled (${params.reason})`,
-          metadata: { purchase_id: p.id, session_id: session.id, reason: params.reason },
-          created_at: new Date().toISOString()
-        });
-        this.walletEngine.reconcileAndApplyAccountState(viewerWallet.id);
-
-        // Claw back creator royalty
-        const creatorWallet = this.walletEngine.getOrCreateWallet(session.creator_id, p.currency);
-        const clawEntryId = `ledg_claw_live_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
-        this.walletEngine.postLedgerEntry({
-          id: clawEntryId,
-          wallet_id: creatorWallet.id,
-          user_id: session.creator_id,
-          entry_type: "PREMIUM_LIVE_ROYALTY_CLAWBACK",
-          amount_cents: p.creator_amount_cents,
-          currency: p.currency,
-          direction: "DEBIT",
-          source_type: "PREMIUM_LIVE",
-          source_id: session.id,
-          idempotency_key: `cancel_clawback:${p.id}`,
-          status: "POSTED",
-          balance_after_cents: creatorWallet.available_balance_cents - p.creator_amount_cents,
-          description: `Royalty clawback: Live session cancelled (${params.reason})`,
-          metadata: { purchase_id: p.id, session_id: session.id },
-          created_at: new Date().toISOString()
-        });
-        this.walletEngine.reconcileAndApplyAccountState(creatorWallet.id);
-
-        // Revoke entitlement
-        p.status = "REFUNDED";
-        p.refund_reason = params.reason;
-        p.refunded_at = new Date().toISOString();
-        p.updated_at = new Date().toISOString();
-
-        const viewerMap = this.liveEntitlements.get(p.viewer_id);
-        if (viewerMap) viewerMap.delete(session.id);
-
-        refundedCount++;
+      if (!isCreator && !isAuthorizedAdmin) {
+        return {
+          success: false,
+          code: "FORBIDDEN",
+          statusCode: 403,
+          error: "Forbidden: Only the session creator or an authorized administrator may cancel a live session.",
+          refunded_tickets_count: 0
+        };
       }
     }
 
-    this.recordAudit({
-      action: "PREMIUM_LIVE_SESSION_CANCELLED",
-      actor_id: params.actor_id,
-      actor_role: params.actor_role,
-      target_id: session.id,
-      details: { reason: params.reason, refunded_tickets_count: refundedCount }
-    });
+    return {
+      success: false,
+      code: "SERVICE_UNAVAILABLE",
+      statusCode: 503,
+      error: "Live session cancellation and automated ticket refunds are temporarily unavailable pending financial accounting, wallet schema compatibility, and durable persistence verification. No session state, entitlements, revenue records, or wallet balances were modified.",
+      blocker_details: {
+        containment_phase: "PHASE_2A_FAIL_CLOSED",
+        mutations_performed: false,
+        ledger_entries_posted: 0,
+        required_guarantees: [
+          "post_delta_refund_accounting",
+          "creator_clawback_negative_balance_guard",
+          "platform_revenue_fee_reversal",
+          "wallet_schema_compatibility",
+          "durable_supabase_persistence",
+          "restart_safe_idempotency"
+        ]
+      },
+      refunded_tickets_count: 0
+    };
+  }
 
-    return { success: true, session, refunded_tickets_count: refundedCount };
+  public handleCancelRequest(
+    req: {
+      params?: { id?: string };
+      body?: { reason?: string };
+      v2Auth?: { userId: string; roles: string[] };
+    },
+    res: {
+      status: (code: number) => { json: (payload: any) => any };
+    }
+  ): any {
+    try {
+      if (!req?.v2Auth?.userId) {
+        return res.status(401).json({
+          success: false,
+          code: "UNAUTHORIZED",
+          error: "Unauthorized: Missing verified authentication context.",
+          refunded_tickets_count: 0
+        });
+      }
+
+      const roles = Array.isArray(req.v2Auth.roles) ? req.v2Auth.roles : [];
+      const rawReason = req.body?.reason;
+      const result = this.cancelLiveSession({
+        session_id: String(req.params?.id || ""),
+        reason: typeof rawReason === "string" && rawReason.trim() ? rawReason : "Host cancelled",
+        actor_id: req.v2Auth.userId,
+        actor_role: roles[0] || "USER",
+        actor_roles: roles
+      });
+
+      const httpStatus =
+        result.statusCode === 401 || result.statusCode === 403 || result.statusCode === 503
+          ? result.statusCode
+          : 503;
+
+      return res.status(httpStatus).json({
+        ...result,
+        success: false,
+        refunded_tickets_count: 0
+      });
+    } catch {
+      return res.status(503).json({
+        success: false,
+        code: "SERVICE_UNAVAILABLE",
+        error: "Live session cancellation is temporarily unavailable. No mutations were performed.",
+        refunded_tickets_count: 0
+      });
+    }
   }
 
   // Purchasing access to Premium Live (LIVE_ONLY vs LIVE_AND_PERMANENT_REPLAY)
@@ -1386,7 +1444,7 @@ export class V2PremiumContentEngine {
     }
 
     // Generate time-limited signed streaming URL from private bucket
-    const supabase = getServerSupabaseClient();
+    const supabase = this.isIsolatedTest ? null : getServerSupabaseClient();
     let streamUrl = session.recording_storage_path || "";
 
     if (supabase && streamUrl) {

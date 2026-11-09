@@ -1,0 +1,23 @@
+[
+  {
+    "file": "services/v2RewardEngine.ts",
+    "backupFile": "services__v2RewardEngine.ts",
+    "sha256": "3d8e3b99a8eae890796e79e93f02201eb72dcbcc3790c1b4e7fa1d6600227b5b",
+    "bytes": 18217,
+    "verified": true
+  },
+  {
+    "file": "services/v2IntegrationAdapter.ts",
+    "backupFile": "services__v2IntegrationAdapter.ts",
+    "sha256": "9dcbcfa30d83a1b519e9959a8cf0ed2276b96294c7de772abdbcda296690a772",
+    "bytes": 39061,
+    "verified": true
+  },
+  {
+    "file": "tests/v2Phase10IntegrationVerification.ts",
+    "backupFile": "tests__v2Phase10IntegrationVerification.ts",
+    "sha256": "b6eae6b1750e53399215bbd1f9b1f2c18ecbca4e62463db9d4a878be9429d587",
+    "bytes": 29542,
+    "verified": true
+  }
+]

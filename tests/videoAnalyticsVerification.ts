@@ -14,8 +14,9 @@
  * 10. Historical tracking boundary notice enforcement
  */
 
-import { videoAnalyticsEngine } from '../services/videoAnalyticsEngine';
-import { v2PremiumContentEngine } from '../services/v2PremiumContentEngine';
+import os from 'os';
+import path from 'path';
+import { VideoAnalyticsEngine } from '../services/videoAnalyticsEngine';
 
 export interface VideoAnalyticsTestCaseResult {
   id: string;
@@ -37,6 +38,18 @@ export interface VideoAnalyticsTestSuiteSummary {
 export async function runVideoAnalyticsVerification(): Promise<VideoAnalyticsTestSuiteSummary> {
   const results: VideoAnalyticsTestCaseResult[] = [];
   const startAll = Date.now();
+
+  // If running inside a dedicated temporary directory (e.g. offline test runner), use its data path;
+  // otherwise, explicitly place test storage in os.tmpdir() to guarantee production data is never touched.
+  const isCwdInTmp = process.cwd().startsWith(os.tmpdir());
+  const testStoragePath = isCwdInTmp
+    ? path.join(process.cwd(), 'data', 'video_analytics_sessions.json')
+    : path.join(os.tmpdir(), 'metfa_isolated_analytics', 'data', 'video_analytics_sessions.json');
+
+  const videoAnalyticsEngine = new VideoAnalyticsEngine({
+    dataFilePath: testStoragePath,
+    isIsolatedTest: true,
+  });
 
   // Reset engine index for a clean, deterministic test environment
   videoAnalyticsEngine.resetForTesting();

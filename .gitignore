@@ -1,0 +1,62 @@
+# =====================================================================
+# METFA Social — Git Ignore Configuration
+# Protects secrets, credentials, runtime user data, caches, and backups
+# =====================================================================
+
+# 1. Environment Variables & Secrets (Preserve .env.example)
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+*.jks
+*.keystore
+*service-account*.json
+credentials.json
+
+# 2. Dependencies
+node_modules/
+
+# 3. Build, Bundler & Typecheck Outputs
+dist/
+dist-ssr/
+build/
+.vite/
+.cache/
+.eslintcache
+.tsbuildinfo
+*.tsbuildinfo
+coverage/
+
+# 4. Android Local & Build Artifacts
+android/.gradle/
+android/build/
+android/app/build/
+android/local.properties
+
+# 5. Obsolete Local Backups
+.backup_pwa/
+*.bak
+*.backup
+
+# 6. Runtime-Mutated Local Session / Analytics Storage
+data/video_analytics_sessions.json
+
+# 7. Temporary Files, Logs & OS Metadata
+tmp/
+.tmp/
+temp/
+.temp/
+*.tmp
+*.swp
+*.swo
+*~
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+.DS_Store
+Thumbs.db

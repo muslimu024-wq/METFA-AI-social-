@@ -34,6 +34,10 @@ import {
   getReelHighlights,
   saveReelHighlights,
 } from '../../utils/socialStore';
+import {
+  fetchPersistentReels,
+  migrateLocalStorageReels,
+} from '../../services/reelService';
 import { DailyCreditsData } from '../../utils/creditManager';
 import { addNotification } from '../../utils/notificationStore';
 import { useAuth } from '../../context/AuthContext';
@@ -77,9 +81,17 @@ export const SocialEcosystemModule: React.FC<SocialEcosystemProps> = ({
   const [posts, setPosts] = useState<CommunityPost[]>(() => getCommunityPosts());
   const [reels, setReels] = useState<ReelHighlight[]>(() => getReelHighlights());
   const [isLoadingPosts, setIsLoadingPosts] = useState<boolean>(true);
+  const [isLoadingReels, setIsLoadingReels] = useState<boolean>(true);
   const [targetSharedPostId, setTargetSharedPostId] = useState<string | null>(() => {
     if (typeof window !== 'undefined') {
       return extractPostIdFromHash(window.location.hash);
+    }
+    return null;
+  });
+  const [targetReelId, setTargetReelId] = useState<string | null>(() => {
+    if (typeof window !== 'undefined') {
+      const match = window.location.hash.match(/^#\/?reel[_-]([a-zA-Z0-9_\-]+)/);
+      return match ? match[1] : null;
     }
     return null;
   });
@@ -130,10 +142,49 @@ export const SocialEcosystemModule: React.FC<SocialEcosystemProps> = ({
     };
   }, [user?.id, isSupabaseConnected]);
 
-  // Deep Link listener for URL hash changes (#post-post_1788406851913)
+  // Automatically load and synchronize reels from persistent cloud storage / Supabase
+  useEffect(() => {
+    let isMounted = true;
+    setIsLoadingReels(true);
+
+    fetchPersistentReels().then(({ reels: persistentReels }) => {
+      if (isMounted) {
+        setReels(persistentReels);
+        setIsLoadingReels(false);
+      }
+    });
+
+    // If user is authenticated, attempt safe idempotent migration of legacy LocalStorage reels
+    if (user?.id) {
+      migrateLocalStorageReels(user.id).then((res) => {
+        if (res.migratedCount > 0 && isMounted) {
+          fetchPersistentReels().then(({ reels: updated }) => {
+            if (isMounted) setReels(updated);
+          });
+        }
+      }).catch((e) => console.warn('[SocialModule] Reel migration note:', e));
+    }
+
+    return () => {
+      isMounted = false;
+    };
+  }, [user?.id, isSupabaseConnected]);
+
+  // Deep Link listener for URL hash changes (#post-post_1788406851913 or #reel-reel_123)
   useEffect(() => {
     const handleHashChange = async () => {
-      const postId = extractPostIdFromHash(window.location.hash);
+      const hash = window.location.hash || '';
+      const reelMatch = hash.match(/^#\/?reel[_-]([a-zA-Z0-9_\-]+)/);
+      if (reelMatch) {
+        const reelId = reelMatch[1];
+        setTargetReelId(reelId);
+        if (currentTab !== 'reels') {
+          onNavigateTab('reels');
+        }
+        return;
+      }
+
+      const postId = extractPostIdFromHash(hash);
       if (postId) {
         setTargetSharedPostId(postId);
         if (currentTab !== 'feed') {
@@ -166,6 +217,33 @@ export const SocialEcosystemModule: React.FC<SocialEcosystemProps> = ({
       window.removeEventListener('hashchange', handleHashChange);
     };
   }, [currentTab, onNavigateTab]);
+
+  const handleOpenReel = (reelId: string) => {
+    if (!reelId) return;
+    setTargetReelId(reelId);
+    if (typeof window !== 'undefined') {
+      try {
+        window.location.hash = `#reel-${reelId}`;
+      } catch {}
+    }
+    if (currentTab !== 'reels') {
+      onNavigateTab('reels');
+    }
+  };
+
+  // Listen for custom event metfa_open_reel across the app
+  useEffect(() => {
+    const handleMetfaOpenReel = (e: any) => {
+      const reelId = e?.detail?.reelId;
+      if (reelId) {
+        handleOpenReel(reelId);
+      }
+    };
+    window.addEventListener('metfa_open_reel', handleMetfaOpenReel);
+    return () => {
+      window.removeEventListener('metfa_open_reel', handleMetfaOpenReel);
+    };
+  }, [onNavigateTab, currentTab]);
 
   // Automatically dismiss active modals when currentTab changes
   useEffect(() => {
@@ -258,6 +336,7 @@ export const SocialEcosystemModule: React.FC<SocialEcosystemProps> = ({
           }}
           targetSharedPostId={targetSharedPostId}
           isLoadingPosts={isLoadingPosts}
+          onOpenReel={handleOpenReel}
           onClearSharedPost={() => {
             setTargetSharedPostId(null);
             if (typeof window !== 'undefined' && window.location.hash.startsWith('#post')) {
@@ -270,6 +349,14 @@ export const SocialEcosystemModule: React.FC<SocialEcosystemProps> = ({
       {currentTab === 'reels' && (
         <ReelsFeedView
           reels={reels}
+          isLoading={isLoadingReels}
+          targetReelId={targetReelId}
+          onClearTargetReel={() => {
+            setTargetReelId(null);
+            if (typeof window !== 'undefined' && window.location.hash.startsWith('#reel')) {
+              window.history.replaceState(null, '', window.location.pathname + window.location.search);
+            }
+          }}
           onUpdateReels={(r) => setReels(r)}
           userProfile={userProfile}
           onRemixPrompt={(prompt) => handleRemix(prompt)}

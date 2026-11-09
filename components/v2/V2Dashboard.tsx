@@ -17,12 +17,14 @@ import V2ModuleViewport from './V2ModuleViewport';
 import { V2ModuleId, V2ModuleMetadata } from '../../types/v2';
 import { V2_MODULE_REGISTRY } from '../../data/v2Registry';
 import { getClientAuthToken } from '../../services/supabaseClient';
+import { useAuth } from '../../context/AuthContext';
 
 interface V2DashboardProps {
   onBackToSocial?: () => void;
 }
 
 export const V2Dashboard: React.FC<V2DashboardProps> = ({ onBackToSocial }) => {
+  const { user, isAuthenticated, isSupabaseConnected, sessionToken } = useAuth();
   const [selectedModuleId, setSelectedModuleId] = useState<V2ModuleId | null>(null);
   const [isAuthorized, setIsAuthorized] = useState<boolean | null>(null);
   const [authError, setAuthError] = useState<string | null>(null);
@@ -30,9 +32,16 @@ export const V2Dashboard: React.FC<V2DashboardProps> = ({ onBackToSocial }) => {
   // Server-authoritative Owner / Admin role check
   useEffect(() => {
     let isMounted = true;
+
+    async function fetchOwnerCheck(bearerToken: string): Promise<Response> {
+      return fetch('/api/v2/auth/owner-check', {
+        headers: { Authorization: `Bearer ${bearerToken}` },
+      });
+    }
+
     async function verifyAuthority() {
       try {
-        const token = await getClientAuthToken();
+        let token = await getClientAuthToken(false);
         if (!token) {
           if (isMounted) {
             setIsAuthorized(false);
@@ -41,15 +50,23 @@ export const V2Dashboard: React.FC<V2DashboardProps> = ({ onBackToSocial }) => {
           return;
         }
 
-        const res = await fetch('/api/v2/auth/owner-check', {
-          headers: { Authorization: `Bearer ${token}` },
-        });
+        let res = await fetchOwnerCheck(token);
+
+        // At most one controlled session refresh & retry on expired/stale token
+        if (res.status === 401 || res.status === 400) {
+          const refreshedToken = await getClientAuthToken(true);
+          if (refreshedToken && refreshedToken !== token) {
+            token = refreshedToken;
+            res = await fetchOwnerCheck(token);
+          }
+        }
 
         if (res.ok) {
           const data = await res.json().catch(() => null);
           if (isMounted) {
             if (data?.authorized) {
               setIsAuthorized(true);
+              setAuthError(null);
             } else {
               setIsAuthorized(false);
               setAuthError('Access Denied: Your account does not possess verified METFA Owner or Administrator privileges.');
@@ -61,11 +78,13 @@ export const V2Dashboard: React.FC<V2DashboardProps> = ({ onBackToSocial }) => {
             setAuthError(
               res.status === 401
                 ? 'Authentication required. Please sign in to verify administrative credentials.'
-                : 'Access Denied: Insufficient administrative privileges (403 Forbidden).'
+                : res.status === 403
+                ? 'Access Denied: Insufficient administrative privileges (403 Forbidden).'
+                : `Authorization check failed (HTTP ${res.status}). Please refresh your session and try again.`
             );
           }
         }
-      } catch (err: any) {
+      } catch {
         if (isMounted) {
           setIsAuthorized(false);
           setAuthError('Authorization service unavailable. Failed to verify administrative credentials.');
@@ -77,7 +96,7 @@ export const V2Dashboard: React.FC<V2DashboardProps> = ({ onBackToSocial }) => {
     return () => {
       isMounted = false;
     };
-  }, []);
+  }, [isAuthenticated, sessionToken, user.id, isSupabaseConnected]);
 
   // 1. Loading state while verifying cryptographic authority
   if (isAuthorized === null) {

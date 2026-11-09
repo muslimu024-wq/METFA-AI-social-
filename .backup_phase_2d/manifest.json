@@ -1,0 +1,26 @@
+[
+  {
+    "file": "services/v2PremiumContentEngine.ts",
+    "backupFile": "services__v2PremiumContentEngine.ts",
+    "sha256": "091298ec12568303b7a12166c8708cb4c012bb1189a347b19180f1d2387bd78b",
+    "bytes": 61170
+  },
+  {
+    "file": "tests/v2PremiumContentVerification.ts",
+    "backupFile": "tests__v2PremiumContentVerification.ts",
+    "sha256": "83954e1a3bca195429a70dc09f8d13df80e08de8c105cc092439750286d27369",
+    "bytes": 29020
+  },
+  {
+    "file": "tests/v2RevenueVerification.ts",
+    "backupFile": "tests__v2RevenueVerification.ts",
+    "sha256": "c02897d71277d48b65877aca8383a1a49b84cc7a06e19e8b985f9bb47470034e",
+    "bytes": 7896
+  },
+  {
+    "file": "tests/v2Phase10IntegrationVerification.ts",
+    "backupFile": "tests__v2Phase10IntegrationVerification.ts",
+    "sha256": "81c17fb055f9a76e3ccf078e26521801bcf30b07066b33dfe970a6e32be854c6",
+    "bytes": 29006
+  }
+]

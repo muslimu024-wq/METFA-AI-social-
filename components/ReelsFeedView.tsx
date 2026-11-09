@@ -19,6 +19,7 @@ import {
   X,
   Music,
   ShieldCheck,
+  Loader2,
 } from 'lucide-react';
 import { ReelHighlight, UserProfile } from '../types/community';
 import { AudioTrack } from '../types/audio';
@@ -29,6 +30,10 @@ import {
   deleteReelHighlight,
   editReelHighlight,
 } from '../utils/socialStore';
+import {
+  deletePersistentReel,
+  editPersistentReel,
+} from '../services/reelService';
 import { getAudioTracks } from '../utils/audioStore';
 import { isContentOwner } from '../utils/communityStore';
 import { toggleSaveReel, isReelSaved } from '../utils/bookmarkStore';
@@ -45,6 +50,9 @@ interface ReelsFeedViewProps {
   userProfile: UserProfile;
   onRemixPrompt: (prompt: string) => void;
   onCreateReelClick: () => void;
+  isLoading?: boolean;
+  targetReelId?: string | null;
+  onClearTargetReel?: () => void;
 }
 
 export const ReelsFeedView: React.FC<ReelsFeedViewProps> = ({
@@ -53,7 +61,17 @@ export const ReelsFeedView: React.FC<ReelsFeedViewProps> = ({
   userProfile,
   onRemixPrompt,
   onCreateReelClick,
+  isLoading = false,
+  targetReelId,
+  onClearTargetReel,
 }) => {
+  // When targetReelId is provided, hoist the requested Reel to the top of the feed
+  const displayedReels = React.useMemo(() => {
+    if (!targetReelId) return reels;
+    const target = reels.find((r) => r.id === targetReelId);
+    if (!target) return reels;
+    return [target, ...reels.filter((r) => r.id !== targetReelId)];
+  }, [reels, targetReelId]);
   const [activeSharePayload, setActiveSharePayload] = useState<SharePayload | null>(null);
   const [isShareModalOpen, setIsShareModalOpen] = useState(false);
   const [sharingReelId, setSharingReelId] = useState<string | null>(null);
@@ -77,6 +95,24 @@ export const ReelsFeedView: React.FC<ReelsFeedViewProps> = ({
     setTimeout(() => setToastMessage(null), 3000);
   };
 
+  // Handle auto-scroll and fallback notification when targetReelId is passed
+  useEffect(() => {
+    if (!isLoading && targetReelId && reels.length > 0) {
+      const exists = reels.some((r) => r.id === targetReelId);
+      if (!exists) {
+        showToast('The selected reel is unavailable or has been removed.');
+        if (onClearTargetReel) {
+          onClearTargetReel();
+        }
+      } else {
+        const el = document.getElementById(`reel-${targetReelId}`);
+        if (el) {
+          el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        }
+      }
+    }
+  }, [isLoading, targetReelId, reels, onClearTargetReel]);
+
   // Close menus on outside click
   useEffect(() => {
     const handleGlobalClick = (e: MouseEvent) => {
@@ -99,9 +135,18 @@ export const ReelsFeedView: React.FC<ReelsFeedViewProps> = ({
   const handleSaveReelEdit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!editingReel) return;
+    const finalTitle = editingTitle.trim() || editingReel.title;
+    const finalCaption = editingCaption.trim() || editingReel.caption;
+
+    editPersistentReel(
+      editingReel.id,
+      { title: finalTitle, caption: finalCaption },
+      userProfile.id
+    );
+
     const updated = editReelHighlight(editingReel.id, {
-      title: editingTitle.trim() || editingReel.title,
-      caption: editingCaption.trim() || editingReel.caption,
+      title: finalTitle,
+      caption: finalCaption,
     });
     onUpdateReels(updated);
     setEditingReel(null);
@@ -114,6 +159,7 @@ export const ReelsFeedView: React.FC<ReelsFeedViewProps> = ({
       title: 'Delete Reel',
       message: 'Are you sure you want to permanently delete this reel? This action cannot be undone.',
       onConfirm: () => {
+        deletePersistentReel(reelId, userProfile.id);
         const updated = deleteReelHighlight(reelId);
         onUpdateReels(updated);
         setActiveReelMenuId(null);
@@ -193,7 +239,17 @@ export const ReelsFeedView: React.FC<ReelsFeedViewProps> = ({
 
       {/* Vertical Reels Stack */}
       <div className="space-y-6">
-        {reels.length === 0 ? (
+        {isLoading && reels.length === 0 ? (
+          <div className="text-center py-20 px-6 bg-gray-900/40 rounded-3xl border border-gray-800/80 backdrop-blur-md flex flex-col items-center justify-center space-y-3 animate-pulse">
+            <div className="w-14 h-14 rounded-3xl bg-purple-950/60 text-purple-400 border border-purple-800/50 flex items-center justify-center shadow-inner">
+              <Loader2 className="w-7 h-7 animate-spin text-purple-400" />
+            </div>
+            <div className="space-y-1">
+              <h3 className="text-sm font-bold text-white">Loading Community Reels...</h3>
+              <p className="text-xs text-slate-400">Fetching latest creations from cloud storage</p>
+            </div>
+          </div>
+        ) : reels.length === 0 ? (
           <div className="text-center py-16 px-6 bg-gray-900/60 rounded-3xl border border-gray-800 backdrop-blur-md flex flex-col items-center justify-center space-y-4 animate-fadeIn">
             <div className="w-16 h-16 rounded-3xl bg-purple-950/60 text-purple-400 border border-purple-800/50 flex items-center justify-center shadow-inner">
               <Film className="w-8 h-8 text-purple-400" />
@@ -214,10 +270,16 @@ export const ReelsFeedView: React.FC<ReelsFeedViewProps> = ({
             </button>
           </div>
         ) : (
-          reels.map((reel, idx) => (
+          displayedReels.map((reel, idx) => (
             <div
               key={reel.id}
-              className="relative rounded-3xl overflow-hidden bg-black border border-gray-800 shadow-2xl aspect-[9/16] flex flex-col justify-between p-4"
+              id={`reel-${reel.id}`}
+              data-testid={`reel-card-${reel.id}`}
+              className={`relative rounded-3xl overflow-hidden bg-black border shadow-2xl aspect-[9/16] flex flex-col justify-between p-4 transition-all duration-300 ${
+                targetReelId === reel.id
+                  ? 'border-teal-400 ring-2 ring-teal-400/60 shadow-teal-500/20'
+                  : 'border-gray-800'
+              }`}
             >
             {/* Video Background */}
             <video
@@ -240,6 +302,14 @@ export const ReelsFeedView: React.FC<ReelsFeedViewProps> = ({
                   <Sparkles className="w-3 h-3 text-teal-400" />
                   {reel.duration}s Reel
                 </span>
+                {targetReelId === reel.id && (
+                  <span
+                    data-testid={`reel-target-badge-${reel.id}`}
+                    className="px-2 py-0.5 bg-teal-500/20 text-teal-300 border border-teal-500/40 rounded-full text-[10px] font-semibold flex items-center gap-1"
+                  >
+                    Opened from Feed
+                  </span>
+                )}
               </div>
 
               {/* Reel Action Context Menu */}

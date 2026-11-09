@@ -324,8 +324,8 @@ export const getReelHighlights = (): ReelHighlight[] => {
 };
 
 export const saveReelHighlights = (reels: ReelHighlight[]): void => {
-  // Cap reels to latest 20
-  const trimmed = reels.filter(isRealReel).slice(0, 20);
+  // Cap reels to latest 50
+  const trimmed = reels.filter(isRealReel).slice(0, 50);
   safeSetItem(REELS_STORAGE_KEY, JSON.stringify(trimmed));
   if (typeof window !== 'undefined') {
     window.dispatchEvent(new CustomEvent('metfa_reels_updated', { detail: reels }));

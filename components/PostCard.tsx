@@ -88,6 +88,7 @@ export interface PostCardProps {
   priority?: boolean;
   isAuthorFollowed?: boolean;
   onToggleAuthorFollow?: (author: { id?: string; name?: string; username?: string; avatar?: string }) => void;
+  onOpenReel?: (reelId: string) => void;
 }
 
 export const PostCard: React.FC<PostCardProps> = ({
@@ -111,6 +112,7 @@ export const PostCard: React.FC<PostCardProps> = ({
   priority = false,
   isAuthorFollowed,
   onToggleAuthorFollow,
+  onOpenReel,
 }) => {
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const [showComments, setShowComments] = useState(false);
@@ -941,13 +943,79 @@ export const PostCard: React.FC<PostCardProps> = ({
       ) : (
         <div className="relative group bg-slate-100 max-h-[520px] overflow-hidden flex items-center justify-center">
           {post.videoSrc ? (
-            <video
-              src={post.videoSrc}
-              controls
-              playsInline
-              poster={post.videoThumbnail || (post.imageSrc && !post.imageSrc.includes('photo-1508739773434') ? post.imageSrc : undefined)}
-              className="w-full max-h-[520px] object-cover bg-black"
-            />
+            <div className="relative w-full overflow-hidden flex items-center justify-center bg-black group/videoplayer">
+              {((post.postType === 'reel') || (post.feedType === 'reels') || (Array.isArray(post.tags) && post.tags.includes('reel'))) && (
+                <>
+                  {/* Direct-click / tap area on visible video picture area for genuine Reels */}
+                  <div
+                    role="button"
+                    tabIndex={0}
+                    data-testid={`postcard-reel-video-picture-area-${post.id}`}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      e.preventDefault();
+                      if (onOpenReel) {
+                        onOpenReel(post.id);
+                      } else if (typeof window !== 'undefined') {
+                        window.dispatchEvent(
+                          new CustomEvent('metfa_open_reel', { detail: { reelId: post.id, title: post.videoTitle || post.caption } })
+                        );
+                      }
+                    }}
+                    className="absolute inset-x-0 top-0 bottom-14 z-10 cursor-pointer focus:outline-none"
+                    title="Watch Reel"
+                    aria-label={`Watch ${post.videoTitle || 'Reel'} in Reels`}
+                  />
+                  {/* Accessible Watch Reel badge */}
+                  <button
+                    type="button"
+                    data-testid={`postcard-reel-nav-btn-${post.id}`}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      e.preventDefault();
+                      if (onOpenReel) {
+                        onOpenReel(post.id);
+                      } else if (typeof window !== 'undefined') {
+                        window.dispatchEvent(
+                          new CustomEvent('metfa_open_reel', { detail: { reelId: post.id, title: post.videoTitle || post.caption } })
+                        );
+                      }
+                    }}
+                    className="absolute top-3 left-3 z-20 px-3 py-1.5 rounded-full bg-black/80 hover:bg-black text-white border border-teal-500/50 backdrop-blur-md text-xs font-bold flex items-center gap-1.5 shadow-xl transition transform active:scale-95 cursor-pointer pointer-events-auto"
+                    title="Watch fullscreen in Reels feed"
+                    aria-label={`Watch ${post.videoTitle || 'Reel'} in Reels`}
+                  >
+                    <Film className="w-3.5 h-3.5 text-teal-400 shrink-0 animate-pulse" />
+                    <span className="text-[11px] font-semibold text-teal-300">Watch Reel</span>
+                    <span className="text-[10px] text-slate-400 font-mono">→</span>
+                  </button>
+                </>
+              )}
+              <video
+                src={post.videoSrc}
+                controls
+                playsInline
+                poster={post.videoThumbnail || (post.imageSrc && !post.imageSrc.includes('photo-1508739773434') ? post.imageSrc : undefined)}
+                className="w-full max-h-[520px] object-cover bg-black"
+                onClick={(e) => {
+                  const isReel = (post.postType === 'reel') || (post.feedType === 'reels') || (Array.isArray(post.tags) && post.tags.includes('reel'));
+                  if (!isReel) return;
+                  const rect = e.currentTarget.getBoundingClientRect();
+                  const clickY = e.clientY - rect.top;
+                  if (clickY < rect.height - 56) {
+                    e.stopPropagation();
+                    e.preventDefault();
+                    if (onOpenReel) {
+                      onOpenReel(post.id);
+                    } else if (typeof window !== 'undefined') {
+                      window.dispatchEvent(
+                        new CustomEvent('metfa_open_reel', { detail: { reelId: post.id, title: post.videoTitle || post.caption } })
+                      );
+                    }
+                  }
+                }}
+              />
+            </div>
           ) : post.imageGallery && post.imageGallery.length > 1 ? (
             <div
               className={`w-full grid gap-1 ${

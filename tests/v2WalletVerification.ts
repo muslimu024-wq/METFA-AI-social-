@@ -31,7 +31,7 @@
 
 import { V2WalletEngine } from '../services/v2WalletEngine';
 import { V2RewardEngine } from '../services/v2RewardEngine';
-import { v2RevenueEngine } from '../services/v2RevenueEngine';
+import { V2RevenueEngine } from '../services/v2RevenueEngine';
 import { v2ContributionEngine } from '../services/v2ContributionEngine';
 
 export interface V2WalletTestResult {
@@ -51,6 +51,7 @@ export interface V2WalletTestSuiteSummary {
 
 export function runV2WalletEngineVerification(): V2WalletTestSuiteSummary {
   const results: V2WalletTestResult[] = [];
+  const localRevenueEngine = new V2RevenueEngine({ isIsolatedTest: true });
 
   const runTest = (
     testId: string,
@@ -79,12 +80,12 @@ export function runV2WalletEngineVerification(): V2WalletTestSuiteSummary {
 
   // Helper setup: Provisions a finalized revenue period and finalized reward settlement
   const setupFinalizedRewardSystem = (rewardEngine: V2RewardEngine) => {
-    // 1. Create a finalized revenue period in v2RevenueEngine with dynamic period bounds
+    // 1. Create a finalized revenue period in localRevenueEngine with dynamic period bounds
     const now = new Date();
     const periodStart = new Date(now.getTime() - 15 * 24 * 60 * 60 * 1000).toISOString();
     const periodEnd = new Date(now.getTime() + 15 * 24 * 60 * 60 * 1000).toISOString();
 
-    const revPeriod = v2RevenueEngine.createRevenuePeriod({
+    const revPeriod = localRevenueEngine.createRevenuePeriod({
       period_name: `RevPeriod_WalTest_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
       period_start: periodStart,
       period_end: periodEnd,
@@ -93,7 +94,7 @@ export function runV2WalletEngineVerification(): V2WalletTestSuiteSummary {
       actor_role: 'SUPER_ADMIN',
     });
 
-    v2RevenueEngine.recordRevenueEntry({
+    localRevenueEngine.recordRevenueEntry({
       period_id: revPeriod.id,
       source: 'ADS',
       entry_type: 'GROSS_INCOME',
@@ -106,7 +107,7 @@ export function runV2WalletEngineVerification(): V2WalletTestSuiteSummary {
       auto_verify: true,
     });
 
-    v2RevenueEngine.finalizeRevenuePeriod({
+    localRevenueEngine.finalizeRevenuePeriod({
       period_id: revPeriod.id,
       actor_id: 'admin_test_setup',
       actor_role: 'SUPER_ADMIN',
@@ -141,7 +142,7 @@ export function runV2WalletEngineVerification(): V2WalletTestSuiteSummary {
   // WAL-01: Wallet Account Creation
   // -------------------------------------------------------------------------
   runTest('WAL-01', 'Wallet Account Creation (Integer minor units, initialized at 0 cents)', () => {
-    const walletEngine = new V2WalletEngine();
+    const walletEngine = new V2WalletEngine(undefined, { isIsolatedTest: true });
     walletEngine.resetForTesting();
 
     const wallet = walletEngine.getOrCreateWallet('usr_fresh_01', 'USD');
@@ -170,9 +171,9 @@ export function runV2WalletEngineVerification(): V2WalletTestSuiteSummary {
   // WAL-02: Authoritative Reward -> Wallet Credit
   // -------------------------------------------------------------------------
   runTest('WAL-02', 'Authoritative Reward -> Wallet Credit', () => {
-    const rewardEngine = new V2RewardEngine();
+    const rewardEngine = new V2RewardEngine({ isIsolatedTest: true, revenueEngine: localRevenueEngine });
     rewardEngine.resetForTesting();
-    const walletEngine = new V2WalletEngine(rewardEngine);
+    const walletEngine = new V2WalletEngine(rewardEngine, { isIsolatedTest: true });
     walletEngine.resetForTesting();
 
     const { userAlloc } = setupFinalizedRewardSystem(rewardEngine);
@@ -205,7 +206,7 @@ export function runV2WalletEngineVerification(): V2WalletTestSuiteSummary {
   // WAL-03: Approved Settlement Period Boundary
   // -------------------------------------------------------------------------
   runTest('WAL-03', 'Approved Settlement Period Boundary (Rejects unfinalized periods)', () => {
-    const walletEngine = new V2WalletEngine();
+    const walletEngine = new V2WalletEngine(undefined, { isIsolatedTest: true });
     walletEngine.resetForTesting();
 
     const creditRes = walletEngine.creditFromRewardAllocation({
@@ -228,9 +229,9 @@ export function runV2WalletEngineVerification(): V2WalletTestSuiteSummary {
   // WAL-04: Estimated Reward Rejection
   // -------------------------------------------------------------------------
   runTest('WAL-04', 'Estimated Reward Rejection (Strictly rejects ESTIMATED stage)', () => {
-    const rewardEngine = new V2RewardEngine();
+    const rewardEngine = new V2RewardEngine({ isIsolatedTest: true, revenueEngine: localRevenueEngine });
     rewardEngine.resetForTesting();
-    const walletEngine = new V2WalletEngine(rewardEngine);
+    const walletEngine = new V2WalletEngine(rewardEngine, { isIsolatedTest: true });
     walletEngine.resetForTesting();
 
     const { userAlloc } = setupFinalizedRewardSystem(rewardEngine);
@@ -256,9 +257,9 @@ export function runV2WalletEngineVerification(): V2WalletTestSuiteSummary {
   // WAL-05: Pending Reward Protection
   // -------------------------------------------------------------------------
   runTest('WAL-05', 'Pending Reward Protection (Pending credit does not inflate withdrawable balance)', () => {
-    const rewardEngine = new V2RewardEngine();
+    const rewardEngine = new V2RewardEngine({ isIsolatedTest: true, revenueEngine: localRevenueEngine });
     rewardEngine.resetForTesting();
-    const walletEngine = new V2WalletEngine(rewardEngine);
+    const walletEngine = new V2WalletEngine(rewardEngine, { isIsolatedTest: true });
     walletEngine.resetForTesting();
 
     const { userAlloc } = setupFinalizedRewardSystem(rewardEngine);
@@ -291,9 +292,9 @@ export function runV2WalletEngineVerification(): V2WalletTestSuiteSummary {
   // WAL-06: Withdrawable Eligibility
   // -------------------------------------------------------------------------
   runTest('WAL-06', 'Withdrawable Eligibility (Released funds enter available balance)', () => {
-    const rewardEngine = new V2RewardEngine();
+    const rewardEngine = new V2RewardEngine({ isIsolatedTest: true, revenueEngine: localRevenueEngine });
     rewardEngine.resetForTesting();
-    const walletEngine = new V2WalletEngine(rewardEngine);
+    const walletEngine = new V2WalletEngine(rewardEngine, { isIsolatedTest: true });
     walletEngine.resetForTesting();
 
     const { userAlloc } = setupFinalizedRewardSystem(rewardEngine);
@@ -334,9 +335,9 @@ export function runV2WalletEngineVerification(): V2WalletTestSuiteSummary {
   // WAL-07: Idempotent Reward Credit
   // -------------------------------------------------------------------------
   runTest('WAL-07', 'Idempotent Reward Credit (Repeated credit returns cached entry)', () => {
-    const rewardEngine = new V2RewardEngine();
+    const rewardEngine = new V2RewardEngine({ isIsolatedTest: true, revenueEngine: localRevenueEngine });
     rewardEngine.resetForTesting();
-    const walletEngine = new V2WalletEngine(rewardEngine);
+    const walletEngine = new V2WalletEngine(rewardEngine, { isIsolatedTest: true });
     walletEngine.resetForTesting();
 
     const { userAlloc } = setupFinalizedRewardSystem(rewardEngine);
@@ -375,9 +376,9 @@ export function runV2WalletEngineVerification(): V2WalletTestSuiteSummary {
   // WAL-08: Duplicate Credit Prevention
   // -------------------------------------------------------------------------
   runTest('WAL-08', 'Duplicate Credit Prevention (Idempotency key prevents duplicate ledger records)', () => {
-    const rewardEngine = new V2RewardEngine();
+    const rewardEngine = new V2RewardEngine({ isIsolatedTest: true, revenueEngine: localRevenueEngine });
     rewardEngine.resetForTesting();
-    const walletEngine = new V2WalletEngine(rewardEngine);
+    const walletEngine = new V2WalletEngine(rewardEngine, { isIsolatedTest: true });
     walletEngine.resetForTesting();
 
     const { userAlloc } = setupFinalizedRewardSystem(rewardEngine);
@@ -413,9 +414,9 @@ export function runV2WalletEngineVerification(): V2WalletTestSuiteSummary {
   // WAL-09: Append-Only Ledger Structure
   // -------------------------------------------------------------------------
   runTest('WAL-09', 'Append-Only Ledger Structure (Ledger is strictly append-only)', () => {
-    const rewardEngine = new V2RewardEngine();
+    const rewardEngine = new V2RewardEngine({ isIsolatedTest: true, revenueEngine: localRevenueEngine });
     rewardEngine.resetForTesting();
-    const walletEngine = new V2WalletEngine(rewardEngine);
+    const walletEngine = new V2WalletEngine(rewardEngine, { isIsolatedTest: true });
     walletEngine.resetForTesting();
 
     const { userAlloc } = setupFinalizedRewardSystem(rewardEngine);
@@ -452,7 +453,7 @@ export function runV2WalletEngineVerification(): V2WalletTestSuiteSummary {
   // WAL-10: Update Rejection Guard
   // -------------------------------------------------------------------------
   runTest('WAL-10', 'Update Rejection Guard (updateLedgerEntry rejected with immutability error)', () => {
-    const walletEngine = new V2WalletEngine();
+    const walletEngine = new V2WalletEngine(undefined, { isIsolatedTest: true });
     const result = walletEngine.updateLedgerEntry();
 
     const passed = !result.success && result.error.includes('Ledger Immutability Violation');
@@ -469,7 +470,7 @@ export function runV2WalletEngineVerification(): V2WalletTestSuiteSummary {
   // WAL-11: Delete Rejection Guard
   // -------------------------------------------------------------------------
   runTest('WAL-11', 'Delete Rejection Guard (deleteLedgerEntry rejected with immutability error)', () => {
-    const walletEngine = new V2WalletEngine();
+    const walletEngine = new V2WalletEngine(undefined, { isIsolatedTest: true });
     const result = walletEngine.deleteLedgerEntry();
 
     const passed = !result.success && result.error.includes('Ledger Immutability Violation');
@@ -486,9 +487,9 @@ export function runV2WalletEngineVerification(): V2WalletTestSuiteSummary {
   // WAL-12: Reversal Creates New Entry
   // -------------------------------------------------------------------------
   runTest('WAL-12', 'Reversal Creates New Entry (Appends new REVERSAL entry, leaves original intact)', () => {
-    const rewardEngine = new V2RewardEngine();
+    const rewardEngine = new V2RewardEngine({ isIsolatedTest: true, revenueEngine: localRevenueEngine });
     rewardEngine.resetForTesting();
-    const walletEngine = new V2WalletEngine(rewardEngine);
+    const walletEngine = new V2WalletEngine(rewardEngine, { isIsolatedTest: true });
     walletEngine.resetForTesting();
 
     const { userAlloc } = setupFinalizedRewardSystem(rewardEngine);
@@ -534,9 +535,9 @@ export function runV2WalletEngineVerification(): V2WalletTestSuiteSummary {
   // WAL-13: No Arbitrary Client Credit
   // -------------------------------------------------------------------------
   runTest('WAL-13', 'No Arbitrary Client Credit (Credit amount bound strictly to allocation)', () => {
-    const rewardEngine = new V2RewardEngine();
+    const rewardEngine = new V2RewardEngine({ isIsolatedTest: true, revenueEngine: localRevenueEngine });
     rewardEngine.resetForTesting();
-    const walletEngine = new V2WalletEngine(rewardEngine);
+    const walletEngine = new V2WalletEngine(rewardEngine, { isIsolatedTest: true });
     walletEngine.resetForTesting();
 
     const { userAlloc } = setupFinalizedRewardSystem(rewardEngine);
@@ -565,9 +566,9 @@ export function runV2WalletEngineVerification(): V2WalletTestSuiteSummary {
   // WAL-14: No Over-Credit Invariant
   // -------------------------------------------------------------------------
   runTest('WAL-14', 'No Over-Credit Invariant (Credit amount exactly equals allocation cents)', () => {
-    const rewardEngine = new V2RewardEngine();
+    const rewardEngine = new V2RewardEngine({ isIsolatedTest: true, revenueEngine: localRevenueEngine });
     rewardEngine.resetForTesting();
-    const walletEngine = new V2WalletEngine(rewardEngine);
+    const walletEngine = new V2WalletEngine(rewardEngine, { isIsolatedTest: true });
     walletEngine.resetForTesting();
 
     const { userAlloc } = setupFinalizedRewardSystem(rewardEngine);
@@ -597,9 +598,9 @@ export function runV2WalletEngineVerification(): V2WalletTestSuiteSummary {
   // WAL-15: No Over-Debit Invariant
   // -------------------------------------------------------------------------
   runTest('WAL-15', 'No Over-Debit Invariant (Hold rejected if exceeds withdrawable balance)', () => {
-    const rewardEngine = new V2RewardEngine();
+    const rewardEngine = new V2RewardEngine({ isIsolatedTest: true, revenueEngine: localRevenueEngine });
     rewardEngine.resetForTesting();
-    const walletEngine = new V2WalletEngine(rewardEngine);
+    const walletEngine = new V2WalletEngine(rewardEngine, { isIsolatedTest: true });
     walletEngine.resetForTesting();
 
     const { userAlloc } = setupFinalizedRewardSystem(rewardEngine);
@@ -634,7 +635,7 @@ export function runV2WalletEngineVerification(): V2WalletTestSuiteSummary {
   // WAL-16: Negative Balance Protection
   // -------------------------------------------------------------------------
   runTest('WAL-16', 'Negative Balance Protection (System blocks transactions causing negative balance)', () => {
-    const walletEngine = new V2WalletEngine();
+    const walletEngine = new V2WalletEngine(undefined, { isIsolatedTest: true });
     walletEngine.resetForTesting();
 
     const wallet = walletEngine.getOrCreateWallet('usr_empty_01', 'USD');
@@ -663,7 +664,7 @@ export function runV2WalletEngineVerification(): V2WalletTestSuiteSummary {
   // WAL-17: Currency Consistency Guard
   // -------------------------------------------------------------------------
   runTest('WAL-17', 'Currency Consistency Guard (Cross-currency transactions strictly rejected)', () => {
-    const walletEngine = new V2WalletEngine();
+    const walletEngine = new V2WalletEngine(undefined, { isIsolatedTest: true });
     walletEngine.resetForTesting();
 
     const wallet = walletEngine.getOrCreateWallet('usr_usd_user', 'USD');
@@ -691,9 +692,9 @@ export function runV2WalletEngineVerification(): V2WalletTestSuiteSummary {
   // WAL-18: Payout Hold Compatibility
   // -------------------------------------------------------------------------
   runTest('WAL-18', 'Payout Hold Compatibility (Moves funds from available to locked hold)', () => {
-    const rewardEngine = new V2RewardEngine();
+    const rewardEngine = new V2RewardEngine({ isIsolatedTest: true, revenueEngine: localRevenueEngine });
     rewardEngine.resetForTesting();
-    const walletEngine = new V2WalletEngine(rewardEngine);
+    const walletEngine = new V2WalletEngine(rewardEngine, { isIsolatedTest: true });
     walletEngine.resetForTesting();
 
     const { userAlloc } = setupFinalizedRewardSystem(rewardEngine);
@@ -733,9 +734,9 @@ export function runV2WalletEngineVerification(): V2WalletTestSuiteSummary {
   // WAL-19: Payout Debit Idempotency
   // -------------------------------------------------------------------------
   runTest('WAL-19', 'Payout Debit Idempotency (Permanent deduction of held funds is idempotent)', () => {
-    const rewardEngine = new V2RewardEngine();
+    const rewardEngine = new V2RewardEngine({ isIsolatedTest: true, revenueEngine: localRevenueEngine });
     rewardEngine.resetForTesting();
-    const walletEngine = new V2WalletEngine(rewardEngine);
+    const walletEngine = new V2WalletEngine(rewardEngine, { isIsolatedTest: true });
     walletEngine.resetForTesting();
 
     const { userAlloc } = setupFinalizedRewardSystem(rewardEngine);
@@ -791,9 +792,9 @@ export function runV2WalletEngineVerification(): V2WalletTestSuiteSummary {
   // WAL-20: Payout Hold Release
   // -------------------------------------------------------------------------
   runTest('WAL-20', 'Payout Hold Release (Cancelled payout returns held funds to available)', () => {
-    const rewardEngine = new V2RewardEngine();
+    const rewardEngine = new V2RewardEngine({ isIsolatedTest: true, revenueEngine: localRevenueEngine });
     rewardEngine.resetForTesting();
-    const walletEngine = new V2WalletEngine(rewardEngine);
+    const walletEngine = new V2WalletEngine(rewardEngine, { isIsolatedTest: true });
     walletEngine.resetForTesting();
 
     const { userAlloc } = setupFinalizedRewardSystem(rewardEngine);
@@ -841,9 +842,9 @@ export function runV2WalletEngineVerification(): V2WalletTestSuiteSummary {
   // WAL-21: Deterministic Reconciliation
   // -------------------------------------------------------------------------
   runTest('WAL-21', 'Deterministic Reconciliation (Ledger replay matches cached figures)', () => {
-    const rewardEngine = new V2RewardEngine();
+    const rewardEngine = new V2RewardEngine({ isIsolatedTest: true, revenueEngine: localRevenueEngine });
     rewardEngine.resetForTesting();
-    const walletEngine = new V2WalletEngine(rewardEngine);
+    const walletEngine = new V2WalletEngine(rewardEngine, { isIsolatedTest: true });
     walletEngine.resetForTesting();
 
     const { userAlloc } = setupFinalizedRewardSystem(rewardEngine);
@@ -871,9 +872,9 @@ export function runV2WalletEngineVerification(): V2WalletTestSuiteSummary {
   // WAL-22: Unauthorized Role Rejection
   // -------------------------------------------------------------------------
   runTest('WAL-22', 'Unauthorized Role Rejection (Non-admin rejected from corrections and reversals)', () => {
-    const rewardEngine = new V2RewardEngine();
+    const rewardEngine = new V2RewardEngine({ isIsolatedTest: true, revenueEngine: localRevenueEngine });
     rewardEngine.resetForTesting();
-    const walletEngine = new V2WalletEngine(rewardEngine);
+    const walletEngine = new V2WalletEngine(rewardEngine, { isIsolatedTest: true });
     walletEngine.resetForTesting();
 
     const { userAlloc } = setupFinalizedRewardSystem(rewardEngine);
@@ -920,7 +921,7 @@ export function runV2WalletEngineVerification(): V2WalletTestSuiteSummary {
   // WAL-23: Admin Correction Audit Trail
   // -------------------------------------------------------------------------
   runTest('WAL-23', 'Admin Correction Audit Trail (Authorized adjustment posts audited entry)', () => {
-    const walletEngine = new V2WalletEngine();
+    const walletEngine = new V2WalletEngine(undefined, { isIsolatedTest: true });
     walletEngine.resetForTesting();
 
     const wallet = walletEngine.getOrCreateWallet('usr_corp_01', 'USD');
@@ -954,9 +955,9 @@ export function runV2WalletEngineVerification(): V2WalletTestSuiteSummary {
   // WAL-24: METFA AI Mutation Barrier
   // -------------------------------------------------------------------------
   runTest('WAL-24', 'METFA AI Mutation Barrier (AI actor role strictly blocked from mutations)', () => {
-    const rewardEngine = new V2RewardEngine();
+    const rewardEngine = new V2RewardEngine({ isIsolatedTest: true, revenueEngine: localRevenueEngine });
     rewardEngine.resetForTesting();
-    const walletEngine = new V2WalletEngine(rewardEngine);
+    const walletEngine = new V2WalletEngine(rewardEngine, { isIsolatedTest: true });
     walletEngine.resetForTesting();
 
     const { userAlloc } = setupFinalizedRewardSystem(rewardEngine);
@@ -994,9 +995,9 @@ export function runV2WalletEngineVerification(): V2WalletTestSuiteSummary {
   // WAL-25: Historical Ledger Chain Integrity
   // -------------------------------------------------------------------------
   runTest('WAL-25', 'Historical Ledger Chain Integrity (Reconciliation passes across complex lifecycle)', () => {
-    const rewardEngine = new V2RewardEngine();
+    const rewardEngine = new V2RewardEngine({ isIsolatedTest: true, revenueEngine: localRevenueEngine });
     rewardEngine.resetForTesting();
-    const walletEngine = new V2WalletEngine(rewardEngine);
+    const walletEngine = new V2WalletEngine(rewardEngine, { isIsolatedTest: true });
     walletEngine.resetForTesting();
 
     const { userAlloc } = setupFinalizedRewardSystem(rewardEngine);

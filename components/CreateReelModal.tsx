@@ -15,12 +15,15 @@ import {
   VolumeX,
   Clock,
   Radio,
+  Loader2,
+  AlertCircle,
 } from 'lucide-react';
 import { ReelHighlight, UserProfile } from '../types/community';
 import { AudioTrack, ReelAudioConfig } from '../types/audio';
 import { addReelHighlight } from '../utils/socialStore';
 import { recordTrackUsage, createOriginalSoundRecord } from '../utils/audioStore';
 import { compressImageDataUrl } from '../utils/storageUtils';
+import { createPersistentReel } from '../services/reelService';
 import AudioTrackPickerModal from './AudioTrackPickerModal';
 import AudioLicenseInfoModal from './AudioLicenseInfoModal';
 
@@ -44,12 +47,18 @@ export const CreateReelModal: React.FC<CreateReelModalProps> = ({
   const [title, setTitle] = useState('');
   const [caption, setCaption] = useState('');
   const [promptUsed, setPromptUsed] = useState('');
+  const [videoFile, setVideoFile] = useState<File | null>(null);
   const [videoSrc, setVideoSrc] = useState(
     initialVideoSrc || 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerBlazes.mp4'
   );
   const [thumbnailSrc, setThumbnailSrc] = useState('https://images.unsplash.com/photo-1508739773434-c26b3d09e071?w=600');
   const [duration, setDuration] = useState(0);
   const [selectedAudioTrack, setSelectedAudioTrack] = useState<AudioTrack | null>(null);
+
+  // Upload and persistence state
+  const [isUploading, setIsUploading] = useState(false);
+  const [uploadStep, setUploadStep] = useState<string>('');
+  const [uploadError, setUploadError] = useState<string | null>(null);
 
   React.useEffect(() => {
     if (isOpen && initialVideoSrc) {
@@ -74,7 +83,9 @@ export const CreateReelModal: React.FC<CreateReelModalProps> = ({
   const handleVideoUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
+    setVideoFile(file);
     setVideoSrc(URL.createObjectURL(file));
+    setUploadError(null);
   };
 
   const handleVideoLoadedMetadata = (e: React.SyntheticEvent<HTMLVideoElement>) => {
@@ -108,63 +119,72 @@ export const CreateReelModal: React.FC<CreateReelModalProps> = ({
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!title.trim() && !caption.trim()) return;
+    if (isUploading) return;
 
-    const compressedThumb = await compressImageDataUrl(thumbnailSrc, 600, 800, 0.7);
-    const tempReelId = `reel_${Date.now()}`;
+    setIsUploading(true);
+    setUploadError(null);
+    setUploadStep('Preparing video and audio config...');
 
-    let resolvedTrack = selectedAudioTrack;
+    try {
+      const compressedThumb = await compressImageDataUrl(thumbnailSrc, 600, 800, 0.7);
+      const tempReelId = `reel_${Date.now()}`;
 
-    const finalDuration = duration > 0 ? duration : 15;
+      let resolvedTrack = selectedAudioTrack;
+      const finalDuration = duration > 0 ? duration : 15;
 
-    if (resolvedTrack) {
-      recordTrackUsage(resolvedTrack.id);
-    } else {
-      // Auto-create Original Sound record from the user's video reel
-      resolvedTrack = createOriginalSoundRecord({
-        userId: userProfile.id,
-        username: userProfile.username,
-        userAvatar: userProfile.avatar,
-        reelId: tempReelId,
-        videoSrc,
-        duration: finalDuration,
-        title: `Original sound — @${userProfile.username.replace('@', '')}`,
-      });
+      if (resolvedTrack) {
+        recordTrackUsage(resolvedTrack.id);
+      } else {
+        // Auto-create Original Sound record from the user's video reel
+        resolvedTrack = createOriginalSoundRecord({
+          userId: userProfile.id,
+          username: userProfile.username,
+          userAvatar: userProfile.avatar,
+          reelId: tempReelId,
+          videoSrc,
+          duration: finalDuration,
+          title: `Original sound — @${userProfile.username.replace('@', '')}`,
+        });
+      }
+
+      const musicTrackName = resolvedTrack
+        ? `${resolvedTrack.title} • ${resolvedTrack.artist}`
+        : `Original sound — @${userProfile.username.replace('@', '')}`;
+
+      // Call persistent reel creation
+      const result = await createPersistentReel(
+        {
+          title: title.trim() || 'AI Creation Reel',
+          caption: caption.trim() || 'Created with Metfa Studio #AI',
+          promptUsed: promptUsed.trim() || undefined,
+          videoSource: videoFile || videoSrc,
+          thumbnailSource: compressedThumb,
+          duration: finalDuration,
+          musicTrack: musicTrackName,
+          audioTrack: resolvedTrack || undefined,
+          author: {
+            id: userProfile.id,
+            name: userProfile.name,
+            username: userProfile.username,
+            avatar: userProfile.avatar,
+            isVerified: userProfile.isVerified,
+          },
+        },
+        (step) => setUploadStep(step)
+      );
+
+      if (result.success && result.reel) {
+        onReelCreated(result.reel);
+        onClose();
+      } else {
+        setUploadError(result.error || 'Failed to upload and publish reel. Please try again.');
+      }
+    } catch (err: any) {
+      console.error('[CreateReelModal] Submit error:', err);
+      setUploadError(err?.message || 'Unexpected error occurred during upload.');
+    } finally {
+      setIsUploading(false);
     }
-
-    const musicTrackName = resolvedTrack
-      ? `${resolvedTrack.title} • ${resolvedTrack.artist}`
-      : `Original sound — @${userProfile.username.replace('@', '')}`;
-
-    const audioConfig: ReelAudioConfig = {
-      volume: musicVolume / 100,
-      originalVolume: originalAudioVolume / 100,
-      startTime: audioStartTime,
-      duration: finalDuration,
-      fadeIn,
-      fadeOut,
-    };
-
-    const newReel = addReelHighlight({
-      title: title.trim() || 'AI Creation Reel',
-      caption: caption.trim() || 'Created with Metfa Studio #AI',
-      promptUsed: promptUsed.trim() || undefined,
-      videoSrc,
-      thumbnailSrc: compressedThumb,
-      duration: finalDuration,
-      isLiked: false,
-      musicTrack: musicTrackName,
-      audioTrack: resolvedTrack || undefined,
-      author: {
-        id: userProfile.id,
-        name: userProfile.name,
-        username: userProfile.username,
-        avatar: userProfile.avatar,
-        isVerified: userProfile.isVerified,
-      },
-    });
-
-    onReelCreated(newReel);
-    onClose();
   };
 
   return (
@@ -459,21 +479,47 @@ export const CreateReelModal: React.FC<CreateReelModalProps> = ({
               />
             </div>
 
+            {/* Upload Progress & Error Feedback */}
+            {isUploading && (
+              <div className="p-3 bg-purple-950/40 border border-purple-800/60 rounded-xl flex items-center gap-2.5 text-xs text-purple-200 animate-pulse">
+                <Loader2 className="w-4 h-4 text-purple-400 animate-spin shrink-0" />
+                <span className="font-medium">{uploadStep || 'Uploading video to cloud storage...'}</span>
+              </div>
+            )}
+
+            {uploadError && (
+              <div className="p-3 bg-rose-950/50 border border-rose-800/60 rounded-xl flex items-start gap-2.5 text-xs text-rose-200">
+                <AlertCircle className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />
+                <span>{uploadError}</span>
+              </div>
+            )}
+
             {/* Submit */}
             <div className="pt-2 flex items-center justify-end gap-2 shrink-0">
               <button
                 type="button"
                 onClick={onClose}
-                className="px-4 py-2 bg-gray-800 hover:bg-gray-700 text-white text-xs font-bold rounded-xl transition"
+                disabled={isUploading}
+                className="px-4 py-2 bg-gray-800 hover:bg-gray-700 disabled:opacity-50 text-white text-xs font-bold rounded-xl transition"
               >
                 Cancel
               </button>
               <button
                 type="submit"
-                className="px-5 py-2 bg-gradient-to-r from-purple-600 to-teal-500 hover:from-purple-500 hover:to-teal-400 text-white text-xs font-bold rounded-xl shadow-md transition flex items-center gap-1.5"
+                disabled={isUploading}
+                className="px-5 py-2 bg-gradient-to-r from-purple-600 to-teal-500 hover:from-purple-500 hover:to-teal-400 disabled:opacity-60 text-white text-xs font-bold rounded-xl shadow-md transition flex items-center gap-1.5 cursor-pointer disabled:cursor-not-allowed"
               >
-                <Sparkles className="w-3.5 h-3.5" />
-                <span>Publish Reel</span>
+                {isUploading ? (
+                  <>
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    <span>Publishing...</span>
+                  </>
+                ) : (
+                  <>
+                    <Sparkles className="w-3.5 h-3.5" />
+                    <span>Publish Reel</span>
+                  </>
+                )}
               </button>
             </div>
           </form>

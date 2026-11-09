@@ -31,11 +31,11 @@
  */
 
 import { V2ModuleId } from '../types/v2';
-import { v2ContributionEngine } from './v2ContributionEngine';
-import { v2RevenueEngine } from './v2RevenueEngine';
-import { v2RewardEngine } from './v2RewardEngine';
+import { v2ContributionEngine, V2ContributionEngine } from './v2ContributionEngine';
+import { v2RevenueEngine, V2RevenueEngine } from './v2RevenueEngine';
+import { v2RewardEngine, V2RewardEngine } from './v2RewardEngine';
 import { v2RiskEngine } from './v2RiskEngine';
-import { v2AdminEngine } from './v2AdminEngine';
+import { v2AdminEngine, V2AdminEngine } from './v2AdminEngine';
 import {
   V2ContributionAction,
   V2ContributionProcessingResult,
@@ -213,6 +213,23 @@ export interface V2IntegrationHealthSummary {
 // ============================================================================
 
 export class V2IntegrationAdapter {
+  private revenueEngine: V2RevenueEngine;
+  private rewardEngine: V2RewardEngine;
+  private contributionEngine: V2ContributionEngine;
+  private adminEngine: V2AdminEngine;
+
+  constructor(options?: {
+    revenueEngine?: V2RevenueEngine;
+    rewardEngine?: V2RewardEngine;
+    contributionEngine?: V2ContributionEngine;
+    adminEngine?: V2AdminEngine;
+  }) {
+    this.revenueEngine = options?.revenueEngine || v2RevenueEngine;
+    this.rewardEngine = options?.rewardEngine || v2RewardEngine;
+    this.contributionEngine = options?.contributionEngine || v2ContributionEngine;
+    this.adminEngine = options?.adminEngine || v2AdminEngine;
+  }
+
   private postsIngested = 0;
   private interactionsIngested = 0;
   private viewsIngested = 0;
@@ -791,7 +808,7 @@ export class V2IntegrationAdapter {
     }
 
     // Check emergency kill switch
-    if (v2AdminEngine.isRewardsPaused()) {
+    if (this.adminEngine.isRewardsPaused()) {
       return {
         success: false,
         periodId: params.revenuePeriodId,
@@ -807,7 +824,7 @@ export class V2IntegrationAdapter {
     }
 
     // 1. Pull period from Authoritative Revenue Engine
-    const revPeriod = v2RevenueEngine.getPeriod(params.revenuePeriodId);
+    const revPeriod = this.revenueEngine.getPeriod(params.revenuePeriodId);
     if (!revPeriod) {
       return {
         success: false,
@@ -840,18 +857,18 @@ export class V2IntegrationAdapter {
     }
 
     // 2. Fetch Active Reward Pool Policy
-    const activePolicy = v2RewardEngine.getActivePolicy();
+    const activePolicy = this.rewardEngine.getActivePolicy();
     const verifiedRevenueCents = revPeriod.eligible_net_revenue_cents;
     const rewardPoolCents = Math.floor(
       (verifiedRevenueCents * activePolicy.reward_pool_percentage_basis_points) / 10000
     );
 
     // 3. Ingest eligible CP from Contribution Engine
-    const networkSummary = v2ContributionEngine.getEngineHealth();
+    const networkSummary = this.contributionEngine.getEngineHealth();
     const totalEligibleCp = networkSummary.total_qualified_points;
 
     // 4. Execute settlement in Reward Engine
-    const settlementResult = v2RewardEngine.executeSettlement({
+    const settlementResult = this.rewardEngine.executeSettlement({
       revenue_period_id: params.revenuePeriodId,
       actor_id: params.operatorId,
       actor_role: params.operatorRole,

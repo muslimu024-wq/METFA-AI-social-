@@ -574,6 +574,9 @@ export async function saveProfileAndEnterMetfa(params: {
     ? username.trim().replace(/^@/, '')
     : generateUniqueUsername(cleanName || identifier);
   const cleanAvatar = sanitizeAvatarUrl(avatar, cleanUsername || cleanName);
+  // Never store inline Base64 data URIs or oversized strings in JWT user_metadata
+  const safeMetadataAvatar =
+    cleanAvatar.startsWith('data:') || cleanAvatar.length > 1024 ? '' : cleanAvatar;
 
   // If Supabase is configured, execute real Auth and DB operations ONLY
   if (isSupabaseConfigured()) {
@@ -591,7 +594,7 @@ export async function saveProfileAndEnterMetfa(params: {
             data: {
               full_name: cleanName,
               username: cleanUsername,
-              avatar_url: cleanAvatar,
+              avatar_url: safeMetadataAvatar,
             },
           },
         });
@@ -686,7 +689,7 @@ export async function saveProfileAndEnterMetfa(params: {
           data: {
             full_name: cleanName,
             username: cleanUsername,
-            avatar_url: cleanAvatar,
+            avatar_url: safeMetadataAvatar,
           },
         },
       });

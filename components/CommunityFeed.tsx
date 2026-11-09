@@ -94,6 +94,7 @@ interface CommunityFeedProps {
   targetSharedPostId?: string | null;
   isLoadingPosts?: boolean;
   onClearSharedPost?: () => void;
+  onOpenReel?: (reelId: string) => void;
 }
 
 const REACTION_EMOJIS: { [k: string]: { emoji: string; label: string; color: string } } = {
@@ -123,6 +124,7 @@ export const CommunityFeed: React.FC<CommunityFeedProps> = ({
   targetSharedPostId,
   isLoadingPosts = false,
   onClearSharedPost,
+  onOpenReel,
 }) => {
   const { user: authUser, activeIdentity } = useAuth();
   const [activeFilter, setActiveFilter] = useState<'all' | 'trending' | 'for_you' | 'following'>('all');
@@ -1461,6 +1463,9 @@ export const CommunityFeed: React.FC<CommunityFeedProps> = ({
                       poster={post.videoThumbnail || post.imageSrc}
                       title={post.videoTitle || post.prompt}
                       className="w-full max-h-[520px] object-cover bg-black"
+                      isReel={post.postType === 'reel' || post.feedType === 'reels' || (Array.isArray(post.tags) && post.tags.includes('reel'))}
+                      reelId={post.id}
+                      onOpenReel={onOpenReel}
                     />
                   ) : post.imageGallery && post.imageGallery.length > 1 ? (
                     /* Multi-image Grid */

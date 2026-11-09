@@ -19,7 +19,7 @@ const AISettingsModal = lazy(() => import('./components/AISettingsModal'));
 const V2Dashboard = lazy(() => import('./components/v2/V2Dashboard'));
 
 export function App() {
-  const { userProfile, isAuthenticated, metfaId, authNotification, clearAuthNotification } = useAuth();
+  const { user, userProfile, isAuthenticated, isSupabaseConnected, sessionToken, metfaId, authNotification, clearAuthNotification } = useAuth();
 
   // App Navigation: Social-First Architecture - Sync with PWA shortcuts and URL query params
   const [activeTab, setActiveTab] = useState<'chat' | 'v2' | SocialSubTab>(() => {
@@ -43,9 +43,15 @@ export function App() {
   useEffect(() => {
     let isMounted = true;
 
+    async function fetchOwnerCheck(bearerToken: string): Promise<Response> {
+      return fetch('/api/v2/auth/owner-check', {
+        headers: { Authorization: `Bearer ${bearerToken}` },
+      });
+    }
+
     async function checkOwnerPrivileges() {
       try {
-        const token = await getClientAuthToken();
+        let token = await getClientAuthToken(false);
         if (!token) {
           if (isMounted) {
             setIsOwnerOrAdmin(false);
@@ -54,9 +60,16 @@ export function App() {
           return;
         }
 
-        const res = await fetch('/api/v2/auth/owner-check', {
-          headers: { Authorization: `Bearer ${token}` },
-        });
+        let res = await fetchOwnerCheck(token);
+
+        // At most one controlled session refresh & retry if token rotated/expired or held stale header bloat
+        if (res.status === 401 || res.status === 400) {
+          const refreshedToken = await getClientAuthToken(true);
+          if (refreshedToken && refreshedToken !== token) {
+            token = refreshedToken;
+            res = await fetchOwnerCheck(token);
+          }
+        }
 
         if (res.ok) {
           const data = await res.json().catch(() => null);
@@ -93,7 +106,7 @@ export function App() {
     return () => {
       isMounted = false;
     };
-  }, [isAuthenticated]);
+  }, [isAuthenticated, sessionToken, user.id, isSupabaseConnected]);
 
   // Sync activeTab state with document title and URL
   useEffect(() => {
@@ -275,6 +288,13 @@ export function App() {
         ) {
           setActiveTab('feed');
         } else if (
+          rawHash.startsWith('#reel-') ||
+          rawHash.startsWith('#/reel-') ||
+          rawHash.startsWith('#reel_') ||
+          targetTab === 'reels'
+        ) {
+          setActiveTab('reels');
+        } else if (
           targetTab === 'v2' ||
           rawHash.replace('#', '').toLowerCase() === 'v2'
         ) {
@@ -329,6 +349,12 @@ export function App() {
     window.addEventListener('metfa_open_auth_modal', handleOpenAuth);
     window.addEventListener('metfa_open_api_keys_modal', handleOpenApiKeys);
 
+    // Global listener to open reels feed
+    const handleOpenReelEvent = () => {
+      setActiveTab('reels');
+    };
+    window.addEventListener('metfa_open_reel', handleOpenReelEvent);
+
     // Initialize non-destructive V2 Integration Event Listeners
     const cleanupV2 = initV2IntegrationListeners();
 
@@ -340,6 +366,7 @@ export function App() {
       window.removeEventListener('metfa_view_profile', handleOpenProfile);
       window.removeEventListener('metfa_open_auth_modal', handleOpenAuth);
       window.removeEventListener('metfa_open_api_keys_modal', handleOpenApiKeys);
+      window.removeEventListener('metfa_open_reel', handleOpenReelEvent);
     };
   }, [handleViewProfile, handleNavigateTab, isAuthenticated, isOwnerOrAdmin, isOwnerAuthSettled]);
 

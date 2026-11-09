@@ -1,0 +1,28 @@
+{
+  "baselineName": "METFA_PHASE_10_VERIFIED_BASELINE_2026-11-08",
+  "createdAt": "2026-11-08T16:48:52.944Z",
+  "verificationStatus": "VERIFIED_PASS",
+  "files": [
+    {
+      "sourcePath": "services/v2RewardEngine.ts",
+      "snapshotFile": "services__v2RewardEngine.ts",
+      "sha256": "7258cb342e153fb5bb6cf401db84014d6108b0ecc2fa4c3c8752064f12a5ba7a",
+      "bytes": 18365,
+      "verifiedMatch": true
+    },
+    {
+      "sourcePath": "services/v2IntegrationAdapter.ts",
+      "snapshotFile": "services__v2IntegrationAdapter.ts",
+      "sha256": "5759a7225efb119f6bac2d2e8ce49ae7b5562def4fb0c36acefc897ae26aa1cb",
+      "bytes": 39787,
+      "verifiedMatch": true
+    },
+    {
+      "sourcePath": "tests/v2Phase10IntegrationVerification.ts",
+      "snapshotFile": "tests__v2Phase10IntegrationVerification.ts",
+      "sha256": "9e2eb1be31cc973e2f3d112547b4ffd9d94064409f1a57c28f0055c4ac9abac8",
+      "bytes": 29777,
+      "verifiedMatch": true
+    }
+  ]
+}

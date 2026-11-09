@@ -27,7 +27,7 @@
  */
 
 import { v2RewardEngine, V2RewardEngine } from '../services/v2RewardEngine';
-import { v2RevenueEngine } from '../services/v2RevenueEngine';
+import { V2RevenueEngine } from '../services/v2RevenueEngine';
 import { v2ContributionEngine } from '../services/v2ContributionEngine';
 
 export interface V2RewardTestResult {
@@ -47,7 +47,8 @@ export interface V2RewardTestSuiteSummary {
 
 export function runV2RewardEngineVerification(): V2RewardTestSuiteSummary {
   const results: V2RewardTestResult[] = [];
-  const engine = new V2RewardEngine();
+  const localRevenueEngine = new V2RevenueEngine({ isIsolatedTest: true });
+  const engine = new V2RewardEngine({ isIsolatedTest: true, revenueEngine: localRevenueEngine });
 
   const runTest = (testId: string, name: string, fn: () => { passed: boolean; message: string; details?: Record<string, unknown> }) => {
     try {
@@ -71,7 +72,7 @@ export function runV2RewardEngineVerification(): V2RewardTestSuiteSummary {
 
   // Helper to create & finalize a sample Phase 4 Revenue Period
   const setupVerifiedRevenuePeriod = (name: string, netRevenueCents: number) => {
-    const period = v2RevenueEngine.createRevenuePeriod({
+    const period = localRevenueEngine.createRevenuePeriod({
       period_name: name,
       period_start: '2026-09-01T00:00:00.000Z',
       period_end: '2026-09-30T23:59:59.000Z',
@@ -81,7 +82,7 @@ export function runV2RewardEngineVerification(): V2RewardTestSuiteSummary {
     });
 
     // Ingest gross revenue
-    v2RevenueEngine.recordRevenueEntry({
+    localRevenueEngine.recordRevenueEntry({
       period_id: period.id,
       source: 'ADS',
       entry_type: 'GROSS_INCOME',
@@ -95,7 +96,7 @@ export function runV2RewardEngineVerification(): V2RewardTestSuiteSummary {
     });
 
     // Finalize the revenue period
-    v2RevenueEngine.finalizeRevenuePeriod({
+    localRevenueEngine.finalizeRevenuePeriod({
       period_id: period.id,
       actor_id: 'admin_test_setup',
       actor_role: 'SUPER_ADMIN',
@@ -172,7 +173,7 @@ export function runV2RewardEngineVerification(): V2RewardTestSuiteSummary {
   // 4. Draft / Unverified Revenue Rejection
   runTest('REW-04', 'Draft / Unverified Revenue Rejection', () => {
     // Create revenue period but do NOT finalize it (remains OPEN)
-    const openPeriod = v2RevenueEngine.createRevenuePeriod({
+    const openPeriod = localRevenueEngine.createRevenuePeriod({
       period_name: 'Unfinalized Draft Revenue',
       period_start: '2026-10-01T00:00:00.000Z',
       period_end: '2026-10-31T23:59:59.000Z',
