@@ -8,6 +8,7 @@ import {
   Plus,
   Play,
   Volume2,
+  VolumeX,
   Repeat,
   Bookmark,
   MoreVertical,
@@ -38,6 +39,7 @@ import { getAudioTracks } from '../utils/audioStore';
 import { isContentOwner } from '../utils/communityStore';
 import { toggleSaveReel, isReelSaved } from '../utils/bookmarkStore';
 import { executeNativeShare, SharePayload } from '../utils/shareUtils';
+import { AdvancedVideoControls } from './AdvancedVideoControls';
 
 // Lazy-load action modals
 const SocialShareModal = lazy(() => import('./SocialShareModal'));
@@ -53,6 +55,7 @@ interface ReelsFeedViewProps {
   isLoading?: boolean;
   targetReelId?: string | null;
   onClearTargetReel?: () => void;
+  initialCurrentTime?: number;
 }
 
 export const ReelsFeedView: React.FC<ReelsFeedViewProps> = ({
@@ -64,6 +67,7 @@ export const ReelsFeedView: React.FC<ReelsFeedViewProps> = ({
   isLoading = false,
   targetReelId,
   onClearTargetReel,
+  initialCurrentTime,
 }) => {
   // When targetReelId is provided, hoist the requested Reel to the top of the feed
   const displayedReels = React.useMemo(() => {
@@ -90,6 +94,66 @@ export const ReelsFeedView: React.FC<ReelsFeedViewProps> = ({
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [inspectingAudioTrack, setInspectingAudioTrack] = useState<AudioTrack | null>(null);
 
+  // Reels Audio Mute / Unmute State & Direct Video Element DOM synchronization
+  const [isMuted, setIsMuted] = useState<boolean>(false);
+  const videoRefs = React.useRef<{ [id: string]: HTMLVideoElement | null }>({});
+
+  // Stable ref map for AdvancedVideoControls integration
+  const reelVideoRefs = React.useRef<Map<string, { current: HTMLVideoElement | null }>>(new Map());
+  const getReelVideoRef = React.useCallback((id: string): React.RefObject<HTMLVideoElement | null> => {
+    if (!reelVideoRefs.current.has(id)) {
+      reelVideoRefs.current.set(id, { current: videoRefs.current[id] || null });
+    }
+    const r = reelVideoRefs.current.get(id)!;
+    r.current = videoRefs.current[id] || null;
+    return r as React.RefObject<HTMLVideoElement | null>;
+  }, []);
+
+  const toggleSound = (reelId: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    e.preventDefault();
+    setIsMuted((prev) => {
+      const nextMuted = !prev;
+      const el = videoRefs.current[reelId];
+      if (el) {
+        el.muted = nextMuted;
+        if (!nextMuted) {
+          el.play().catch((err) => {
+            console.log('[Reels Sound] Explicit play attempt error:', err);
+          });
+        }
+      }
+      return nextMuted;
+    });
+  };
+
+  // Synchronize muted property directly on DOM video elements whenever isMuted changes
+  useEffect(() => {
+    Object.values(videoRefs.current).forEach((el) => {
+      if (el) {
+        el.muted = isMuted;
+        if (!isMuted) {
+          el.play().catch((err) => {
+            console.log('[Reels Sound] Browser unmuted autoplay catch:', err);
+          });
+        }
+      }
+    });
+  }, [isMuted, displayedReels]);
+
+  // Clean up and pause videos when unmounting Reels feed to prevent audio leaking
+  useEffect(() => {
+    return () => {
+      Object.values(videoRefs.current).forEach((el) => {
+        if (el) {
+          try {
+            el.pause();
+          } catch {}
+        }
+      });
+    };
+  }, []);
+
   const showToast = (msg: string) => {
     setToastMessage(msg);
     setTimeout(() => setToastMessage(null), 3000);
@@ -112,6 +176,27 @@ export const ReelsFeedView: React.FC<ReelsFeedViewProps> = ({
       }
     }
   }, [isLoading, targetReelId, reels, onClearTargetReel]);
+
+  // Seek target Reel to initialCurrentTime when navigating from Feed with position continuity
+  useEffect(() => {
+    if (targetReelId && typeof initialCurrentTime === 'number' && initialCurrentTime > 0) {
+      const el = videoRefs.current[targetReelId];
+      if (el) {
+        const applySeek = () => {
+          try {
+            el.currentTime = initialCurrentTime;
+          } catch (err) {
+            console.log('[Reels Position Continuity] Seek error:', err);
+          }
+        };
+        if (el.readyState >= 1) {
+          applySeek();
+        } else {
+          el.addEventListener('loadedmetadata', applySeek, { once: true });
+        }
+      }
+    }
+  }, [targetReelId, initialCurrentTime]);
 
   // Close menus on outside click
   useEffect(() => {
@@ -283,11 +368,16 @@ export const ReelsFeedView: React.FC<ReelsFeedViewProps> = ({
             >
             {/* Video Background */}
             <video
+              ref={(el) => {
+                videoRefs.current[reel.id] = el;
+                const stable = reelVideoRefs.current.get(reel.id);
+                if (stable) stable.current = el;
+              }}
               src={reel.videoSrc}
               poster={reel.thumbnailSrc}
               autoPlay
               loop
-              muted
+              muted={isMuted}
               playsInline
               className="absolute inset-0 w-full h-full object-cover"
             />
@@ -312,21 +402,43 @@ export const ReelsFeedView: React.FC<ReelsFeedViewProps> = ({
                 )}
               </div>
 
-              {/* Reel Action Context Menu */}
-              <div className="relative" data-menu-root="true">
+              {/* Right controls: Sound Toggle & Context Menu */}
+              <div className="flex items-center gap-2">
+                {/* Visible Sound On / Off Toggle Button */}
                 <button
                   type="button"
-                  id={`reel-menu-btn-${reel.id}`}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    setActiveReelMenuId((prev) => (prev === reel.id ? null : reel.id));
-                  }}
-                  className="p-1.5 rounded-full bg-black/60 hover:bg-black/80 text-white border border-white/10 backdrop-blur-md transition"
-                  title="Reel options"
-                  aria-label="Reel options"
+                  data-testid={`reel-sound-toggle-btn-${reel.id}`}
+                  onClick={(e) => toggleSound(reel.id, e)}
+                  className={`p-1.5 rounded-full backdrop-blur-md border transition cursor-pointer flex items-center justify-center ${
+                    isMuted
+                      ? 'bg-black/60 border-rose-500/50 text-rose-300 hover:bg-black/80'
+                      : 'bg-teal-950/80 border-teal-500/50 text-teal-300 hover:bg-teal-900 shadow-sm shadow-teal-500/20'
+                  }`}
+                  title={isMuted ? 'Unmute Reel Audio' : 'Mute Reel Audio'}
+                  aria-label={isMuted ? 'Unmute Reel Audio' : 'Mute Reel Audio'}
                 >
-                  <MoreVertical className="w-4 h-4" />
+                  {isMuted ? (
+                    <VolumeX className="w-4 h-4 text-rose-400" />
+                  ) : (
+                    <Volume2 className="w-4 h-4 text-teal-300 animate-pulse" />
+                  )}
                 </button>
+
+                {/* Reel Action Context Menu */}
+                <div className="relative" data-menu-root="true">
+                  <button
+                    type="button"
+                    id={`reel-menu-btn-${reel.id}`}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setActiveReelMenuId((prev) => (prev === reel.id ? null : reel.id));
+                    }}
+                    className="p-1.5 rounded-full bg-black/60 hover:bg-black/80 text-white border border-white/10 backdrop-blur-md transition"
+                    title="Reel options"
+                    aria-label="Reel options"
+                  >
+                    <MoreVertical className="w-4 h-4" />
+                  </button>
 
                 {activeReelMenuId === reel.id && (
                   <div
@@ -405,6 +517,18 @@ export const ReelsFeedView: React.FC<ReelsFeedViewProps> = ({
                   </div>
                 )}
               </div>
+            </div>
+          </div>
+
+            {/* Advanced Video Controls (Timeline scrubber, 5s/10s skip, sound) */}
+            <div className="relative z-20 w-full mb-3" onClick={(e) => e.stopPropagation()}>
+              <AdvancedVideoControls
+                videoRef={getReelVideoRef(reel.id)}
+                isMuted={isMuted}
+                onToggleMute={(e) => toggleSound(reel.id, e)}
+                title={reel.title}
+                theme="glass"
+              />
             </div>
 
             {/* Bottom Info & Right Actions */}

@@ -14,6 +14,7 @@ import {
   Mic,
   Square,
   Volume2,
+  VolumeX,
   Send,
   Check,
   X,
@@ -41,6 +42,7 @@ import AudioLicenseInfoModal from './AudioLicenseInfoModal';
 import VideoAnalyticsModal from './VideoAnalyticsModal';
 import { VideoPlaybackSessionTracker } from '../utils/videoTracker';
 import { PostContent } from './PostContent';
+import { AdvancedVideoControls } from './AdvancedVideoControls';
 import {
   createComment as createCommentRemote,
   deleteComment as deleteCommentRemote,
@@ -119,6 +121,10 @@ export const PostCard: React.FC<PostCardProps> = ({
   const [showAiRecipe, setShowAiRecipe] = useState(false);
   const [commentText, setCommentText] = useState('');
   const [showReactionPicker, setShowReactionPicker] = useState(false);
+  const [isFeedVideoMuted, setIsFeedVideoMuted] = useState(true);
+  const feedVideoRef = useRef<HTMLVideoElement | null>(null);
+  const touchStartPosRef = useRef<{ x: number; y: number } | null>(null);
+  const isTouchScrollingRef = useRef(false);
 
   // Load persistent comments from Supabase when comment section is expanded
   useEffect(() => {
@@ -943,45 +949,69 @@ export const PostCard: React.FC<PostCardProps> = ({
       ) : (
         <div className="relative group bg-slate-100 max-h-[520px] overflow-hidden flex items-center justify-center">
           {post.videoSrc ? (
-            <div className="relative w-full overflow-hidden flex items-center justify-center bg-black group/videoplayer">
-              {((post.postType === 'reel') || (post.feedType === 'reels') || (Array.isArray(post.tags) && post.tags.includes('reel'))) && (
+            <div className="relative w-full overflow-hidden flex flex-col items-center justify-center bg-black group/videoplayer">
+              {Boolean(post.videoSrc) && (
                 <>
-                  {/* Direct-click / tap area on visible video picture area for genuine Reels */}
+                  {/* Direct-click / tap area on visible video picture area to open in Reels with position continuity */}
                   <div
                     role="button"
                     tabIndex={0}
                     data-testid={`postcard-reel-video-picture-area-${post.id}`}
+                    onTouchStart={(e) => {
+                      if (e.touches && e.touches[0]) {
+                        touchStartPosRef.current = { x: e.touches[0].clientX, y: e.touches[0].clientY };
+                        isTouchScrollingRef.current = false;
+                      }
+                    }}
+                    onTouchMove={(e) => {
+                      if (touchStartPosRef.current && e.touches && e.touches[0]) {
+                        const dx = Math.abs(e.touches[0].clientX - touchStartPosRef.current.x);
+                        const dy = Math.abs(e.touches[0].clientY - touchStartPosRef.current.y);
+                        if (dx > 8 || dy > 8) {
+                          isTouchScrollingRef.current = true;
+                        }
+                      }
+                    }}
                     onClick={(e) => {
+                      if (isTouchScrollingRef.current) {
+                        isTouchScrollingRef.current = false;
+                        return;
+                      }
                       e.stopPropagation();
                       e.preventDefault();
+                      const currentPos = feedVideoRef.current?.currentTime || 0;
                       if (onOpenReel) {
-                        onOpenReel(post.id);
-                      } else if (typeof window !== 'undefined') {
+                        try { onOpenReel(post.id); } catch (err) { console.warn(err); }
+                      }
+                      if (typeof window !== 'undefined') {
                         window.dispatchEvent(
-                          new CustomEvent('metfa_open_reel', { detail: { reelId: post.id, title: post.videoTitle || post.caption } })
+                          new CustomEvent('metfa_open_reel', { detail: { reelId: post.id, videoSrc: post.videoSrc, title: post.videoTitle || post.caption, currentTime: currentPos } })
                         );
                       }
                     }}
-                    className="absolute inset-x-0 top-0 bottom-14 z-10 cursor-pointer focus:outline-none"
+                    className="absolute inset-x-0 top-0 bottom-24 z-20 cursor-pointer bg-black/0 active:bg-white/5 transition-colors focus:outline-none select-none touch-manipulation"
                     title="Watch Reel"
                     aria-label={`Watch ${post.videoTitle || 'Reel'} in Reels`}
                   />
-                  {/* Accessible Watch Reel badge */}
+
+                  {/* Accessible Watch Reel badge (Top Left) */}
                   <button
                     type="button"
                     data-testid={`postcard-reel-nav-btn-${post.id}`}
                     onClick={(e) => {
                       e.stopPropagation();
                       e.preventDefault();
+                      const currentPos = feedVideoRef.current?.currentTime || 0;
                       if (onOpenReel) {
-                        onOpenReel(post.id);
-                      } else if (typeof window !== 'undefined') {
+                        try { onOpenReel(post.id); } catch (err) { console.warn(err); }
+                      }
+                      if (typeof window !== 'undefined') {
                         window.dispatchEvent(
-                          new CustomEvent('metfa_open_reel', { detail: { reelId: post.id, title: post.videoTitle || post.caption } })
+                          new CustomEvent('metfa_open_reel', { detail: { reelId: post.id, videoSrc: post.videoSrc, title: post.videoTitle || post.caption, currentTime: currentPos } })
                         );
                       }
                     }}
-                    className="absolute top-3 left-3 z-20 px-3 py-1.5 rounded-full bg-black/80 hover:bg-black text-white border border-teal-500/50 backdrop-blur-md text-xs font-bold flex items-center gap-1.5 shadow-xl transition transform active:scale-95 cursor-pointer pointer-events-auto"
+                    className="absolute top-3 left-3 z-30 px-3 py-1.5 rounded-full bg-black/80 hover:bg-black text-white border border-teal-500/50 backdrop-blur-md text-xs font-bold flex items-center gap-1.5 shadow-xl transition transform active:scale-95 cursor-pointer pointer-events-auto"
                     title="Watch fullscreen in Reels feed"
                     aria-label={`Watch ${post.videoTitle || 'Reel'} in Reels`}
                   >
@@ -991,30 +1021,52 @@ export const PostCard: React.FC<PostCardProps> = ({
                   </button>
                 </>
               )}
+
+              {/* HTML5 video element */}
               <video
+                ref={feedVideoRef}
                 src={post.videoSrc}
-                controls
                 playsInline
+                muted={isFeedVideoMuted}
+                autoPlay
                 poster={post.videoThumbnail || (post.imageSrc && !post.imageSrc.includes('photo-1508739773434') ? post.imageSrc : undefined)}
                 className="w-full max-h-[520px] object-cover bg-black"
-                onClick={(e) => {
-                  const isReel = (post.postType === 'reel') || (post.feedType === 'reels') || (Array.isArray(post.tags) && post.tags.includes('reel'));
-                  if (!isReel) return;
-                  const rect = e.currentTarget.getBoundingClientRect();
-                  const clickY = e.clientY - rect.top;
-                  if (clickY < rect.height - 56) {
+              />
+
+              {/* Advanced Playback Controls */}
+              <div className="absolute inset-x-2 bottom-2 z-30 pointer-events-auto">
+                <AdvancedVideoControls
+                  videoRef={feedVideoRef}
+                  isMuted={isFeedVideoMuted}
+                  onToggleMute={(e) => {
                     e.stopPropagation();
                     e.preventDefault();
+                    setIsFeedVideoMuted((prev) => {
+                      const next = !prev;
+                      if (feedVideoRef.current) {
+                        feedVideoRef.current.muted = next;
+                        if (!next) {
+                          feedVideoRef.current.play().catch(() => {});
+                        }
+                      }
+                      return next;
+                    });
+                  }}
+                  onOpenReel={post.id ? (currentTime) => {
                     if (onOpenReel) {
-                      onOpenReel(post.id);
-                    } else if (typeof window !== 'undefined') {
+                      try { onOpenReel(post.id); } catch (err) { console.warn(err); }
+                    }
+                    if (typeof window !== 'undefined') {
                       window.dispatchEvent(
-                        new CustomEvent('metfa_open_reel', { detail: { reelId: post.id, title: post.videoTitle || post.caption } })
+                        new CustomEvent('metfa_open_reel', { detail: { reelId: post.id, videoSrc: post.videoSrc, title: post.videoTitle || post.caption, currentTime } })
                       );
                     }
-                  }
-                }}
-              />
+                  } : undefined}
+                  reelId={post.id}
+                  title={post.videoTitle || post.caption || 'Video'}
+                  theme="glass"
+                />
+              </div>
             </div>
           ) : post.imageGallery && post.imageGallery.length > 1 ? (
             <div

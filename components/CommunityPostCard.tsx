@@ -1,6 +1,7 @@
-import React, { useState } from 'react';
-import { AlertCircle, Film } from 'lucide-react';
+import React, { useState, useRef } from 'react';
+import { AlertCircle, Film, Volume2, VolumeX } from 'lucide-react';
 import { CommunityPost } from '../types/community';
+import { AdvancedVideoControls } from './AdvancedVideoControls';
 
 export interface CommunityVideoPlayerProps {
   src?: string;
@@ -9,12 +10,12 @@ export interface CommunityVideoPlayerProps {
   title?: string;
   isReel?: boolean;
   reelId?: string;
-  onOpenReel?: (reelId: string) => void;
+  onOpenReel?: (reelId: string, payload?: { videoSrc?: string; title?: string; currentTime?: number }) => void;
 }
 
 /**
- * Robust video player component with graceful fallback and Feed-to-Reels navigation.
- * Prevents silent black rectangles when a video URL is invalid, revoked, or unplayable.
+ * Robust video player component with graceful fallback, Advanced Playback Controls,
+ * and Feed-to-Reels navigation with playback position continuity.
  */
 export const CommunityVideoPlayer: React.FC<CommunityVideoPlayerProps> = ({
   src,
@@ -26,19 +27,73 @@ export const CommunityVideoPlayer: React.FC<CommunityVideoPlayerProps> = ({
   onOpenReel,
 }) => {
   const [hasError, setHasError] = useState(false);
+  const [isFeedMuted, setIsFeedMuted] = useState(true);
+  const lastNavTimeRef = useRef(0);
+  const videoRef = useRef<HTMLVideoElement | null>(null);
 
-  const handleOpenReelClick = (e: React.MouseEvent | React.TouchEvent) => {
+  // Touch gesture scroll detection to prevent accidental navigation while scrolling on mobile
+  const touchStartPosRef = useRef<{ x: number; y: number } | null>(null);
+  const isTouchScrollingRef = useRef(false);
+
+  const handleTouchStart = (e: React.TouchEvent) => {
+    if (e.touches && e.touches[0]) {
+      touchStartPosRef.current = { x: e.touches[0].clientX, y: e.touches[0].clientY };
+      isTouchScrollingRef.current = false;
+    }
+  };
+
+  const handleTouchMove = (e: React.TouchEvent) => {
+    if (touchStartPosRef.current && e.touches && e.touches[0]) {
+      const dx = Math.abs(e.touches[0].clientX - touchStartPosRef.current.x);
+      const dy = Math.abs(e.touches[0].clientY - touchStartPosRef.current.y);
+      if (dx > 8 || dy > 8) {
+        isTouchScrollingRef.current = true;
+      }
+    }
+  };
+
+  const handleOpenReelClick = (e: React.MouseEvent | React.TouchEvent, customTime?: number) => {
+    if (isTouchScrollingRef.current) {
+      isTouchScrollingRef.current = false;
+      return;
+    }
     e.stopPropagation();
     e.preventDefault();
+    const now = Date.now();
+    if (now - lastNavTimeRef.current < 400) return;
+    lastNavTimeRef.current = now;
+
     if (reelId) {
+      const currentPos = typeof customTime === 'number' ? customTime : (videoRef.current?.currentTime || 0);
+      console.log('[Metfa Nav] Reel video picture tapped:', reelId, title, 'pos:', currentPos);
       if (onOpenReel) {
-        onOpenReel(reelId);
-      } else if (typeof window !== 'undefined') {
+        try {
+          onOpenReel(reelId, { videoSrc: src, title, currentTime: currentPos });
+        } catch (err) {
+          console.warn('[Metfa Nav] onOpenReel error:', err);
+        }
+      }
+      if (typeof window !== 'undefined') {
         window.dispatchEvent(
-          new CustomEvent('metfa_open_reel', { detail: { reelId, title } })
+          new CustomEvent('metfa_open_reel', { detail: { reelId, videoSrc: src, title, currentTime: currentPos } })
         );
       }
     }
+  };
+
+  const handleToggleFeedSound = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    e.preventDefault();
+    setIsFeedMuted((prev) => {
+      const next = !prev;
+      if (videoRef.current) {
+        videoRef.current.muted = next;
+        if (!next) {
+          videoRef.current.play().catch(() => {});
+        }
+      }
+      return next;
+    });
   };
 
   // If no source is provided or if video failed to load, display friendly error state
@@ -57,27 +112,29 @@ export const CommunityVideoPlayer: React.FC<CommunityVideoPlayerProps> = ({
   }
 
   return (
-    <div className="relative w-full overflow-hidden flex items-center justify-center bg-black group/videoplayer">
-      {/* Tap/Click directly on visible video picture area to open in Reels view when genuinely classified as a Reel */}
-      {isReel && reelId && (
+    <div className="relative w-full overflow-hidden flex flex-col items-center justify-center bg-black group/videoplayer">
+      {/* Tap/Click directly on upper visible video picture area to open in Reels view with preserved position */}
+      {reelId && (
         <div
           role="button"
           tabIndex={0}
           data-testid={`feed-reel-video-picture-area-${reelId}`}
           onClick={handleOpenReelClick}
-          className="absolute inset-x-0 top-0 bottom-14 z-10 cursor-pointer focus:outline-none"
+          onTouchStart={handleTouchStart}
+          onTouchMove={handleTouchMove}
+          className="absolute inset-x-0 top-0 bottom-24 z-20 cursor-pointer bg-black/0 active:bg-white/5 transition-colors focus:outline-none select-none touch-manipulation"
           title="Watch Reel"
           aria-label={`Watch ${title} in Reels`}
         />
       )}
 
-      {/* Accessible Watch Reel badge */}
-      {isReel && reelId && (
+      {/* Accessible Watch Reel badge (Top Left) */}
+      {reelId && (
         <button
           type="button"
           data-testid={`feed-reel-nav-btn-${reelId}`}
           onClick={handleOpenReelClick}
-          className="absolute top-3 left-3 z-20 px-3 py-1.5 rounded-full bg-black/80 hover:bg-black text-white border border-teal-500/50 backdrop-blur-md text-xs font-bold flex items-center gap-1.5 shadow-xl transition transform active:scale-95 cursor-pointer pointer-events-auto"
+          className="absolute top-3 left-3 z-30 px-3 py-1.5 rounded-full bg-black/80 hover:bg-black text-white border border-teal-500/50 backdrop-blur-md text-xs font-bold flex items-center gap-1.5 shadow-xl transition transform active:scale-95 cursor-pointer pointer-events-auto"
           title="Watch fullscreen in Reels feed"
           aria-label={`Watch ${title} in Reels`}
         >
@@ -87,24 +144,31 @@ export const CommunityVideoPlayer: React.FC<CommunityVideoPlayerProps> = ({
         </button>
       )}
 
-      {/* HTML5 video element: controls bar on bottom 56px is uncovered and protected against accidental navigation */}
+      {/* HTML5 video element */}
       <video
+        ref={videoRef}
         src={src}
-        controls
         playsInline
+        muted={isFeedMuted}
+        autoPlay
         poster={poster}
         aria-label={title}
         className={className}
         onError={() => setHasError(true)}
-        onClick={(e) => {
-          if (!isReel || !reelId) return;
-          const rect = e.currentTarget.getBoundingClientRect();
-          const clickY = e.clientY - rect.top;
-          if (clickY < rect.height - 56) {
-            handleOpenReelClick(e);
-          }
-        }}
       />
+
+      {/* Advanced Playback Controls (Timeline, Scrubber, Skip -10s/-5s/+5s/+10s, Sound, Continuity) */}
+      <div className="absolute inset-x-2 bottom-2 z-30 pointer-events-auto">
+        <AdvancedVideoControls
+          videoRef={videoRef}
+          isMuted={isFeedMuted}
+          onToggleMute={handleToggleFeedSound}
+          onOpenReel={reelId ? (currentTime) => handleOpenReelClick({ stopPropagation: () => {}, preventDefault: () => {} } as any, currentTime) : undefined}
+          reelId={reelId}
+          title={title}
+          theme="glass"
+        />
+      </div>
     </div>
   );
 };

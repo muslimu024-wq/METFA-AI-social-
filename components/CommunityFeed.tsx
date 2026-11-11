@@ -1463,7 +1463,7 @@ export const CommunityFeed: React.FC<CommunityFeedProps> = ({
                       poster={post.videoThumbnail || post.imageSrc}
                       title={post.videoTitle || post.prompt}
                       className="w-full max-h-[520px] object-cover bg-black"
-                      isReel={post.postType === 'reel' || post.feedType === 'reels' || (Array.isArray(post.tags) && post.tags.includes('reel'))}
+                      isReel={Boolean(post.videoSrc)}
                       reelId={post.id}
                       onOpenReel={onOpenReel}
                     />

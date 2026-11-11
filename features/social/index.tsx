@@ -178,18 +178,14 @@ export const SocialEcosystemModule: React.FC<SocialEcosystemProps> = ({
       if (reelMatch) {
         const reelId = reelMatch[1];
         setTargetReelId(reelId);
-        if (currentTab !== 'reels') {
-          onNavigateTab('reels');
-        }
+        onNavigateTab('reels');
         return;
       }
 
       const postId = extractPostIdFromHash(hash);
       if (postId) {
         setTargetSharedPostId(postId);
-        if (currentTab !== 'feed') {
-          onNavigateTab('feed');
-        }
+        onNavigateTab('feed');
 
         // If post not already in state and Supabase is configured, fetch immediately
         setPosts((currentPosts) => {
@@ -211,16 +207,74 @@ export const SocialEcosystemModule: React.FC<SocialEcosystemProps> = ({
       }
     };
 
-    handleHashChange();
+    // Only process initial hash on mount if an explicit hash is present in the URL
+    if (typeof window !== 'undefined' && window.location.hash) {
+      handleHashChange();
+    }
     window.addEventListener('hashchange', handleHashChange);
     return () => {
       window.removeEventListener('hashchange', handleHashChange);
     };
-  }, [currentTab, onNavigateTab]);
+  }, [onNavigateTab]);
 
-  const handleOpenReel = (reelId: string) => {
+  // Clear targetReelId and any stale reel hash when currentTab is not reels
+  useEffect(() => {
+    if (currentTab !== 'reels') {
+      setTargetReelId(null);
+      if (typeof window !== 'undefined' && window.location.hash.match(/^#\/?reel[_-]/)) {
+        try {
+          history.replaceState(null, '', window.location.pathname + window.location.search);
+        } catch {}
+      }
+    }
+  }, [currentTab]);
+
+  const [targetReelInitialTime, setTargetReelInitialTime] = useState<number>(0);
+
+  const handleOpenReel = (
+    reelId: string,
+    videoPayload?: { videoSrc?: string; title?: string; author?: any; thumbnailSrc?: string; currentTime?: number }
+  ) => {
     if (!reelId) return;
+    console.log('[Metfa Nav] features/social handleOpenReel called with:', reelId, 'pos:', videoPayload?.currentTime);
     setTargetReelId(reelId);
+    if (typeof videoPayload?.currentTime === 'number' && videoPayload.currentTime > 0) {
+      setTargetReelInitialTime(videoPayload.currentTime);
+    } else {
+      setTargetReelInitialTime(0);
+    }
+
+    // Guarantee the targeted reel is immediately present in reels state for instant display in ReelsFeedView
+    setReels((prevReels) => {
+      const alreadyPresent = prevReels.some((r) => r.id === reelId);
+      if (alreadyPresent) return prevReels;
+      const matchedPost = posts.find((p) => p.id === reelId);
+      const effectiveVideoSrc = matchedPost?.videoSrc || videoPayload?.videoSrc;
+      if (effectiveVideoSrc) {
+        const syntheticReel: ReelHighlight = {
+          id: reelId,
+          title: matchedPost?.videoTitle || matchedPost?.prompt || videoPayload?.title || 'Metfa Reel',
+          caption: matchedPost?.caption || '',
+          author: {
+            id: matchedPost?.author?.id || videoPayload?.author?.id || userProfile?.id || 'creator',
+            name: matchedPost?.author?.name || videoPayload?.author?.name || userProfile?.name || 'Metfa Creator',
+            username: matchedPost?.author?.username || videoPayload?.author?.username || userProfile?.username || 'creator',
+            avatar: matchedPost?.author?.avatar || videoPayload?.author?.avatar || userProfile?.avatar || '',
+            isVerified: matchedPost?.author?.isVerified ?? true,
+          },
+          videoSrc: effectiveVideoSrc,
+          thumbnailSrc: matchedPost?.videoThumbnail || matchedPost?.imageSrc || videoPayload?.thumbnailSrc,
+          duration: 15,
+          likesCount: matchedPost?.likesCount || 0,
+          commentsCount: matchedPost?.commentsCount || 0,
+          sharesCount: matchedPost?.sharesCount || 0,
+          createdAt: matchedPost?.createdAt || 'Just now',
+        };
+        return [syntheticReel, ...prevReels];
+      }
+      return prevReels;
+    });
+
     if (typeof window !== 'undefined') {
       try {
         window.location.hash = `#reel-${reelId}`;
@@ -236,14 +290,20 @@ export const SocialEcosystemModule: React.FC<SocialEcosystemProps> = ({
     const handleMetfaOpenReel = (e: any) => {
       const reelId = e?.detail?.reelId;
       if (reelId) {
-        handleOpenReel(reelId);
+        handleOpenReel(reelId, {
+          videoSrc: e?.detail?.videoSrc,
+          title: e?.detail?.title,
+          author: e?.detail?.author,
+          thumbnailSrc: e?.detail?.thumbnailSrc,
+          currentTime: e?.detail?.currentTime,
+        });
       }
     };
     window.addEventListener('metfa_open_reel', handleMetfaOpenReel);
     return () => {
       window.removeEventListener('metfa_open_reel', handleMetfaOpenReel);
     };
-  }, [onNavigateTab, currentTab]);
+  }, [onNavigateTab, posts]);
 
   // Automatically dismiss active modals when currentTab changes
   useEffect(() => {
@@ -351,8 +411,10 @@ export const SocialEcosystemModule: React.FC<SocialEcosystemProps> = ({
           reels={reels}
           isLoading={isLoadingReels}
           targetReelId={targetReelId}
+          initialCurrentTime={targetReelInitialTime}
           onClearTargetReel={() => {
             setTargetReelId(null);
+            setTargetReelInitialTime(0);
             if (typeof window !== 'undefined' && window.location.hash.startsWith('#reel')) {
               window.history.replaceState(null, '', window.location.pathname + window.location.search);
             }

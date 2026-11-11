@@ -1,0 +1,1460 @@
+import React, { useState, useRef, useEffect } from 'react';
+import {
+  Heart,
+  MessageCircle,
+  MessageSquare,
+  Share2,
+  Sparkles,
+  Bookmark,
+  MoreVertical,
+  Edit3,
+  Trash2,
+  Copy,
+  Flag,
+  Mic,
+  Square,
+  Volume2,
+  VolumeX,
+  Send,
+  Check,
+  X,
+  Play,
+  Pause,
+  Music,
+  ShieldCheck,
+  UserPlus,
+  Film,
+  Maximize2,
+  Minimize2,
+  Wand2,
+  Repeat,
+  TrendingUp,
+} from 'lucide-react';
+import { CommunityPost, UserProfile } from '../types/community';
+import { AudioTrack } from '../types/audio';
+import { isContentOwner } from '../utils/communityStore';
+import { isUserFollowed, syncFollowCache } from '../utils/followStore';
+import { followUser, unfollowUser, isValidProfileUuid } from '../services/followService';
+import { isPostSaved, toggleSavePost } from '../utils/bookmarkStore';
+import { formatDuration } from '../utils/audioStore';
+import { AiRecipeBox } from './AiRecipeBox';
+import AudioLicenseInfoModal from './AudioLicenseInfoModal';
+import VideoAnalyticsModal from './VideoAnalyticsModal';
+import { VideoPlaybackSessionTracker } from '../utils/videoTracker';
+import { PostContent } from './PostContent';
+import {
+  createComment as createCommentRemote,
+  deleteComment as deleteCommentRemote,
+  toggleReaction,
+  fetchComments,
+  ReactionType,
+} from '../services/engagementService';
+import { checkContentSafety } from '../utils/contentSafety';
+
+const GRADIENT_PRESETS: { [key: string]: string } = {
+  sunset: 'bg-gradient-to-br from-orange-500 via-rose-500 to-purple-600',
+  cyberpunk: 'bg-gradient-to-br from-purple-700 via-pink-600 to-teal-400',
+  emerald: 'bg-gradient-to-br from-emerald-600 via-teal-600 to-cyan-700',
+  midnight: 'bg-gradient-to-br from-slate-900 via-indigo-950 to-purple-950 border border-purple-800/40',
+  fire: 'bg-gradient-to-br from-amber-600 via-red-600 to-rose-700',
+};
+
+const REACTION_ICONS: { [key: string]: { label: string; emoji: string; color: string } } = {
+  like: { label: 'Like', emoji: '👍', color: 'text-blue-400' },
+  love: { label: 'Love', emoji: '❤️', color: 'text-rose-500' },
+  haha: { label: 'Haha', emoji: '😆', color: 'text-amber-400' },
+  wow: { label: 'Wow', emoji: '😮', color: 'text-yellow-400' },
+  sad: { label: 'Sad', emoji: '😢', color: 'text-sky-400' },
+  fire: { label: 'Fire', emoji: '🔥', color: 'text-orange-500' },
+};
+
+export interface PostCardProps {
+  post: CommunityPost;
+  userProfile: UserProfile;
+  onUpdatePost?: (updatedPost: CommunityPost) => void;
+  onDeletePost?: (postId: string) => void;
+  onToggleLike?: (postId: string) => void;
+  onSelectReaction?: (postId: string, reactionType: ReactionType) => void;
+  onToggleSave?: (postId: string) => void;
+  onRemixPrompt?: (prompt: string, stylePreset?: string) => void;
+  onSharePost?: (post: CommunityPost) => void;
+  onAddComment?: (postId: string, text: string) => void;
+  onAddVoiceComment?: (postId: string, audioUrl: string, duration: number) => void;
+  onDeleteComment?: (postId: string, commentId: string) => void;
+  onDeleteVoiceComment?: (postId: string, voiceId: string) => void;
+  onStartEdit?: (post: CommunityPost) => void;
+  onOpenChat?: (authorId: string, authorProfile?: UserProfile) => void;
+  isHighlighted?: boolean;
+  onShowToast?: (message: string) => void;
+  priority?: boolean;
+  isAuthorFollowed?: boolean;
+  onToggleAuthorFollow?: (author: { id?: string; name?: string; username?: string; avatar?: string }) => void;
+  onOpenReel?: (reelId: string) => void;
+}
+
+export const PostCard: React.FC<PostCardProps> = ({
+  post,
+  userProfile,
+  onUpdatePost,
+  onDeletePost,
+  onToggleLike,
+  onSelectReaction,
+  onToggleSave,
+  onRemixPrompt,
+  onSharePost,
+  onAddComment,
+  onAddVoiceComment,
+  onDeleteComment,
+  onDeleteVoiceComment,
+  onStartEdit,
+  onOpenChat,
+  isHighlighted,
+  onShowToast,
+  priority = false,
+  isAuthorFollowed,
+  onToggleAuthorFollow,
+  onOpenReel,
+}) => {
+  const [isMenuOpen, setIsMenuOpen] = useState(false);
+  const [showComments, setShowComments] = useState(false);
+  const [showAiRecipe, setShowAiRecipe] = useState(false);
+  const [commentText, setCommentText] = useState('');
+  const [showReactionPicker, setShowReactionPicker] = useState(false);
+  const [isFeedVideoMuted, setIsFeedVideoMuted] = useState(true);
+  const feedVideoRef = useRef<HTMLVideoElement | null>(null);
+  const touchStartPosRef = useRef<{ x: number; y: number } | null>(null);
+  const isTouchScrollingRef = useRef(false);
+
+  // Load persistent comments from Supabase when comment section is expanded
+  useEffect(() => {
+    if (!showComments) return;
+    const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(post.id);
+    if (isUuid && onUpdatePost) {
+      fetchComments(post.id).then(({ comments, error }) => {
+        if (!error && comments) {
+          onUpdatePost({
+            ...post,
+            comments,
+            commentsCount: Math.max(post.commentsCount || 0, comments.length),
+          });
+        }
+      });
+    }
+  }, [showComments, post.id]);
+
+  // Local inline caption edit state
+  const [isInlineEditing, setIsInlineEditing] = useState(false);
+  const [editCaption, setEditCaption] = useState(post.caption || post.prompt);
+
+  // Voice playback state
+  const [isPlayingVoiceId, setIsPlayingVoiceId] = useState<string | null>(null);
+  const [isPlayingTrack, setIsPlayingTrack] = useState(false);
+  const [isLicenseModalOpen, setIsLicenseModalOpen] = useState(false);
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+  const trackAudioRef = useRef<HTMLAudioElement | null>(null);
+
+  // 10-second Voice Note Recording state
+  const [isRecordingVoice, setIsRecordingVoice] = useState(false);
+  const [recordingSeconds, setRecordingSeconds] = useState(0);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const audioChunksRef = useRef<Blob[]>([]);
+  const recordIntervalRef = useRef<any>(null);
+
+  // Speech-to-text dictation state
+  const [isDictating, setIsDictating] = useState(false);
+  const [speechLanguage, setSpeechLanguage] = useState<'en-US' | 'bn-BD'>(() => {
+    if (typeof window !== 'undefined') {
+      const saved = localStorage.getItem('metfa_speech_lang');
+      if (saved === 'bn-BD' || saved === 'en-US') return saved;
+    }
+    return 'en-US';
+  });
+  const speechRecognitionRef = useRef<any>(null);
+  const baseCommentTextRef = useRef<string>('');
+
+  const joinWithSpacing = (base: string, addition: string): string => {
+    const b = (base || '').trim();
+    const a = (addition || '').trim();
+    if (!b) return a;
+    if (!a) return b;
+    if (/^[.,!?;:।\)\]]/.test(a)) {
+      return `${b}${a}`;
+    }
+    return `${b} ${a}`;
+  };
+
+  const handleSpeechLangChange = (lang: 'en-US' | 'bn-BD') => {
+    setSpeechLanguage(lang);
+    try {
+      localStorage.setItem('metfa_speech_lang', lang);
+    } catch {
+      // ignore
+    }
+  };
+
+  // Clean up speech recognition on unmount
+  useEffect(() => {
+    return () => {
+      if (speechRecognitionRef.current) {
+        try {
+          speechRecognitionRef.current.stop();
+        } catch {}
+      }
+    };
+  }, []);
+
+  const isOwner = isContentOwner(post.author, userProfile, undefined, post.postingIdentity, post.id);
+  const [isFollowed, setIsFollowed] = useState<boolean>(
+    isAuthorFollowed !== undefined
+      ? isAuthorFollowed
+      : isUserFollowed(post.author?.id) || isUserFollowed(post.author?.username)
+  );
+  const [isFollowLoading, setIsFollowLoading] = useState(false);
+
+  useEffect(() => {
+    if (isAuthorFollowed !== undefined) {
+      setIsFollowed(isAuthorFollowed);
+    }
+  }, [isAuthorFollowed]);
+
+  const handleToggleFollow = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (isFollowLoading) return;
+
+    if (onToggleAuthorFollow) {
+      onToggleAuthorFollow(post.author);
+      return;
+    }
+
+    const targetAuthorId = post.author?.id;
+    const authorName = post.author?.name || `@${post.author?.username || 'user'}`;
+
+    if (targetAuthorId && isValidProfileUuid(targetAuthorId)) {
+      setIsFollowLoading(true);
+      if (!isFollowed) {
+        const { success, error } = await followUser(targetAuthorId);
+        setIsFollowLoading(false);
+        if (success) {
+          setIsFollowed(true);
+          syncFollowCache(post.author, true);
+          onShowToast?.(`You are now following ${authorName}`);
+        } else {
+          onShowToast?.(error || 'Failed to follow user.');
+        }
+      } else {
+        const { success, error } = await unfollowUser(targetAuthorId);
+        setIsFollowLoading(false);
+        if (success) {
+          setIsFollowed(false);
+          syncFollowCache(post.author, false);
+          onShowToast?.(`Unfollowed ${authorName}`);
+        } else {
+          onShowToast?.(error || 'Failed to unfollow user.');
+        }
+      }
+    } else {
+      // Non-UUID local fallback
+      const next = !isFollowed;
+      setIsFollowed(next);
+      syncFollowCache(post.author, next);
+      onShowToast?.(next ? `You are now following ${authorName}` : `Unfollowed ${authorName}`);
+    }
+  };
+
+  const isSaved = post.isBookmarked ?? isPostSaved(post.id);
+
+  // Close menus on outside click
+  useEffect(() => {
+    const handleGlobalClick = (e: MouseEvent) => {
+      const target = e.target as HTMLElement;
+      if (!target.closest(`[data-post-menu="${post.id}"]`)) {
+        setIsMenuOpen(false);
+      }
+      if (!target.closest(`[data-reaction-container="${post.id}"]`)) {
+        setShowReactionPicker(false);
+      }
+    };
+    window.addEventListener('click', handleGlobalClick);
+    return () => window.removeEventListener('click', handleGlobalClick);
+  }, [post.id]);
+
+  const handleSaveToggle = (e?: React.MouseEvent) => {
+    e?.stopPropagation();
+    setIsMenuOpen(false);
+
+    if (onToggleSave) {
+      onToggleSave(post.id);
+    } else {
+      const result = toggleSavePost(post.id);
+      if (onShowToast) {
+        onShowToast(result.isSaved ? 'Saved to your bookmarks!' : 'Removed from bookmarks');
+      }
+      if (onUpdatePost && result.post) {
+        onUpdatePost(result.post);
+      }
+    }
+  };
+
+  const handleCopyLink = () => {
+    setIsMenuOpen(false);
+    const postUrl = `${window.location.origin}/#post-${post.id}`;
+    navigator.clipboard.writeText(postUrl);
+    onShowToast?.('Post link copied to clipboard!');
+  };
+
+  const handleInlineSave = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editCaption.trim()) return;
+    const updated: CommunityPost = {
+      ...post,
+      caption: editCaption.trim(),
+      prompt: post.prompt || editCaption.trim(),
+    };
+    if (onUpdatePost) {
+      onUpdatePost(updated);
+    }
+    setIsInlineEditing(false);
+    onShowToast?.('Post updated successfully!');
+  };
+
+  const handleCommentSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const cleanText = commentText.trim();
+    if (!cleanText) return;
+
+    const safety = checkContentSafety(cleanText);
+    if (!safety.isSafe) {
+      onShowToast?.(safety.politeResponse || 'Comment violates community safety guidelines.');
+      return;
+    }
+
+    if (onAddComment) {
+      onAddComment(post.id, cleanText);
+      setCommentText('');
+      return;
+    }
+
+    const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(post.id);
+    if (isUuid) {
+      const { comment, error } = await createCommentRemote(post.id, cleanText);
+      if (error || !comment) {
+        if (error?.toLowerCase().includes('authentication required')) {
+          window.dispatchEvent(new CustomEvent('metfa_open_auth_modal'));
+        }
+        onShowToast?.(error || 'Failed to post comment.');
+        return;
+      }
+      if (onUpdatePost) {
+        onUpdatePost({
+          ...post,
+          commentsCount: (post.commentsCount || 0) + 1,
+          comments: [...(post.comments || []), comment],
+        });
+      }
+      setCommentText('');
+      onShowToast?.('Comment posted');
+    }
+  };
+
+  const handleDeleteCommentInternal = async (commentId: string) => {
+    if (onDeleteComment) {
+      onDeleteComment(post.id, commentId);
+      return;
+    }
+    const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(commentId);
+    if (isUuid) {
+      const { success, error } = await deleteCommentRemote(commentId);
+      if (!success) {
+        onShowToast?.(error || 'Failed to delete comment.');
+        return;
+      }
+      if (onUpdatePost) {
+        onUpdatePost({
+          ...post,
+          comments: (post.comments || []).filter((c) => c.id !== commentId),
+          commentsCount: Math.max(0, (post.commentsCount || 1) - 1),
+        });
+      }
+      onShowToast?.('Comment deleted');
+    }
+  };
+
+  const handleReactionSelectInternal = async (reactionType: ReactionType) => {
+    if (onSelectReaction) {
+      onSelectReaction(post.id, reactionType);
+      setShowReactionPicker(false);
+      return;
+    }
+
+    const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(post.id);
+    if (isUuid) {
+      const { action, error } = await toggleReaction(post.id, reactionType);
+      if (error) {
+        if (error.toLowerCase().includes('authentication required')) {
+          window.dispatchEvent(new CustomEvent('metfa_open_auth_modal'));
+        }
+        onShowToast?.(error || 'Failed to update reaction.');
+        return;
+      }
+      if (onUpdatePost) {
+        const prevReaction = post.userReaction;
+        const currentCounts = { ...(post.reactionCounts || {}) };
+
+        if (prevReaction && currentCounts[prevReaction]) {
+          currentCounts[prevReaction] = Math.max(0, (currentCounts[prevReaction] || 1) - 1);
+        }
+
+        if (action === 'removed') {
+          onUpdatePost({
+            ...post,
+            userReaction: undefined,
+            isLiked: false,
+            reactionCounts: currentCounts,
+            likesCount: Math.max(0, (post.likesCount || 1) - 1),
+          });
+        } else if (action === 'updated') {
+          currentCounts[reactionType] = (currentCounts[reactionType] || 0) + 1;
+          onUpdatePost({
+            ...post,
+            userReaction: reactionType,
+            isLiked: true,
+            reactionCounts: currentCounts,
+          });
+        } else {
+          currentCounts[reactionType] = (currentCounts[reactionType] || 0) + 1;
+          onUpdatePost({
+            ...post,
+            userReaction: reactionType,
+            isLiked: true,
+            reactionCounts: currentCounts,
+            likesCount: (post.likesCount || 0) + 1,
+          });
+        }
+      }
+    } else {
+      onToggleLike?.(post.id);
+    }
+    setShowReactionPicker(false);
+  };
+
+  // Voice Playback handler
+  const handlePlayVoice = (voiceId: string, audioUrl: string) => {
+    if (isPlayingVoiceId === voiceId) {
+      audioRef.current?.pause();
+      setIsPlayingVoiceId(null);
+      return;
+    }
+
+    if (audioRef.current) {
+      audioRef.current.pause();
+    }
+
+    const audio = new Audio(audioUrl);
+    audioRef.current = audio;
+    setIsPlayingVoiceId(voiceId);
+
+    audio.onended = () => setIsPlayingVoiceId(null);
+    audio.onerror = () => {
+      setIsPlayingVoiceId(null);
+      onShowToast?.('Unable to play audio comment');
+    };
+    audio.play().catch(() => setIsPlayingVoiceId(null));
+  };
+
+  // 10-sec Voice Note Recorder
+  const handleStartVoiceRecording = async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const mediaRecorder = new MediaRecorder(stream);
+      mediaRecorderRef.current = mediaRecorder;
+      audioChunksRef.current = [];
+
+      mediaRecorder.ondataavailable = (event) => {
+        if (event.data.size > 0) {
+          audioChunksRef.current.push(event.data);
+        }
+      };
+
+      mediaRecorder.onstop = () => {
+        const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
+        const audioUrl = URL.createObjectURL(audioBlob);
+        if (onAddVoiceComment) {
+          onAddVoiceComment(post.id, audioUrl, recordingSeconds || 5);
+        }
+        stream.getTracks().forEach((track) => track.stop());
+        setRecordingSeconds(0);
+      };
+
+      mediaRecorder.start();
+      setIsRecordingVoice(true);
+      setRecordingSeconds(0);
+
+      recordIntervalRef.current = setInterval(() => {
+        setRecordingSeconds((prev) => {
+          if (prev >= 10) {
+            handleStopVoiceRecording();
+            return 10;
+          }
+          return prev + 1;
+        });
+      }, 1000);
+    } catch (err) {
+      console.error('Audio recording permission error:', err);
+      onShowToast?.('Microphone access required for voice comments');
+    }
+  };
+
+  const handleStopVoiceRecording = () => {
+    if (mediaRecorderRef.current && isRecordingVoice) {
+      mediaRecorderRef.current.stop();
+      setIsRecordingVoice(false);
+      if (recordIntervalRef.current) {
+        clearInterval(recordIntervalRef.current);
+      }
+    }
+  };
+
+  // Speech-to-Text Dictation
+  const handleToggleDictation = () => {
+    const SpeechRecognition =
+      (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+
+    if (!SpeechRecognition) {
+      onShowToast?.('Speech recognition not supported in this browser');
+      return;
+    }
+
+    if (isDictating) {
+      if (speechRecognitionRef.current) {
+        try {
+          speechRecognitionRef.current.stop();
+        } catch (e) {
+          console.warn('Error stopping dictation:', e);
+        }
+      }
+      setIsDictating(false);
+      return;
+    }
+
+    try {
+      const recognition = new SpeechRecognition();
+      recognition.continuous = true;
+      recognition.interimResults = true;
+      recognition.lang = speechLanguage;
+      recognition.maxAlternatives = 1;
+
+      baseCommentTextRef.current = commentText;
+
+      recognition.onstart = () => {
+        setIsDictating(true);
+        onShowToast?.(
+          `Listening (${speechLanguage === 'bn-BD' ? 'বাংলা' : 'English'})... Speak now`
+        );
+      };
+
+      recognition.onresult = (event: any) => {
+        let finalizedTranscript = '';
+        let interimTranscript = '';
+
+        for (let i = 0; i < event.results.length; i++) {
+          const result = event.results[i];
+          const chunk = result[0]?.transcript || '';
+          if (!chunk) continue;
+
+          if (result.isFinal) {
+            finalizedTranscript = joinWithSpacing(finalizedTranscript, chunk);
+          } else {
+            interimTranscript = joinWithSpacing(interimTranscript, chunk);
+          }
+        }
+
+        const sessionVoiceText = joinWithSpacing(finalizedTranscript, interimTranscript);
+        const updated = joinWithSpacing(baseCommentTextRef.current, sessionVoiceText);
+
+        setCommentText(updated);
+      };
+
+      recognition.onerror = () => setIsDictating(false);
+      recognition.onend = () => setIsDictating(false);
+
+      speechRecognitionRef.current = recognition;
+      recognition.start();
+    } catch (err) {
+      console.warn('Dictation error:', err);
+      setIsDictating(false);
+    }
+  };
+
+  const isPureTextPost = post.postType === 'text' || (!post.imageSrc && !post.videoSrc && (!post.imageGallery || post.imageGallery.length === 0));
+  const hasGradient = Boolean(post.textBackgroundPreset && GRADIENT_PRESETS[post.textBackgroundPreset]);
+
+  return (
+    <article
+      id={`post-${post.id}`}
+      className={`bg-white rounded-3xl border border-slate-200 shadow-xs overflow-hidden transition duration-300 ${
+        isHighlighted ? 'ring-2 ring-purple-500 shadow-purple-500/20' : ''
+      }`}
+    >
+      {/* 1. Header: Author & Options Menu (...) */}
+      <div className="p-4 flex items-center justify-between border-b border-slate-100">
+        <div className="flex items-center gap-3 min-w-0">
+          <img
+            src={post.postingIdentity?.avatar || post.author.avatar}
+            alt={post.postingIdentity?.name || post.author.name}
+            loading={priority ? undefined : 'lazy'}
+            decoding="async"
+            className="w-10 h-10 rounded-2xl object-cover border border-slate-200 shadow-xs shrink-0"
+          />
+          <div className="min-w-0">
+            <div className="flex items-center gap-1.5 flex-wrap">
+              <h4 className="text-sm font-bold text-slate-900 truncate leading-tight">
+                {post.postingIdentity?.name || post.author.name}
+              </h4>
+              {post.postingIdentity?.badge && (
+                <span className="text-[9px] px-1.5 py-0.5 rounded bg-purple-50 text-purple-700 border border-purple-200 font-semibold shrink-0">
+                  {post.postingIdentity.badge}
+                </span>
+              )}
+
+              {/* Follow / Unfollow Button for Non-owners */}
+              {!isOwner && (
+                <button
+                  type="button"
+                  id={`postcard-follow-btn-${post.id}`}
+                  onClick={handleToggleFollow}
+                  className={`text-[10px] px-2 py-0.5 rounded-full font-bold transition flex items-center gap-1 cursor-pointer shrink-0 ml-1 ${
+                    isFollowed
+                      ? 'bg-slate-100 hover:bg-rose-50 text-slate-700 hover:text-rose-600 border border-slate-200 hover:border-rose-200'
+                      : 'bg-purple-600 hover:bg-purple-700 text-white shadow-xs'
+                  }`}
+                  title={isFollowed ? 'Following (Click to Unfollow)' : 'Follow Creator'}
+                >
+                  {isFollowed ? (
+                    <>
+                      <Check className="w-2.5 h-2.5 text-emerald-600" />
+                      <span>Following</span>
+                    </>
+                  ) : (
+                    <>
+                      <UserPlus className="w-2.5 h-2.5" />
+                      <span>Follow</span>
+                    </>
+                  )}
+                </button>
+              )}
+
+              {/* Direct Message Button for Non-owners */}
+              {!isOwner && (
+                <button
+                  type="button"
+                  id={`postcard-message-btn-${post.id}`}
+                  onClick={() => {
+                    const profileObj: UserProfile = {
+                      id: post.author.id,
+                      name: post.author.name,
+                      username: post.author.username,
+                      avatar: post.author.avatar,
+                      bio: '',
+                      joinDate: '',
+                      isVerified: post.author.isVerified || false,
+                      stats: {
+                        postsCount: 0,
+                        followersCount: 0,
+                        followingCount: 0,
+                        totalLikes: 0,
+                        reelsCount: 0,
+                      },
+                    };
+                    if (onOpenChat) {
+                      onOpenChat(post.author.id, profileObj);
+                    } else {
+                      window.dispatchEvent(
+                        new CustomEvent('metfa_open_chat', {
+                          detail: { partnerId: post.author.id, partnerProfile: profileObj },
+                        })
+                      );
+                    }
+                  }}
+                  className="text-[10px] px-2 py-0.5 rounded-full font-bold bg-teal-50 hover:bg-teal-100 text-teal-700 border border-teal-200 transition flex items-center gap-1 cursor-pointer shrink-0 ml-1 shadow-2xs active:scale-95"
+                  title={`Direct Message @${post.author.username}`}
+                >
+                  <MessageSquare className="w-2.5 h-2.5 text-teal-600" />
+                  <span>Message</span>
+                </button>
+              )}
+            </div>
+            <div className="flex items-center gap-2 text-xs text-slate-500 font-mono mt-0.5">
+              <span className="text-teal-700 font-medium">@{post.postingIdentity?.username || post.author.username}</span>
+              <span>•</span>
+              <span>{post.createdAt}</span>
+            </div>
+          </div>
+        </div>
+
+        <div className="flex items-center gap-2 shrink-0">
+          {post.stylePreset && (
+            <span className="text-[10px] font-semibold px-2.5 py-1 bg-purple-50 border border-purple-200 text-purple-700 rounded-full hidden sm:inline-block">
+              {post.stylePreset}
+            </span>
+          )}
+
+          {/* Top-Right Context Dropdown Menu (...) */}
+          <div className="relative" data-post-menu={post.id}>
+            <button
+              type="button"
+              id={`post-menu-btn-${post.id}`}
+              onClick={(e) => {
+                e.stopPropagation();
+                setIsMenuOpen((prev) => !prev);
+              }}
+              className={`p-1.5 rounded-xl transition cursor-pointer ${
+                isMenuOpen ? 'bg-purple-100 text-purple-700' : 'text-slate-500 hover:text-slate-900 hover:bg-slate-100'
+              }`}
+              title="Post options"
+              aria-label="Post options"
+            >
+              <MoreVertical className="w-4 h-4" />
+            </button>
+
+            {isMenuOpen && (
+              <div
+                id={`post-menu-dropdown-${post.id}`}
+                className="absolute right-0 top-full mt-1.5 w-48 bg-white border border-slate-200 rounded-2xl shadow-xl py-1.5 z-40 animate-scaleUp text-xs backdrop-blur-md"
+                onClick={(e) => e.stopPropagation()}
+              >
+                {/* 1. Save Post / Unsave Post at the very top */}
+                <button
+                  type="button"
+                  id={`save-post-menu-btn-${post.id}`}
+                  onClick={handleSaveToggle}
+                  className="w-full px-3.5 py-2 text-left text-slate-700 hover:text-purple-700 hover:bg-purple-50 flex items-center gap-2.5 transition font-medium cursor-pointer"
+                >
+                  <Bookmark
+                    className={`w-4 h-4 ${isSaved ? 'text-amber-500 fill-amber-500' : 'text-amber-500'}`}
+                  />
+                  <span className="font-semibold">{isSaved ? 'Unsave Post' : 'Save Post'}</span>
+                </button>
+
+                {/* 2. Copy Link */}
+                <button
+                  type="button"
+                  id={`copy-link-menu-btn-${post.id}`}
+                  onClick={handleCopyLink}
+                  className="w-full px-3.5 py-2 text-left text-slate-700 hover:text-slate-900 hover:bg-slate-50 flex items-center gap-2.5 transition cursor-pointer"
+                >
+                  <Copy className="w-4 h-4 text-teal-600" />
+                  <span>Copy Link</span>
+                </button>
+
+                {/* 3. AI Recipe */}
+                <button
+                  type="button"
+                  id={`ai-recipe-menu-btn-${post.id}`}
+                  onClick={() => {
+                    setIsMenuOpen(false);
+                    setShowAiRecipe((prev) => !prev);
+                  }}
+                  className="w-full px-3.5 py-2 text-left text-purple-700 hover:text-purple-900 hover:bg-purple-50 flex items-center gap-2.5 transition font-medium cursor-pointer"
+                  title="View AI Prompt Recipe & Parameters"
+                >
+                  <Sparkles className="w-4 h-4 text-purple-600 shrink-0" />
+                  <span>AI Recipe</span>
+                </button>
+
+                {/* 4. Remix in Studio */}
+                <button
+                  type="button"
+                  id={`remix-menu-btn-${post.id}`}
+                  onClick={() => {
+                    setIsMenuOpen(false);
+                    onRemixPrompt?.(post.prompt || post.caption || '', post.stylePreset);
+                  }}
+                  className="w-full px-3.5 py-2 text-left text-teal-700 hover:text-teal-900 hover:bg-teal-50 flex items-center gap-2.5 transition font-medium cursor-pointer"
+                  title="Remix prompt directly in AI Studio"
+                >
+                  <Wand2 className="w-4 h-4 text-teal-600 shrink-0" />
+                  <span>Remix in Studio</span>
+                </button>
+
+                {/* 5. Copyright & Rights */}
+                <button
+                  type="button"
+                  id={`copyright-menu-btn-${post.id}`}
+                  onClick={() => {
+                    setIsMenuOpen(false);
+                    if (post.audioTrack) {
+                      setIsLicenseModalOpen(true);
+                    } else {
+                      onShowToast?.('Original Content Copyright • Protected under METFA Creator Rights');
+                    }
+                  }}
+                  className="w-full px-3.5 py-2 text-left text-slate-700 hover:text-slate-900 hover:bg-slate-50 flex items-center gap-2.5 transition font-medium cursor-pointer"
+                  title="View copyright & licensing details"
+                >
+                  <ShieldCheck className="w-4 h-4 text-teal-600 shrink-0" />
+                  <span>{post.audioTrack?.license_type ? `License: ${post.audioTrack.license_type}` : 'Copyright & Rights'}</span>
+                </button>
+
+                {/* Author Only Actions: Edit Post & Delete Post */}
+                {isOwner ? (
+                  <>
+                    <div className="h-px bg-slate-100 my-1" />
+                    <button
+                      type="button"
+                      id={`edit-post-menu-btn-${post.id}`}
+                      onClick={() => {
+                        setIsMenuOpen(false);
+                        if (onStartEdit) {
+                          onStartEdit(post);
+                        } else {
+                          setIsInlineEditing(true);
+                          setEditCaption(post.caption || post.prompt);
+                        }
+                      }}
+                      className="w-full px-3.5 py-2 text-left text-purple-700 hover:text-purple-900 hover:bg-purple-50 flex items-center gap-2.5 transition font-medium cursor-pointer"
+                    >
+                      <Edit3 className="w-4 h-4 text-purple-600" />
+                      <span>Edit Post</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      id={`delete-post-menu-btn-${post.id}`}
+                      onClick={() => {
+                        setIsMenuOpen(false);
+                        onDeletePost?.(post.id);
+                      }}
+                      className="w-full px-3.5 py-2 text-left text-rose-600 hover:text-rose-700 hover:bg-rose-50 flex items-center gap-2.5 transition font-medium cursor-pointer"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                      <span>Delete Post</span>
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    <div className="h-px bg-slate-100 my-1" />
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setIsMenuOpen(false);
+                        onShowToast?.('Post reported to community moderators');
+                      }}
+                      className="w-full px-3.5 py-2 text-left text-slate-600 hover:text-slate-900 hover:bg-slate-50 flex items-center gap-2.5 transition cursor-pointer"
+                    >
+                      <Flag className="w-4 h-4 text-slate-400" />
+                      <span>Report Post</span>
+                    </button>
+                  </>
+                )}
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {/* 2. Fullscreen Post Editor Modal */}
+      {isInlineEditing && (
+        <div className="fixed inset-0 z-50 flex flex-col bg-white text-slate-900 w-full h-full overflow-hidden animate-in fade-in duration-150">
+          {/* Header */}
+          <div className="flex items-center justify-between px-4 sm:px-8 py-3.5 border-b border-slate-200 bg-white shrink-0">
+            <div className="flex items-center gap-2.5">
+              <div className="p-2 rounded-xl bg-purple-100 text-purple-700">
+                <Edit3 className="w-5 h-5" />
+              </div>
+              <div>
+                <h3 className="text-sm sm:text-base font-bold text-slate-900">
+                  Full-Screen Post Editor
+                </h3>
+                <p className="text-[11px] text-slate-500">
+                  Edit and refine your text with full view and clarity
+                </p>
+              </div>
+            </div>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setIsInlineEditing(false)}
+                className="p-2 rounded-xl text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition cursor-pointer"
+                title="Close"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+          </div>
+
+          {/* Fullscreen Body */}
+          <form onSubmit={handleInlineSave} className="flex-1 flex flex-col min-h-0 p-4 sm:p-8 space-y-4 max-w-4xl mx-auto w-full">
+            <div className="flex items-center justify-between text-xs text-slate-500">
+              <span className="font-semibold text-slate-700">Post Text / Prompt Content:</span>
+              <span className="font-mono">{editCaption.length} characters</span>
+            </div>
+
+            <textarea
+              value={editCaption}
+              onChange={(e) => setEditCaption(e.target.value)}
+              className="w-full flex-1 p-5 bg-slate-50 border border-slate-200 rounded-2xl text-base sm:text-lg text-slate-900 focus:outline-none focus:border-purple-600 focus:bg-white resize-none font-medium leading-relaxed shadow-inner"
+              placeholder="Write or refine your post text..."
+              autoFocus
+            />
+
+            <div className="flex items-center justify-between pt-3 border-t border-slate-100 shrink-0">
+              <span className="text-xs text-slate-400">
+                Full-screen mode gives you comfortable room to review words and formatting
+              </span>
+              <div className="flex items-center gap-3">
+                <button
+                  type="button"
+                  onClick={() => setIsInlineEditing(false)}
+                  className="px-4 py-2 rounded-xl text-slate-600 hover:bg-slate-100 text-sm font-semibold transition cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="px-6 py-2 bg-purple-600 hover:bg-purple-700 text-white text-sm font-bold rounded-xl flex items-center gap-2 shadow-sm transition cursor-pointer"
+                >
+                  <Check className="w-4 h-4" />
+                  <span>Save Changes</span>
+                </button>
+              </div>
+            </div>
+          </form>
+        </div>
+      )}
+
+      {/* Post Media / Text Body */}
+      {isPureTextPost ? (
+        <div
+          className={`p-6 sm:p-8 flex items-center justify-center text-center ${
+            hasGradient ? GRADIENT_PRESETS[post.textBackgroundPreset!] : 'bg-slate-50 text-slate-900 text-left'
+          }`}
+        >
+          <PostContent
+            text={post.caption || post.prompt}
+            charLimit={hasGradient ? 220 : 180}
+            className="w-full"
+            textClassName={
+              hasGradient
+                ? 'text-lg sm:text-xl font-black text-white leading-relaxed text-center drop-shadow-sm'
+                : 'text-sm sm:text-base text-slate-900 leading-relaxed font-normal text-left'
+            }
+            buttonClassName={
+              hasGradient
+                ? 'text-white hover:underline font-bold text-xs mt-2'
+                : 'text-blue-600 hover:text-blue-800 font-semibold text-sm mt-1'
+            }
+          />
+        </div>
+      ) : (
+        <div className="relative group bg-slate-100 max-h-[520px] overflow-hidden flex items-center justify-center">
+          {post.videoSrc ? (
+            <div className="relative w-full overflow-hidden flex items-center justify-center bg-black group/videoplayer">
+              {Boolean(post.videoSrc) && (
+                <>
+                  {/* Direct-click / tap area on visible video picture area to open in Reels */}
+                  <div
+                    role="button"
+                    tabIndex={0}
+                    data-testid={`postcard-reel-video-picture-area-${post.id}`}
+                    onTouchStart={(e) => {
+                      if (e.touches && e.touches[0]) {
+                        touchStartPosRef.current = { x: e.touches[0].clientX, y: e.touches[0].clientY };
+                        isTouchScrollingRef.current = false;
+                      }
+                    }}
+                    onTouchMove={(e) => {
+                      if (touchStartPosRef.current && e.touches && e.touches[0]) {
+                        const dx = Math.abs(e.touches[0].clientX - touchStartPosRef.current.x);
+                        const dy = Math.abs(e.touches[0].clientY - touchStartPosRef.current.y);
+                        if (dx > 8 || dy > 8) {
+                          isTouchScrollingRef.current = true;
+                        }
+                      }
+                    }}
+                    onClick={(e) => {
+                      if (isTouchScrollingRef.current) {
+                        isTouchScrollingRef.current = false;
+                        return;
+                      }
+                      e.stopPropagation();
+                      e.preventDefault();
+                      if (onOpenReel) {
+                        try { onOpenReel(post.id); } catch (err) { console.warn(err); }
+                      }
+                      if (typeof window !== 'undefined') {
+                        window.dispatchEvent(
+                          new CustomEvent('metfa_open_reel', { detail: { reelId: post.id, videoSrc: post.videoSrc, title: post.videoTitle || post.caption } })
+                        );
+                      }
+                    }}
+                    className="absolute inset-x-0 top-0 bottom-14 z-20 cursor-pointer bg-black/0 active:bg-white/5 transition-colors focus:outline-none select-none touch-manipulation"
+                    title="Watch Reel"
+                    aria-label={`Watch ${post.videoTitle || 'Reel'} in Reels`}
+                  />
+
+                  {/* Accessible Watch Reel badge (Top Left) */}
+                  <button
+                    type="button"
+                    data-testid={`postcard-reel-nav-btn-${post.id}`}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      e.preventDefault();
+                      if (onOpenReel) {
+                        try { onOpenReel(post.id); } catch (err) { console.warn(err); }
+                      }
+                      if (typeof window !== 'undefined') {
+                        window.dispatchEvent(
+                          new CustomEvent('metfa_open_reel', { detail: { reelId: post.id, videoSrc: post.videoSrc, title: post.videoTitle || post.caption } })
+                        );
+                      }
+                    }}
+                    className="absolute top-3 left-3 z-30 px-3 py-1.5 rounded-full bg-black/80 hover:bg-black text-white border border-teal-500/50 backdrop-blur-md text-xs font-bold flex items-center gap-1.5 shadow-xl transition transform active:scale-95 cursor-pointer pointer-events-auto"
+                    title="Watch fullscreen in Reels feed"
+                    aria-label={`Watch ${post.videoTitle || 'Reel'} in Reels`}
+                  >
+                    <Film className="w-3.5 h-3.5 text-teal-400 shrink-0 animate-pulse" />
+                    <span className="text-[11px] font-semibold text-teal-300">Watch Reel</span>
+                    <span className="text-[10px] text-slate-400 font-mono">→</span>
+                  </button>
+
+                  {/* Feed Video Sound Mute / Unmute Button (Top Right) */}
+                  <button
+                    type="button"
+                    data-testid={`postcard-feed-video-sound-btn-${post.id}`}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      e.preventDefault();
+                      setIsFeedVideoMuted((prev) => {
+                        const next = !prev;
+                        if (feedVideoRef.current) {
+                          feedVideoRef.current.muted = next;
+                          if (!next) {
+                            feedVideoRef.current.play().catch(() => {});
+                          }
+                        }
+                        return next;
+                      });
+                    }}
+                    className={`absolute top-3 right-3 z-30 p-2 rounded-full backdrop-blur-md border transition cursor-pointer flex items-center justify-center pointer-events-auto ${
+                      isFeedVideoMuted
+                        ? 'bg-black/70 border-white/20 text-slate-300 hover:text-white'
+                        : 'bg-teal-950/80 border-teal-500/50 text-teal-300 hover:bg-teal-900 shadow-sm shadow-teal-500/20'
+                    }`}
+                    title={isFeedVideoMuted ? 'Unmute video sound' : 'Mute video sound'}
+                    aria-label={isFeedVideoMuted ? 'Unmute video sound' : 'Mute video sound'}
+                  >
+                    {isFeedVideoMuted ? (
+                      <VolumeX className="w-4 h-4 text-slate-300" />
+                    ) : (
+                      <Volume2 className="w-4 h-4 text-teal-300 animate-pulse" />
+                    )}
+                  </button>
+                </>
+              )}
+              {/* HTML5 video element: controls bar on bottom 56px is uncovered and protected against accidental navigation */}
+              <video
+                ref={feedVideoRef}
+                src={post.videoSrc}
+                controls
+                playsInline
+                muted={isFeedVideoMuted}
+                autoPlay
+                poster={post.videoThumbnail || (post.imageSrc && !post.imageSrc.includes('photo-1508739773434') ? post.imageSrc : undefined)}
+                className="w-full max-h-[520px] object-cover bg-black"
+              />
+            </div>
+          ) : post.imageGallery && post.imageGallery.length > 1 ? (
+            <div
+              className={`w-full grid gap-1 ${
+                post.imageGallery.length === 2 ? 'grid-cols-2' : 'grid-cols-2 sm:grid-cols-3'
+              }`}
+            >
+              {post.imageGallery.map((img, i) => (
+                <div key={i} className="aspect-square bg-slate-100 overflow-hidden">
+                  <img
+                    src={img}
+                    alt={`Gallery ${i}`}
+                    loading="lazy"
+                    decoding="async"
+                    className="w-full h-full object-cover hover:scale-105 transition"
+                  />
+                </div>
+              ))}
+            </div>
+          ) : (
+            <img
+              src={post.imageSrc || post.imageGallery?.[0]}
+              alt={post.prompt}
+              loading={priority ? 'eager' : 'lazy'}
+              decoding="async"
+              className="w-full h-auto max-h-[520px] object-cover"
+            />
+          )}
+        </div>
+      )}
+
+      {/* 3. Caption & AI Prompt Recipe Card (Default Closed / Opt-in) */}
+      {!isInlineEditing && (
+        <div className="p-4 space-y-3">
+          {post.videoTitle && (
+            <div className="flex items-center gap-2">
+              <span className="p-1 rounded-lg bg-purple-100 text-purple-700">
+                <Film className="w-3.5 h-3.5" />
+              </span>
+              <h4 className="text-base font-bold text-slate-900 leading-snug">
+                {post.videoTitle}
+              </h4>
+            </div>
+          )}
+
+          {!isPureTextPost && post.caption && (
+            <PostContent
+              text={post.caption}
+              charLimit={160}
+              textClassName="text-sm text-slate-800 leading-relaxed font-normal"
+              buttonClassName="text-blue-600 hover:text-blue-800 font-semibold text-sm mt-1"
+            />
+          )}
+
+          {post.audioTrack && (
+            <div className="p-2.5 rounded-2xl bg-purple-50 border border-purple-200 flex items-center justify-between gap-3">
+              <div className="flex items-center gap-2.5 min-w-0">
+                <div className="relative group shrink-0">
+                  <img
+                    src={post.audioTrack.cover_url}
+                    alt={post.audioTrack.title}
+                    loading="lazy"
+                    decoding="async"
+                    className="w-10 h-10 rounded-xl object-cover border border-purple-200"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (!trackAudioRef.current) {
+                        const audio = new Audio(post.audioTrack!.audio_url);
+                        trackAudioRef.current = audio;
+                        audio.onended = () => setIsPlayingTrack(false);
+                        audio.onerror = () => setIsPlayingTrack(false);
+                      }
+                      if (isPlayingTrack) {
+                        trackAudioRef.current.pause();
+                        setIsPlayingTrack(false);
+                      } else {
+                        trackAudioRef.current.play().catch(() => setIsPlayingTrack(false));
+                        setIsPlayingTrack(true);
+                      }
+                    }}
+                    className="absolute inset-0 bg-black/40 hover:bg-black/60 rounded-xl flex items-center justify-center text-white transition cursor-pointer"
+                  >
+                    {isPlayingTrack ? (
+                      <Pause className="w-4 h-4 text-teal-300" />
+                    ) : (
+                      <Play className="w-4 h-4 text-purple-200 fill-purple-200 ml-0.5" />
+                    )}
+                  </button>
+                </div>
+
+                <div className="min-w-0">
+                  <div className="flex items-center gap-1.5">
+                    <Music className="w-3 h-3 text-purple-600 shrink-0" />
+                    <h4 className="text-xs font-bold text-slate-900 truncate">{post.audioTrack.title}</h4>
+                  </div>
+                  <p className="text-[10px] text-purple-700 truncate font-mono">
+                    {post.audioTrack.artist} • {formatDuration(post.audioTrack.duration)}
+                  </p>
+                </div>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => setIsLicenseModalOpen(true)}
+                className="px-2 py-1 rounded-lg bg-teal-50 border border-teal-200 text-teal-800 hover:bg-teal-100 text-[10px] font-bold flex items-center gap-1 shrink-0 transition"
+                title="View verified licensing certificate"
+              >
+                <ShieldCheck className="w-3 h-3 text-teal-600" />
+                <span>{post.audioTrack.license_type}</span>
+              </button>
+            </div>
+          )}
+
+          {post.tags && post.tags.length > 0 && (
+            <div className="flex items-center gap-1.5 flex-wrap pt-1">
+              {post.tags.map((tag, i) => (
+                <span key={i} className="text-[11px] text-teal-700 font-medium">
+                  #{tag}
+                </span>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* 4. Action Bar (Clean, mobile-friendly primary engagement actions: Like, Comment, Share) */}
+      <div className="px-4 py-2 border-t border-slate-100 flex items-center justify-between w-full text-xs text-slate-600">
+        <div className="flex items-center gap-3 sm:gap-6">
+          {/* 1. Like + count */}
+          <div
+            className="relative shrink-0"
+            data-reaction-container={post.id}
+            onMouseLeave={() => setShowReactionPicker(false)}
+          >
+            {showReactionPicker && (
+              <div className="absolute -top-12 left-0 z-30 bg-white border border-slate-200 rounded-full px-2 py-1.5 shadow-xl flex items-center gap-1.5 animate-fadeIn">
+                {Object.entries(REACTION_ICONS).map(([key, item]) => (
+                  <button
+                    key={key}
+                    type="button"
+                    onClick={() => handleReactionSelectInternal(key as any)}
+                    className="text-lg hover:scale-125 transform transition duration-150 p-1 cursor-pointer"
+                    title={item.label}
+                  >
+                    {item.emoji}
+                  </button>
+                ))}
+              </div>
+            )}
+
+            <button
+              type="button"
+              id={`like-post-${post.id}`}
+              onClick={() => onToggleLike ? onToggleLike(post.id) : handleReactionSelectInternal('like')}
+              onMouseEnter={() => setShowReactionPicker(true)}
+              className={`px-2 py-1.5 rounded-lg flex items-center gap-1.5 text-xs font-semibold transition cursor-pointer shrink-0 select-none ${
+                post.userReaction
+                  ? `${REACTION_ICONS[post.userReaction]?.color || 'text-rose-600'} font-bold`
+                  : post.isLiked
+                  ? 'bg-rose-50 text-rose-600 border border-rose-200'
+                  : 'hover:bg-slate-100 text-slate-700'
+              }`}
+              title="Like or React"
+            >
+              {post.userReaction && REACTION_ICONS[post.userReaction] ? (
+                <span className="text-base leading-none">{REACTION_ICONS[post.userReaction].emoji}</span>
+              ) : (
+                <Heart className={`w-4 h-4 ${post.isLiked ? 'fill-current text-rose-600' : ''}`} />
+              )}
+              <span>{post.likesCount}</span>
+            </button>
+          </div>
+
+          {/* 2. Comment + count */}
+          <button
+            type="button"
+            id={`comments-toggle-${post.id}`}
+            onClick={() => setShowComments((prev) => !prev)}
+            className={`px-2 py-1.5 rounded-lg flex items-center gap-1.5 text-xs font-semibold transition cursor-pointer shrink-0 ${
+              showComments ? 'bg-purple-50 text-purple-700 border border-purple-200' : 'hover:bg-slate-100 text-slate-700'
+            }`}
+            title="Comments"
+          >
+            <MessageCircle className="w-4 h-4" />
+            <span>{Math.max(post.commentsCount || 0, (post.comments?.length || 0) + (post.voiceComments?.length || 0))}</span>
+          </button>
+        </div>
+
+        <div className="flex items-center gap-2">
+          {/* 3. Share + count */}
+          <button
+            type="button"
+            id={`share-post-${post.id}`}
+            onClick={() => onSharePost ? onSharePost(post) : undefined}
+            className="px-2.5 py-1.5 rounded-lg hover:bg-slate-100 text-slate-700 flex items-center gap-1.5 text-xs font-semibold transition cursor-pointer shrink-0"
+            title="Share Post"
+          >
+            <Share2 className="w-4 h-4" />
+            <span>{post.sharesCount || 0}</span>
+          </button>
+        </div>
+      </div>
+
+      {/* Expanded AI Recipe & Prompt Box when toggled open */}
+      {showAiRecipe && (
+        <div className="px-4 pb-3 animate-fadeIn">
+          <AiRecipeBox
+            prompt={post.prompt || post.caption || 'AI generated creative post'}
+            stylePreset={post.stylePreset}
+            onRemixPrompt={onRemixPrompt}
+            forceExpanded={true}
+            onClose={() => setShowAiRecipe(false)}
+          />
+        </div>
+      )}
+
+      {/* 5. Interactive Comments Section */}
+      {showComments && (
+        <div className="p-4 bg-slate-50 border-t border-slate-200 space-y-4 animate-fadeIn">
+          {/* Voice Comments */}
+          {post.voiceComments && post.voiceComments.length > 0 && (
+            <div className="space-y-2">
+              <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider block">
+                🎙️ Audio Voice Comments ({post.voiceComments.length})
+              </span>
+              <div className="space-y-2">
+                {post.voiceComments.map((vc) => (
+                  <div
+                    key={vc.id}
+                    className="p-2.5 bg-white rounded-2xl border border-slate-200 flex items-center justify-between gap-3 shadow-xs"
+                  >
+                    <div className="flex items-center gap-2.5 min-w-0">
+                      <button
+                        type="button"
+                        onClick={() => handlePlayVoice(vc.id, vc.audioUrl)}
+                        className={`p-2 rounded-full transition cursor-pointer ${
+                          isPlayingVoiceId === vc.id
+                            ? 'bg-purple-600 text-white animate-pulse'
+                            : 'bg-purple-50 text-purple-700 hover:bg-purple-100'
+                        }`}
+                      >
+                        {isPlayingVoiceId === vc.id ? <Pause className="w-3.5 h-3.5" /> : <Play className="w-3.5 h-3.5" />}
+                      </button>
+                      <div className="min-w-0">
+                        <div className="text-xs font-bold text-slate-900 flex items-center gap-1.5">
+                          <span>{vc.author.name}</span>
+                          <span className="text-[10px] text-slate-500 font-mono">@{vc.author.username}</span>
+                        </div>
+                        <div className="text-[10px] text-teal-700 font-mono">{vc.duration}s voice memo</div>
+                      </div>
+                    </div>
+
+                    {isContentOwner(vc.author.id, userProfile.id) && onDeleteVoiceComment && (
+                      <button
+                        type="button"
+                        onClick={() => onDeleteVoiceComment(post.id, vc.id)}
+                        className="p-1.5 text-slate-400 hover:text-rose-600 transition cursor-pointer"
+                        title="Delete voice note"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Text Comments List */}
+          {post.comments && post.comments.length > 0 && (
+            <div className="space-y-2.5">
+              {post.comments.map((c) => (
+                <div key={c.id} className="p-3 bg-white rounded-2xl border border-slate-200 flex items-start justify-between gap-3 shadow-xs">
+                  <div className="flex items-start gap-2.5 min-w-0">
+                    <img
+                      src={c.author.avatar}
+                      alt={c.author.name}
+                      loading="lazy"
+                      decoding="async"
+                      className="w-7 h-7 rounded-xl object-cover shrink-0 mt-0.5 border border-slate-200"
+                    />
+                    <div className="min-w-0 space-y-0.5">
+                      <div className="flex items-center gap-1.5">
+                        <span className="text-xs font-bold text-slate-900">{c.author.name}</span>
+                        <span className="text-[10px] text-teal-700 font-mono">@{c.author.username}</span>
+                      </div>
+                      <p className="text-xs text-slate-800 leading-relaxed">{c.text}</p>
+                    </div>
+                  </div>
+
+                  {isContentOwner(c.author.id, userProfile.id) && (
+                    <button
+                      type="button"
+                      onClick={() => handleDeleteCommentInternal(c.id)}
+                      className="p-1 text-slate-400 hover:text-rose-600 transition shrink-0 cursor-pointer"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </button>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* Comment Input Bar */}
+          <form onSubmit={handleCommentSubmit} className="flex items-center gap-2 pt-2 border-t border-slate-200">
+            <input
+              type="text"
+              value={commentText}
+              onChange={(e) => setCommentText(e.target.value)}
+              placeholder={
+                isDictating
+                  ? speechLanguage === 'bn-BD'
+                    ? '🎙️ শুনছি (বাংলা)...'
+                    : '🎙️ Listening (English)...'
+                  : 'Write a comment or prompt reply...'
+              }
+              className="flex-1 bg-white border border-slate-300 focus:border-purple-600 rounded-xl px-3.5 py-2 text-xs text-slate-900 placeholder:text-slate-400 outline-none transition font-medium shadow-xs"
+            />
+
+            {/* Speech Dictation Button + Language Selector */}
+            <div className="flex items-center gap-1 bg-slate-100 border border-slate-200 rounded-xl p-0.5 shrink-0">
+              <button
+                type="button"
+                onClick={handleToggleDictation}
+                className={`p-1.5 rounded-lg transition cursor-pointer ${
+                  isDictating
+                    ? 'bg-rose-600 text-white animate-pulse'
+                    : 'text-slate-600 hover:text-slate-900 hover:bg-slate-200'
+                }`}
+                title={
+                  isDictating
+                    ? 'Stop dictation'
+                    : `Voice-to-Text (${speechLanguage === 'bn-BD' ? 'বাংলা' : 'English'})`
+                }
+              >
+                <Mic className="w-4 h-4" />
+              </button>
+
+              <select
+                aria-label="Speech language"
+                value={speechLanguage}
+                onChange={(e) => handleSpeechLangChange(e.target.value as 'en-US' | 'bn-BD')}
+                disabled={isDictating}
+                className="text-[10px] font-semibold bg-transparent text-slate-700 hover:text-slate-900 px-1 py-0.5 rounded cursor-pointer focus:outline-none"
+                title="Voice Language (English / বাংলা)"
+              >
+                <option value="en-US">EN</option>
+                <option value="bn-BD">বাং</option>
+              </select>
+            </div>
+
+            {/* 10s Voice Memo Button */}
+            <button
+              type="button"
+              onClick={isRecordingVoice ? handleStopVoiceRecording : handleStartVoiceRecording}
+              className={`p-2 rounded-xl transition cursor-pointer ${
+                isRecordingVoice
+                  ? 'bg-rose-600 text-white animate-pulse'
+                  : 'bg-purple-100 text-purple-700 hover:bg-purple-200'
+              }`}
+              title={isRecordingVoice ? `Recording (${recordingSeconds}s)... Tap to send` : 'Record 10s Voice Note'}
+            >
+              {isRecordingVoice ? <Square className="w-4 h-4" /> : <Volume2 className="w-4 h-4" />}
+            </button>
+
+            {/* Submit Button */}
+            <button
+              type="submit"
+              disabled={!commentText.trim()}
+              className="p-2 bg-gradient-to-r from-purple-600 to-teal-500 disabled:opacity-40 text-white rounded-xl transition cursor-pointer shadow-xs"
+            >
+              <Send className="w-4 h-4" />
+            </button>
+          </form>
+        </div>
+      )}
+
+      {/* Audio License Certificate Modal */}
+      {isLicenseModalOpen && post.audioTrack && (
+        <AudioLicenseInfoModal
+          isOpen={isLicenseModalOpen}
+          track={post.audioTrack}
+          onClose={() => setIsLicenseModalOpen(false)}
+        />
+      )}
+    </article>
+  );
+};
+
+export const FeedPostCard = PostCard;
+export { AiRecipeBox };
+export default PostCard;
+

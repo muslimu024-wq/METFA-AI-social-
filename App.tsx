@@ -26,11 +26,19 @@ export function App() {
     try {
       const params = new URLSearchParams(window.location.search);
       const tabParam = params.get('tab');
+      const hash = window.location.hash || '';
+
+      // Only launch directly into Reels if there is an explicit deep-link hash for a reel
+      if (hash.match(/^#\/?reel[_-][a-zA-Z0-9_\-]+/)) {
+        return 'reels';
+      }
+
       if (tabParam === 'chat') return 'chat';
-      // Do not allow initial unverified landing on 'v2'; default safely to 'feed'
-      if (tabParam && ['feed', 'reels', 'notifications', 'live', 'pages', 'groups', 'profile'].includes(tabParam)) {
+      // Specific non-reels sub-tabs can be respected if present
+      if (tabParam && ['notifications', 'live', 'pages', 'groups', 'profile'].includes(tabParam)) {
         return tabParam as SocialSubTab;
       }
+      // Never auto-route to Reels on launch without explicit hash; always default safely to 'feed'
     } catch {}
     return 'feed';
   });
@@ -117,6 +125,12 @@ export function App() {
       } else {
         url.searchParams.set('tab', activeTab);
       }
+      if (activeTab !== 'reels' && (url.hash.startsWith('#reel') || url.hash.startsWith('#/reel') || url.hash.startsWith('#reel_'))) {
+        url.hash = '';
+      }
+      if (activeTab !== 'feed' && (url.hash.startsWith('#post') || url.hash.startsWith('#/post') || url.hash.startsWith('#post_'))) {
+        url.hash = '';
+      }
       window.history.replaceState({}, '', url.toString());
     } catch {}
   }, [activeTab]);
@@ -152,6 +166,14 @@ export function App() {
         url.searchParams.delete('tab');
       } else {
         url.searchParams.set('tab', tab);
+      }
+      // When navigating to any tab other than reels, clear any reel hash deep link
+      if (tab !== 'reels' && (url.hash.startsWith('#reel') || url.hash.startsWith('#/reel') || url.hash.startsWith('#reel_'))) {
+        url.hash = '';
+      }
+      // When navigating to any tab other than feed, clear any post hash deep link
+      if (tab !== 'feed' && (url.hash.startsWith('#post') || url.hash.startsWith('#/post') || url.hash.startsWith('#post_'))) {
+        url.hash = '';
       }
       window.history.replaceState({}, '', url.toString());
     } catch {}
@@ -280,20 +302,28 @@ export function App() {
         const urlParams = new URLSearchParams(window.location.search);
         const targetTab = urlParams.get('tab') || urlParams.get('route');
 
+        // 1. Explicit hash deep links MUST take precedence over URL query parameters
         if (
-          rawHash.startsWith('#post-') ||
-          rawHash.startsWith('#/post-') ||
-          rawHash.startsWith('#post_') ||
-          targetTab === 'feed'
-        ) {
-          setActiveTab('feed');
-        } else if (
           rawHash.startsWith('#reel-') ||
           rawHash.startsWith('#/reel-') ||
-          rawHash.startsWith('#reel_') ||
-          targetTab === 'reels'
+          rawHash.startsWith('#reel_')
         ) {
+          console.log('[Metfa Nav] App.tsx handleCheckHashRoute matched reel hash:', rawHash);
           setActiveTab('reels');
+        } else if (
+          rawHash.startsWith('#post-') ||
+          rawHash.startsWith('#/post-') ||
+          rawHash.startsWith('#post_')
+        ) {
+          setActiveTab('feed');
+        } else if (targetTab === 'reels') {
+          setActiveTab('reels');
+        } else if (targetTab === 'feed') {
+          setActiveTab('feed');
+        } else if (targetTab === 'chat') {
+          setActiveTab('chat');
+        } else if (targetTab && ['notifications', 'live', 'pages', 'groups', 'profile'].includes(targetTab)) {
+          setActiveTab(targetTab as SocialSubTab);
         } else if (
           targetTab === 'v2' ||
           rawHash.replace('#', '').toLowerCase() === 'v2'
