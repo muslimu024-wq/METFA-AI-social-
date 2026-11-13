@@ -449,11 +449,18 @@ export function App() {
   }, [handleNavigateTab]);
 
   const isSocialTab = activeTab !== 'chat' && activeTab !== 'v2';
+  const isReelsFullscreen = activeTab === 'reels';
 
   return (
-    <div className="flex flex-col h-screen h-[100dvh] w-full bg-slate-50 text-slate-900 overflow-hidden font-sans select-none">
+    <div
+      data-testid="app-root-shell"
+      data-reels-fullscreen={isReelsFullscreen ? 'true' : 'false'}
+      className={`flex flex-col h-screen h-[100dvh] w-full overflow-hidden font-sans select-none ${
+        isReelsFullscreen ? 'bg-black text-white' : 'bg-slate-50 text-slate-900'
+      }`}
+    >
       {/* PWA Update Ready Banner */}
-      {pwaUpdateAvailable && (
+      {pwaUpdateAvailable && !isReelsFullscreen && (
         <div className="bg-gradient-to-r from-purple-700 via-indigo-600 to-teal-600 text-white px-4 py-2 text-xs flex items-center justify-between shadow-md z-50 shrink-0">
           <div className="flex items-center gap-2 font-medium">
             <Sparkles className="w-4 h-4 animate-spin text-teal-300" />
@@ -480,8 +487,8 @@ export function App() {
         </div>
       )}
 
-      {/* 1. Global Metfa Unified Top Header (hidden on METFA V2 Dashboard) */}
-      {activeTab !== 'v2' && (
+      {/* 1. Global Metfa Unified Top Header (hidden on METFA V2 Dashboard & Immersive Reels) */}
+      {activeTab !== 'v2' && !isReelsFullscreen && (
         <Header
           activeTab={activeTab}
           onNavigateTab={handleNavigateTab}
@@ -608,11 +615,13 @@ export function App() {
         )}
       </main>
 
-      {/* 3. Global Persistent Bottom Navigation */}
-      <BottomNav
-        activeTab={activeTab}
-        onNavigateTab={handleNavigateTab}
-      />
+      {/* 3. Global Persistent Bottom Navigation (hidden in Immersive Reels) */}
+      {!isReelsFullscreen && (
+        <BottomNav
+          activeTab={activeTab}
+          onNavigateTab={handleNavigateTab}
+        />
+      )}
 
       {/* 4. Global SSO Auth Modal */}
       {isAuthModalOpen && !isAuthenticated && (

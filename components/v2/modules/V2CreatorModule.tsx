@@ -30,10 +30,19 @@ import {
   RefreshCw,
   Calculator,
   Check,
+  BarChart3,
 } from 'lucide-react';
 import { v2ContributionEngine } from '../../../services/v2ContributionEngine';
 import { v2WalletEngine } from '../../../services/v2WalletEngine';
 import { getClientAuthToken } from '../../../services/supabaseClient';
+import CreatorStudioAnalytics from '../../CreatorStudioAnalytics';
+import {
+  ContentCatalogDescriptor,
+  postToContentDescriptor,
+  reelToContentDescriptor,
+} from '../../../utils/contentTracker';
+import { getCommunityPosts } from '../../../utils/communityStore';
+import { getReelHighlights } from '../../../utils/socialStore';
 
 export interface CreatorProfile {
   id: string;
@@ -53,8 +62,9 @@ export interface CreatorProfile {
 export const V2CreatorModule: React.FC = () => {
   const [creators, setCreators] = useState<CreatorProfile[]>([]);
   const [loading, setLoading] = useState(false);
-  const [activeTab, setActiveTab] = useState<'roster' | 'calculator' | 'review' | 'policies'>('roster');
+  const [activeTab, setActiveTab] = useState<'roster' | 'analytics' | 'calculator' | 'review' | 'policies'>('roster');
   const [selectedCreator, setSelectedCreator] = useState<CreatorProfile | null>(null);
+  const [studioCatalog, setStudioCatalog] = useState<ContentCatalogDescriptor[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedTierFilter, setSelectedTierFilter] = useState<string>('ALL');
 
@@ -109,6 +119,54 @@ export const V2CreatorModule: React.FC = () => {
   useEffect(() => {
     loadCreators();
   }, []);
+
+  useEffect(() => {
+    if (activeTab !== 'analytics') return;
+    const localPosts = getCommunityPosts().map(postToContentDescriptor);
+    const localReels = getReelHighlights().map(reelToContentDescriptor);
+    const creatorIdFilter = selectedCreator?.userId;
+    const mergedMap = new Map<string, ContentCatalogDescriptor>();
+    [...localPosts, ...localReels].forEach((item) => {
+      if (!creatorIdFilter || item.creatorId === creatorIdFilter) {
+        mergedMap.set(item.id, item);
+      }
+    });
+    setStudioCatalog(Array.from(mergedMap.values()));
+
+    fetch('/api/posts')
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        if (!data || !Array.isArray(data.posts)) return;
+        const remoteDescriptors = (data.posts as any[]).map((row) =>
+          postToContentDescriptor({
+            id: row.id,
+            author: row.author || { id: row.author_id || '', name: 'Creator', username: 'creator', avatar: '' },
+            prompt: row.prompt || row.caption || '',
+            caption: row.caption,
+            imageSrc: row.image_src || row.imageSrc,
+            imageGallery: row.image_gallery || row.imageGallery,
+            videoSrc: row.video_src || row.videoSrc,
+            videoThumbnail: row.video_thumbnail || row.videoThumbnail,
+            videoTitle: row.video_title || row.videoTitle,
+            postType: row.post_type || row.postType,
+            feedType: row.feed_type || row.feedType,
+            likesCount: row.likes_count || 0,
+            commentsCount: row.comments_count || 0,
+            sharesCount: row.shares_count || 0,
+            createdAt: row.created_at || 'Recently',
+            createdAtIso: row.created_at,
+          } as any)
+        );
+        const nextMap = new Map(mergedMap);
+        remoteDescriptors.forEach((d) => {
+          if (!creatorIdFilter || d.creatorId === creatorIdFilter) {
+            nextMap.set(d.id, d);
+          }
+        });
+        setStudioCatalog(Array.from(nextMap.values()));
+      })
+      .catch(() => {});
+  }, [activeTab, selectedCreator?.userId]);
 
   // Recalculate dynamic payout preview
   useEffect(() => {
@@ -293,6 +351,16 @@ export const V2CreatorModule: React.FC = () => {
           </button>
           <button
             type="button"
+            onClick={() => setActiveTab('analytics')}
+            className={`px-3 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1.5 cursor-pointer ${
+              activeTab === 'analytics' ? 'bg-amber-600 text-white' : 'text-slate-600 hover:bg-slate-100'
+            }`}
+          >
+            <BarChart3 className="w-3.5 h-3.5" />
+            <span>Studio Analytics</span>
+          </button>
+          <button
+            type="button"
             onClick={() => setActiveTab('calculator')}
             className={`px-3 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1.5 cursor-pointer ${
               activeTab === 'calculator' ? 'bg-amber-600 text-white' : 'text-slate-600 hover:bg-slate-100'
@@ -354,6 +422,15 @@ export const V2CreatorModule: React.FC = () => {
             </div>
           </div>
         </div>
+
+        {/* Studio Analytics Tab (All 5 Content Formats) */}
+        {activeTab === 'analytics' && (
+          <CreatorStudioAnalytics
+            creatorId={selectedCreator?.userId}
+            creatorName={selectedCreator ? `@${selectedCreator.username}` : 'Network Creators'}
+            catalog={studioCatalog}
+          />
+        )}
 
         {/* Dynamic Calculator Tab */}
         {activeTab === 'calculator' && (

@@ -25,8 +25,13 @@ import { isContentOwner } from '../utils/communityStore';
 import { isReelSaved, toggleSaveReel } from '../utils/bookmarkStore';
 import { getAudioTracks } from '../utils/audioStore';
 import AudioLicenseInfoModal from './AudioLicenseInfoModal';
-import VideoAnalyticsModal from './VideoAnalyticsModal';
+import ContentAnalyticsModal from './ContentAnalyticsModal';
 import { VideoPlaybackSessionTracker } from '../utils/videoTracker';
+import {
+  reelToContentDescriptor,
+  trackContentImpression,
+  trackEngagementAction,
+} from '../utils/contentTracker';
 
 export interface ReelCardProps {
   reel: ReelHighlight;
@@ -76,6 +81,7 @@ export const ReelCard: React.FC<ReelCardProps> = ({
       videoType: 'reel',
       creatorId: reel.author.id,
       viewerId: userProfile?.id,
+      trafficSource: 'reels',
     });
     trackerRef.current = tracker;
 
@@ -126,13 +132,22 @@ export const ReelCard: React.FC<ReelCardProps> = ({
   }, [reel.audioTrack, reel.musicTrack, reel.id, reel.thumbnailSrc, reel.duration]);
 
   useEffect(() => {
+    if (isActive) {
+      trackContentImpression({
+        contentId: reel.id,
+        contentType: 'reel',
+        creatorId: reel.author?.id || '',
+        viewerId: userProfile?.id,
+        trafficSource: 'reels',
+      });
+    }
     if (isActive && videoRef.current) {
       videoRef.current.play().then(() => setIsPlaying(true)).catch(() => setIsPlaying(false));
     } else if (!isActive && videoRef.current) {
       videoRef.current.pause();
       setIsPlaying(false);
     }
-  }, [isActive]);
+  }, [isActive, reel.id, reel.author?.id, userProfile?.id]);
 
   const togglePlay = () => {
     if (!videoRef.current) return;
@@ -154,6 +169,17 @@ export const ReelCard: React.FC<ReelCardProps> = ({
   const handleSaveToggle = (e?: React.MouseEvent) => {
     e?.stopPropagation();
     setIsMenuOpen(false);
+
+    if (!isSaved) {
+      trackEngagementAction({
+        contentId: reel.id,
+        contentType: 'reel',
+        creatorId: reel.author?.id || '',
+        viewerId: userProfile?.id,
+        action: 'save',
+        trafficSource: 'reels',
+      });
+    }
 
     if (onSave) {
       onSave(reel.id);
@@ -368,6 +394,14 @@ export const ReelCard: React.FC<ReelCardProps> = ({
           id={`like-reel-${reel.id}`}
           onClick={(e) => {
             e.stopPropagation();
+            trackEngagementAction({
+              contentId: reel.id,
+              contentType: 'reel',
+              creatorId: reel.author?.id || '',
+              viewerId: userProfile?.id,
+              action: 'like',
+              trafficSource: 'reels',
+            });
             onLike?.(reel.id);
           }}
           className="flex flex-col items-center gap-1 text-white group cursor-pointer"
@@ -406,6 +440,14 @@ export const ReelCard: React.FC<ReelCardProps> = ({
           id={`share-reel-${reel.id}`}
           onClick={(e) => {
             e.stopPropagation();
+            trackEngagementAction({
+              contentId: reel.id,
+              contentType: 'reel',
+              creatorId: reel.author?.id || '',
+              viewerId: userProfile?.id,
+              action: 'share',
+              trafficSource: 'reels',
+            });
             onShare?.(reel);
           }}
           className="flex flex-col items-center gap-1 text-white group cursor-pointer"
@@ -546,20 +588,12 @@ export const ReelCard: React.FC<ReelCardProps> = ({
         />
       )}
 
-      {/* Video Analytics Modal */}
+      {/* Unified Content Analytics Modal */}
       {isAnalyticsModalOpen && (
-        <VideoAnalyticsModal
+        <ContentAnalyticsModal
           isOpen={isAnalyticsModalOpen}
           onClose={() => setIsAnalyticsModalOpen(false)}
-          videoId={reel.id}
-          videoTitle={reel.title}
-          videoThumbnail={reel.thumbnailSrc}
-          videoType="reel"
-          creatorId={reel.author.id}
-          initialLikes={reel.likesCount}
-          initialComments={reel.commentsCount}
-          initialShares={reel.sharesCount}
-          initialSaves={savesCount}
+          content={reelToContentDescriptor(reel)}
         />
       )}
     </div>

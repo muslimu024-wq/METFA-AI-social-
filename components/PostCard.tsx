@@ -39,8 +39,18 @@ import { isPostSaved, toggleSavePost } from '../utils/bookmarkStore';
 import { formatDuration } from '../utils/audioStore';
 import { AiRecipeBox } from './AiRecipeBox';
 import AudioLicenseInfoModal from './AudioLicenseInfoModal';
-import VideoAnalyticsModal from './VideoAnalyticsModal';
+import ContentAnalyticsModal from './ContentAnalyticsModal';
+import { MediaCarousel } from './MediaCarousel';
 import { VideoPlaybackSessionTracker } from '../utils/videoTracker';
+import {
+  ContentTelemetryObserver,
+  clientResolveContentType,
+  postToContentDescriptor,
+  trackCarouselSlideView,
+  trackEngagementAction,
+  trackFollowAttribution,
+  trackTextExpand,
+} from '../utils/contentTracker';
 import { PostContent } from './PostContent';
 import { AdvancedVideoControls } from './AdvancedVideoControls';
 import {
@@ -90,7 +100,7 @@ export interface PostCardProps {
   priority?: boolean;
   isAuthorFollowed?: boolean;
   onToggleAuthorFollow?: (author: { id?: string; name?: string; username?: string; avatar?: string }) => void;
-  onOpenReel?: (reelId: string) => void;
+  onOpenReel?: (reelId: string, payload?: { videoSrc?: string; title?: string; currentTime?: number }) => void;
 }
 
 export const PostCard: React.FC<PostCardProps> = ({
@@ -122,9 +132,29 @@ export const PostCard: React.FC<PostCardProps> = ({
   const [commentText, setCommentText] = useState('');
   const [showReactionPicker, setShowReactionPicker] = useState(false);
   const [isFeedVideoMuted, setIsFeedVideoMuted] = useState(true);
+  const [isAnalyticsModalOpen, setIsAnalyticsModalOpen] = useState(false);
   const feedVideoRef = useRef<HTMLVideoElement | null>(null);
   const touchStartPosRef = useRef<{ x: number; y: number } | null>(null);
   const isTouchScrollingRef = useRef(false);
+
+  const resolvedContentType = clientResolveContentType(post);
+  const postTrafficSource = post.groupId ? 'group' : post.pageId ? 'page' : 'feed';
+
+  useEffect(() => {
+    const el = feedVideoRef.current;
+    if (!post.videoSrc || !el) return;
+    const tracker = new VideoPlaybackSessionTracker({
+      videoId: post.id,
+      videoType: resolvedContentType === 'reel' ? 'reel' : 'post_video',
+      creatorId: post.author?.id || '',
+      viewerId: userProfile?.id,
+      trafficSource: postTrafficSource,
+    });
+    tracker.attach(el);
+    return () => {
+      tracker.detach();
+    };
+  }, [post.id, post.videoSrc, resolvedContentType, post.author?.id, userProfile?.id, postTrafficSource]);
 
   // Load persistent comments from Supabase when comment section is expanded
   useEffect(() => {
@@ -238,6 +268,15 @@ export const PostCard: React.FC<PostCardProps> = ({
         if (success) {
           setIsFollowed(true);
           syncFollowCache(post.author, true);
+          trackFollowAttribution({
+            creatorId: targetAuthorId,
+            viewerId: userProfile?.id,
+            contentId: post.id,
+            contentType: resolvedContentType,
+            attributionMethod: 'direct_content_follow',
+            followDelta: 1,
+            trafficSource: postTrafficSource,
+          });
           onShowToast?.(`You are now following ${authorName}`);
         } else {
           onShowToast?.(error || 'Failed to follow user.');
@@ -248,6 +287,15 @@ export const PostCard: React.FC<PostCardProps> = ({
         if (success) {
           setIsFollowed(false);
           syncFollowCache(post.author, false);
+          trackFollowAttribution({
+            creatorId: targetAuthorId,
+            viewerId: userProfile?.id,
+            contentId: post.id,
+            contentType: resolvedContentType,
+            attributionMethod: 'direct_content_follow',
+            followDelta: -1,
+            trafficSource: postTrafficSource,
+          });
           onShowToast?.(`Unfollowed ${authorName}`);
         } else {
           onShowToast?.(error || 'Failed to unfollow user.');
@@ -258,6 +306,17 @@ export const PostCard: React.FC<PostCardProps> = ({
       const next = !isFollowed;
       setIsFollowed(next);
       syncFollowCache(post.author, next);
+      if (targetAuthorId) {
+        trackFollowAttribution({
+          creatorId: targetAuthorId,
+          viewerId: userProfile?.id,
+          contentId: post.id,
+          contentType: resolvedContentType,
+          attributionMethod: 'direct_content_follow',
+          followDelta: next ? 1 : -1,
+          trafficSource: postTrafficSource,
+        });
+      }
       onShowToast?.(next ? `You are now following ${authorName}` : `Unfollowed ${authorName}`);
     }
   };
@@ -282,6 +341,17 @@ export const PostCard: React.FC<PostCardProps> = ({
   const handleSaveToggle = (e?: React.MouseEvent) => {
     e?.stopPropagation();
     setIsMenuOpen(false);
+
+    if (!isSaved) {
+      trackEngagementAction({
+        contentId: post.id,
+        contentType: resolvedContentType,
+        creatorId: post.author?.id || '',
+        viewerId: userProfile?.id,
+        action: 'save',
+        trafficSource: postTrafficSource,
+      });
+    }
 
     if (onToggleSave) {
       onToggleSave(post.id);
@@ -328,6 +398,15 @@ export const PostCard: React.FC<PostCardProps> = ({
       onShowToast?.(safety.politeResponse || 'Comment violates community safety guidelines.');
       return;
     }
+
+    trackEngagementAction({
+      contentId: post.id,
+      contentType: resolvedContentType,
+      creatorId: post.author?.id || '',
+      viewerId: userProfile?.id,
+      action: 'comment',
+      trafficSource: postTrafficSource,
+    });
 
     if (onAddComment) {
       onAddComment(post.id, cleanText);
@@ -381,6 +460,14 @@ export const PostCard: React.FC<PostCardProps> = ({
   };
 
   const handleReactionSelectInternal = async (reactionType: ReactionType) => {
+    trackEngagementAction({
+      contentId: post.id,
+      contentType: resolvedContentType,
+      creatorId: post.author?.id || '',
+      viewerId: userProfile?.id,
+      action: 'like',
+      trafficSource: postTrafficSource,
+    });
     if (onSelectReaction) {
       onSelectReaction(post.id, reactionType);
       setShowReactionPicker(false);
@@ -590,12 +677,20 @@ export const PostCard: React.FC<PostCardProps> = ({
   const hasGradient = Boolean(post.textBackgroundPreset && GRADIENT_PRESETS[post.textBackgroundPreset]);
 
   return (
-    <article
-      id={`post-${post.id}`}
-      className={`bg-white rounded-3xl border border-slate-200 shadow-xs overflow-hidden transition duration-300 ${
-        isHighlighted ? 'ring-2 ring-purple-500 shadow-purple-500/20' : ''
-      }`}
+    <ContentTelemetryObserver
+      contentId={post.id}
+      contentType={resolvedContentType}
+      creatorId={post.author?.id || ''}
+      viewerId={userProfile?.id}
+      trafficSource={postTrafficSource}
+      totalSlides={post.imageGallery?.length || 0}
     >
+      <article
+        id={`post-${post.id}`}
+        className={`bg-white rounded-3xl border border-slate-200 shadow-xs overflow-hidden transition duration-300 ${
+          isHighlighted ? 'ring-2 ring-purple-500 shadow-purple-500/20' : ''
+        }`}
+      >
       {/* 1. Header: Author & Options Menu (...) */}
       <div className="p-4 flex items-center justify-between border-b border-slate-100">
         <div className="flex items-center gap-3 min-w-0">
@@ -796,10 +891,23 @@ export const PostCard: React.FC<PostCardProps> = ({
                   <span>{post.audioTrack?.license_type ? `License: ${post.audioTrack.license_type}` : 'Copyright & Rights'}</span>
                 </button>
 
-                {/* Author Only Actions: Edit Post & Delete Post */}
+                {/* Author Only Actions: Analytics, Edit Post & Delete Post */}
                 {isOwner ? (
                   <>
                     <div className="h-px bg-slate-100 my-1" />
+                    <button
+                      type="button"
+                      id={`analytics-post-menu-btn-${post.id}`}
+                      onClick={() => {
+                        setIsMenuOpen(false);
+                        setIsAnalyticsModalOpen(true);
+                      }}
+                      className="w-full px-3.5 py-2 text-left text-teal-700 hover:text-teal-900 hover:bg-teal-50 flex items-center gap-2.5 transition font-medium cursor-pointer"
+                    >
+                      <TrendingUp className="w-4 h-4 text-teal-600" />
+                      <span>Insights & Analytics</span>
+                    </button>
+
                     <button
                       type="button"
                       id={`edit-post-menu-btn-${post.id}`}
@@ -934,6 +1042,16 @@ export const PostCard: React.FC<PostCardProps> = ({
             text={post.caption || post.prompt}
             charLimit={hasGradient ? 220 : 180}
             className="w-full"
+            onExpandToggle={(isExpanded) => {
+              if (isExpanded) {
+                trackTextExpand({
+                  contentId: post.id,
+                  creatorId: post.author?.id || '',
+                  viewerId: userProfile?.id,
+                  trafficSource: postTrafficSource,
+                });
+              }
+            }}
             textClassName={
               hasGradient
                 ? 'text-lg sm:text-xl font-black text-white leading-relaxed text-center drop-shadow-sm'
@@ -981,7 +1099,7 @@ export const PostCard: React.FC<PostCardProps> = ({
                       e.preventDefault();
                       const currentPos = feedVideoRef.current?.currentTime || 0;
                       if (onOpenReel) {
-                        try { onOpenReel(post.id); } catch (err) { console.warn(err); }
+                        try { onOpenReel(post.id, { videoSrc: post.videoSrc, title: post.videoTitle || post.caption, currentTime: currentPos }); } catch (err) { console.warn(err); }
                       }
                       if (typeof window !== 'undefined') {
                         window.dispatchEvent(
@@ -1003,7 +1121,7 @@ export const PostCard: React.FC<PostCardProps> = ({
                       e.preventDefault();
                       const currentPos = feedVideoRef.current?.currentTime || 0;
                       if (onOpenReel) {
-                        try { onOpenReel(post.id); } catch (err) { console.warn(err); }
+                        try { onOpenReel(post.id, { videoSrc: post.videoSrc, title: post.videoTitle || post.caption, currentTime: currentPos }); } catch (err) { console.warn(err); }
                       }
                       if (typeof window !== 'undefined') {
                         window.dispatchEvent(
@@ -1033,8 +1151,8 @@ export const PostCard: React.FC<PostCardProps> = ({
                 className="w-full max-h-[520px] object-cover bg-black"
               />
 
-              {/* Advanced Playback Controls */}
-              <div className="absolute inset-x-2 bottom-2 z-30 pointer-events-auto">
+              {/* Advanced Playback Controls (Feed mode: clean without center controls) */}
+              <div className="absolute inset-0 z-30 pointer-events-none">
                 <AdvancedVideoControls
                   videoRef={feedVideoRef}
                   isMuted={isFeedVideoMuted}
@@ -1054,7 +1172,7 @@ export const PostCard: React.FC<PostCardProps> = ({
                   }}
                   onOpenReel={post.id ? (currentTime) => {
                     if (onOpenReel) {
-                      try { onOpenReel(post.id); } catch (err) { console.warn(err); }
+                      try { onOpenReel(post.id, { videoSrc: post.videoSrc, title: post.videoTitle || post.caption, currentTime }); } catch (err) { console.warn(err); }
                     }
                     if (typeof window !== 'undefined') {
                       window.dispatchEvent(
@@ -1065,26 +1183,26 @@ export const PostCard: React.FC<PostCardProps> = ({
                   reelId={post.id}
                   title={post.videoTitle || post.caption || 'Video'}
                   theme="glass"
+                  variant="feed"
                 />
               </div>
             </div>
           ) : post.imageGallery && post.imageGallery.length > 1 ? (
-            <div
-              className={`w-full grid gap-1 ${
-                post.imageGallery.length === 2 ? 'grid-cols-2' : 'grid-cols-2 sm:grid-cols-3'
-              }`}
-            >
-              {post.imageGallery.map((img, i) => (
-                <div key={i} className="aspect-square bg-slate-100 overflow-hidden">
-                  <img
-                    src={img}
-                    alt={`Gallery ${i}`}
-                    loading="lazy"
-                    decoding="async"
-                    className="w-full h-full object-cover hover:scale-105 transition"
-                  />
-                </div>
-              ))}
+            <div className="w-full">
+              <MediaCarousel
+                images={post.imageGallery}
+                altBase={post.caption || post.prompt || 'Carousel image'}
+                onSlideView={(slideIndex, totalSlides) => {
+                  trackCarouselSlideView({
+                    contentId: post.id,
+                    creatorId: post.author?.id || '',
+                    viewerId: userProfile?.id,
+                    slideIndex,
+                    totalSlides,
+                    trafficSource: postTrafficSource,
+                  });
+                }}
+              />
             </div>
           ) : (
             <img
@@ -1116,6 +1234,16 @@ export const PostCard: React.FC<PostCardProps> = ({
             <PostContent
               text={post.caption}
               charLimit={160}
+              onExpandToggle={(isExpanded) => {
+                if (isExpanded) {
+                  trackTextExpand({
+                    contentId: post.id,
+                    creatorId: post.author?.id || '',
+                    viewerId: userProfile?.id,
+                    trafficSource: postTrafficSource,
+                  });
+                }
+              }}
               textClassName="text-sm text-slate-800 leading-relaxed font-normal"
               buttonClassName="text-blue-600 hover:text-blue-800 font-semibold text-sm mt-1"
             />
@@ -1262,7 +1390,17 @@ export const PostCard: React.FC<PostCardProps> = ({
           <button
             type="button"
             id={`share-post-${post.id}`}
-            onClick={() => onSharePost ? onSharePost(post) : undefined}
+            onClick={() => {
+              trackEngagementAction({
+                contentId: post.id,
+                contentType: resolvedContentType,
+                creatorId: post.author?.id || '',
+                viewerId: userProfile?.id,
+                action: 'share',
+                trafficSource: postTrafficSource,
+              });
+              if (onSharePost) onSharePost(post);
+            }}
             className="px-2.5 py-1.5 rounded-lg hover:bg-slate-100 text-slate-700 flex items-center gap-1.5 text-xs font-semibold transition cursor-pointer shrink-0"
             title="Share Post"
           >
@@ -1455,7 +1593,17 @@ export const PostCard: React.FC<PostCardProps> = ({
           onClose={() => setIsLicenseModalOpen(false)}
         />
       )}
+
+      {/* Unified Content Analytics Modal */}
+      {isAnalyticsModalOpen && (
+        <ContentAnalyticsModal
+          isOpen={isAnalyticsModalOpen}
+          onClose={() => setIsAnalyticsModalOpen(false)}
+          content={postToContentDescriptor(post)}
+        />
+      )}
     </article>
+    </ContentTelemetryObserver>
   );
 };
 

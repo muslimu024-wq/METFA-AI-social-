@@ -155,6 +155,7 @@ export function mapSupabaseRowToCommunityPost(row: SupabasePostRow): CommunityPo
     comments: [],
     voiceComments: [],
     createdAt: relativeTime,
+    createdAtIso: row.created_at || undefined,
     tags: Array.isArray(row.tags) ? row.tags : ['MetfaAI', 'SocialFirst'],
     feedType: (row.feed_type as any) || 'for_you',
     audioTrack: row.audio_track || undefined,

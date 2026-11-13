@@ -3,12 +3,14 @@ import { ReelHighlight, UserProfile } from '../types/community';
 import { AudioTrack } from '../types/audio';
 import { uploadMediaItem } from './storageService';
 import { getDefaultAvatar, sanitizeAvatarUrl } from './authService';
+import { fetchAuthorProfileById } from './postService';
 import {
   getReelHighlights,
   saveReelHighlights,
   saveReelHighlight,
   deleteReelHighlight,
   editReelHighlight,
+  isRealReel,
 } from '../utils/socialStore';
 
 export interface CreateReelParams {
@@ -98,6 +100,7 @@ export function mapSupabaseRowToReel(row: any): ReelHighlight {
     commentsCount: Number(row.comments_count) || 0,
     sharesCount: Number(row.shares_count) || 0,
     createdAt: relativeTime,
+    createdAtIso: row.created_at || undefined,
     promptUsed: row.prompt_used || row.prompt || undefined,
     musicTrack: row.audio_track
       ? `${row.audio_track.title} • ${row.audio_track.artist}`
@@ -111,12 +114,80 @@ export function mapSupabaseRowToReel(row: any): ReelHighlight {
  * joined with author profiles.
  * Falls back safely to local/server store if Supabase is offline.
  */
+async function resolveMissingReelAuthors(rows: any[]): Promise<void> {
+  const missingAuthorIds = Array.from(
+    new Set(
+      rows
+        .filter((row: any) => (!row.author || !row.author.display_name) && row.author_id)
+        .map((row: any) => row.author_id as string)
+    )
+  );
+  if (missingAuthorIds.length === 0) return;
+
+  await Promise.all(
+    missingAuthorIds.map(async (authorId) => {
+      const resolved = await fetchAuthorProfileById(authorId);
+      if (resolved) {
+        for (const row of rows) {
+          if (row.author_id === authorId && (!row.author || !row.author.display_name)) {
+            row.author = resolved;
+          }
+        }
+      }
+    })
+  );
+}
+
+async function fetchServerPersistentReels(): Promise<ReelHighlight[]> {
+  if (typeof fetch === 'undefined') return [];
+  try {
+    const res = await fetch('/api/posts');
+    if (!res.ok) return [];
+    const data = await res.json();
+    if (!Array.isArray(data?.posts)) return [];
+    return data.posts
+      .filter(
+        (p: any) =>
+          (p.postType === 'reel' || p.post_type === 'reel' || p.feedType === 'reels' || p.feed_type === 'reels') &&
+          Boolean(p.videoSrc || p.video_src)
+      )
+      .map((p: any) => ({
+        id: String(p.id),
+        title: p.videoTitle || p.video_title || p.prompt || 'Metfa Reel',
+        caption: p.caption || '',
+        author: {
+          id: p.author?.id || p.author_id || 'creator',
+          name: p.author?.name || p.author?.display_name || 'Metfa Creator',
+          username: p.author?.username || 'creator',
+          avatar: p.author?.avatar || p.author?.avatar_url || getDefaultAvatar(p.author?.username || 'creator'),
+          isVerified: Boolean(p.author?.isVerified ?? p.author?.is_verified ?? true),
+        },
+        videoSrc: p.videoSrc || p.video_src,
+        thumbnailSrc: p.videoThumbnail || p.video_thumbnail || p.imageSrc || undefined,
+        duration: typeof p.duration === 'number' ? p.duration : 15,
+        likesCount: Number(p.likesCount ?? p.likes_count) || 0,
+        commentsCount: Number(p.commentsCount ?? p.comments_count) || 0,
+        sharesCount: Number(p.sharesCount ?? p.shares_count) || 0,
+        createdAt: p.createdAt || 'Recently',
+        createdAtIso: p.createdAtIso || p.created_at || undefined,
+        promptUsed: p.promptUsed || p.prompt_used || p.prompt || undefined,
+        musicTrack: p.musicTrack,
+        audioTrack: p.audioTrack || p.audio_track,
+      }))
+      .filter(isRealReel);
+  } catch {
+    return [];
+  }
+}
+
 export async function fetchPersistentReels(options?: {
   limit?: number;
   offset?: number;
 }): Promise<{ reels: ReelHighlight[]; error?: string; source: 'supabase' | 'local' }> {
   const limit = options?.limit || 30;
   const offset = options?.offset || 0;
+
+  let supabaseReels: ReelHighlight[] | null = null;
 
   if (isSupabaseConfigured()) {
     try {
@@ -182,25 +253,52 @@ export async function fetchPersistentReels(options?: {
           .range(offset, offset + limit - 1);
 
         if (!fallbackRes.error && fallbackRes.data) {
-          const reels = fallbackRes.data
-            .filter((row: any) => Boolean(row.video_src))
-            .map(mapSupabaseRowToReel);
-          return { reels, source: 'supabase' };
+          const validRows = fallbackRes.data.filter((row: any) => Boolean(row.video_src));
+          await resolveMissingReelAuthors(validRows);
+          supabaseReels = validRows.map(mapSupabaseRowToReel).filter(isRealReel);
         }
       } else if (data) {
-        const reels = data
-          .filter((row: any) => Boolean(row.video_src))
-          .map(mapSupabaseRowToReel);
-        return { reels, source: 'supabase' };
+        const validRows = data.filter((row: any) => Boolean(row.video_src));
+        await resolveMissingReelAuthors(validRows);
+        supabaseReels = validRows.map(mapSupabaseRowToReel).filter(isRealReel);
       }
     } catch (err: any) {
       console.warn('[ReelService] Unexpected error querying Supabase reels:', err);
     }
   }
 
-  // Fallback to local highlights store
-  const localReels = getReelHighlights();
-  return { reels: localReels, source: 'local' };
+  // Merge strictly designated persistent reels from Supabase, server disk (/api/posts post_type='reel'), and offline local reels
+  const localReels = getReelHighlights().filter(isRealReel);
+  const serverReels = await fetchServerPersistentReels();
+
+  if (supabaseReels !== null) {
+    const mergedMap = new Map<string, ReelHighlight>();
+    for (const r of supabaseReels) {
+      mergedMap.set(r.id, r);
+    }
+    for (const r of serverReels) {
+      if (!mergedMap.has(r.id)) {
+        mergedMap.set(r.id, r);
+      }
+    }
+    for (const r of localReels) {
+      // Only merge locally-created non-UUID reels when Supabase succeeded (avoid resurrecting deleted Supabase UUIDs)
+      if (!isValidUuid(r.id) && !mergedMap.has(r.id) && r.videoSrc && !r.videoSrc.startsWith('blob:')) {
+        mergedMap.set(r.id, r);
+      }
+    }
+    return { reels: Array.from(mergedMap.values()), source: 'supabase' };
+  }
+
+  // Fallback when Supabase is offline/unconfigured
+  const fallbackMap = new Map<string, ReelHighlight>();
+  for (const r of localReels) {
+    if (r.videoSrc) fallbackMap.set(r.id, r);
+  }
+  for (const r of serverReels) {
+    if (!fallbackMap.has(r.id)) fallbackMap.set(r.id, r);
+  }
+  return { reels: Array.from(fallbackMap.values()), source: 'local' };
 }
 
 /**
@@ -334,6 +432,7 @@ export async function createPersistentReel(
       commentsCount: 0,
       sharesCount: 0,
       createdAt: 'Just now',
+      createdAtIso: new Date().toISOString(),
       promptUsed: params.promptUsed,
       musicTrack: params.musicTrack,
       audioTrack: params.audioTrack,

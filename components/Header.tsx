@@ -22,6 +22,7 @@ import {
   Download,
   MessageSquare,
   LayoutGrid,
+  BarChart3,
 } from 'lucide-react';
 import { DailyCreditsData } from '../utils/creditManager';
 import { getPages, getGroups } from '../utils/socialStore';
@@ -491,6 +492,27 @@ export const Header: React.FC<HeaderProps> = ({
                   </div>
                   <span className="text-[10px] bg-gradient-to-r from-blue-600 to-indigo-600 text-white px-2 py-0.5 rounded-full font-bold shadow-xs">
                     🛒 Open
+                  </span>
+                </button>
+
+                <button
+                  type="button"
+                  id="menu-drawer-creator-analytics-btn"
+                  onClick={() => {
+                    handleNavigate('profile');
+                    window.setTimeout(() => {
+                      window.dispatchEvent(new CustomEvent('metfa_open_creator_analytics'));
+                    }, 80);
+                  }}
+                  className="w-full p-2.5 rounded-xl flex items-center justify-between text-xs font-bold transition cursor-pointer text-slate-700 hover:bg-slate-100 hover:text-teal-700"
+                  title="Creator Studio Analytics"
+                >
+                  <div className="flex items-center gap-3">
+                    <BarChart3 className="w-4 h-4 text-teal-600" />
+                    <span>Creator Studio Analytics</span>
+                  </div>
+                  <span className="text-[10px] bg-teal-50 border border-teal-200 text-teal-700 px-2 py-0.5 rounded-full font-semibold">
+                    Studio
                   </span>
                 </button>
 

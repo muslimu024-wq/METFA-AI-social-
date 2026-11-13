@@ -106,6 +106,7 @@ export interface CommunityPost {
   comments: PostComment[];
   voiceComments?: VoiceComment[];
   createdAt: string;
+  createdAtIso?: string;
   tags: string[];
   feedType?: 'for_you' | 'following' | 'trending' | 'page' | 'group';
   audioTrack?: AudioTrack;
@@ -132,6 +133,7 @@ export interface ReelHighlight {
   isLiked?: boolean;
   isSaved?: boolean;
   createdAt: string;
+  createdAtIso?: string;
   promptUsed?: string;
   musicTrack?: string;
   audioTrack?: AudioTrack;

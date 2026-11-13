@@ -6,6 +6,7 @@ export interface PostContentProps {
   className?: string;
   textClassName?: string;
   buttonClassName?: string;
+  onExpandToggle?: (isExpanded: boolean) => void;
 }
 
 export const PostContent: React.FC<PostContentProps> = ({
@@ -14,6 +15,7 @@ export const PostContent: React.FC<PostContentProps> = ({
   className = '',
   textClassName = '',
   buttonClassName = '',
+  onExpandToggle,
 }) => {
   const [isExpanded, setIsExpanded] = useState(false);
 
@@ -27,6 +29,14 @@ export const PostContent: React.FC<PostContentProps> = ({
     ? text 
     : `${text.slice(0, charLimit).trim()}...`;
 
+  const handleToggle = () => {
+    const nextState = !isExpanded;
+    setIsExpanded(nextState);
+    if (onExpandToggle) {
+      onExpandToggle(nextState);
+    }
+  };
+
   return (
     <div className={`post-content ${className}`.trim()}>
       <p className={`text-slate-800 whitespace-pre-wrap ${!isExpanded && isLongText ? 'post-text' : ''} ${textClassName}`.trim()}>
@@ -37,7 +47,7 @@ export const PostContent: React.FC<PostContentProps> = ({
       {isLongText && (
         <button
           type="button"
-          onClick={() => setIsExpanded(!isExpanded)}
+          onClick={handleToggle}
           className={`text-blue-600 hover:text-blue-800 font-semibold text-sm mt-1 focus:outline-none hover:underline inline-block cursor-pointer transition ${buttonClassName}`.trim()}
         >
           {isExpanded ? 'See Less' : 'See More'}

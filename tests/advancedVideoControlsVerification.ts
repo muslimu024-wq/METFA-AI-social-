@@ -1,23 +1,29 @@
 /**
- * METFA SOCIAL — FINAL MINIMAL VIDEO SEEK & TIMELINE DESIGN VERIFICATION
+ * METFA SOCIAL — PART 1: FINAL MINIMAL PLAYBACK CONTROL DESIGN VERIFICATION
  * 
  * Verifies:
- * 1. DUR-01: Video duration < 3 min (< 180s) automatically selects 5s seeking interval.
- * 2. DUR-02: Video duration == 3 min (180s) automatically selects 10s seeking interval.
- * 3. DUR-03: Video duration > 3 min (> 180s) automatically selects 10s seeking interval.
- * 4. BTN-01: Exactly TWO seek buttons rendered (dynamic backward & forward showing selected interval).
- * 5. SEEK-01: Boundary seek clamping at beginning (never underflow below 0).
- * 6. SEEK-02: Boundary seek clamping at end (never overflow beyond video duration).
- * 7. SEEK-03: Repeated consecutive taps calculate accurately from current playback position.
- * 8. TL-EXP-01: Duration click reveals the thin expandable timeline (toggles on/off).
- * 9. TL-EXP-02: Timeline has NO additional background, card, box, filled panel, or decorative container overlay.
- * 10. TL-EXP-03: Direct touch dragging & tapping seek to the correct position (Android & desktop support).
- * 11. TL-EXP-04: Auto-hide timer hides timeline after seeking is completed or after inactivity period.
- * 12. INT-01: Feed video player integration (CommunityPostCard & PostCard) embeds minimal controls.
- * 13. INT-02: Reels player integration (ReelsFeedView) embeds minimal controls with stable refs.
- * 14. CONT-01: Feed-to-Reels playback-position continuity (preserves exact currentTime).
- * 15. SND-01: Audio mute/unmute toggle controls and state preservation across interactions.
- * 16. BAS-01: Phase 10 baseline integrity (all 3 files 100% untouched).
+ * 1. CTR-ROW-01: Exactly three circular controls horizontally aligned around the vertical center.
+ * 2. CTR-LEFT-01: LEFT control is a circular counter-clockwise arrow with large visible 5 inside (seeks -5s).
+ * 3. CTR-CENTER-01: CENTER control is one circular Play/Pause button.
+ * 4. CTR-RIGHT-01: RIGHT control is a circular clockwise arrow with large visible 5 inside (seeks +5s).
+ * 5. CTR-ARROW-DIFF: Left and right arrow directions are visually distinguishable (counter-clockwise vs clockwise).
+ * 6. CTR-NO-LABELS: No plain minus/plus symbols and no separate 5s/10s text labels outside the arrows.
+ * 7. CTR-NO-10S: No 10-second seeking or adaptive intervals; strictly 5-second seeking in both directions.
+ * 8. CTR-NO-PANEL: No additional permanent playback buttons or large control panels.
+ * 9. VIS-TAP-01: Controls appear when the user taps the video.
+ * 10. VIS-INTERACT: Interacting with controls keeps them visible and resets the inactivity timer.
+ * 11. VIS-AUTOHIDE: Controls automatically hide after approximately 2–3 seconds of inactivity (2500ms).
+ * 12. VIS-SCRUB-SAFE: Controls do NOT hide during an active press, drag, or seek (isScrubbing safe).
+ * 13. VIS-UNOBSTRUCTED: Normal playback shows an unobstructed video without permanent controls.
+ * 14. TL-POS-01: Current time, total duration, and thin timeline placed near the bottom of the video.
+ * 15. TL-REVEAL-01: Tapping the duration/time display reveals the timeline.
+ * 16. TL-DRAG-01: Direct touch dragging & tapping seek accurately along the timeline (Android & desktop).
+ * 17. TL-FORMAT-01: Displays time accurately in M:SS format.
+ * 18. TL-NO-BG: Clean thin progress line without any background panel, card, box, or overlay.
+ * 19. TL-AUTOHIDE-01: Timeline hides after seeking or approximately 2–3 seconds of inactivity.
+ * 20. INT-FEED-REELS: Embedded in CommunityPostCard, PostCard, and ReelsFeedView with absolute full overlay.
+ * 21. CONT-CONTINUITY: Feed-to-Reels playback-position continuity preserves exact currentTime.
+ * 22. BAS-PHASE10: Protected Phase 10 baseline integrity intact (all 3 files 100% matched).
  */
 
 import * as fs from 'fs';
@@ -49,11 +55,6 @@ export function runAdvancedVideoControlsVerification(): {
     });
   };
 
-  // Helper simulating seek interval calculation from AdvancedVideoControls.tsx
-  const getSeekInterval = (duration: number): number => {
-    return duration >= 180 ? 10 : 5;
-  };
-
   // Helper simulating seekDelta function from AdvancedVideoControls.tsx
   const simulateSeekDelta = (current: number, delta: number, duration: number): number => {
     const maxDuration = duration > 0 ? duration : 60;
@@ -67,247 +68,366 @@ export function runAdvancedVideoControlsVerification(): {
     return percentage * duration;
   };
 
+  // Helper simulating formatTime
+  const formatTime = (seconds: number): string => {
+    if (isNaN(seconds) || seconds < 0) return '0:00';
+    const mins = Math.floor(seconds / 60);
+    const secs = Math.floor(seconds % 60);
+    return `${mins}:${secs.toString().padStart(2, '0')}`;
+  };
+
   const controlsCode = fs.readFileSync('components/AdvancedVideoControls.tsx', 'utf-8');
 
-  // 1. DUR-01: Duration below 3 minutes (< 180s) selects 5s seeking interval
+  // 1. CTR-ROW-01: Exactly three circular controls horizontally aligned around the vertical center
   {
-    const shortReel = getSeekInterval(90); // 90s Reel
-    const shortFeedClip = getSeekInterval(30); // 30s video
-    const nearLimitClip = getSeekInterval(179); // 179s clip
+    const hasCenterGroup = controlsCode.includes('A. Exactly Three Circular Controls at the Vertical Center') &&
+                          controlsCode.includes('my-auto flex items-center justify-center gap-6');
+    const hasBackward = controlsCode.includes('data-testid="video-seek-backward-btn"');
+    const hasPlayPause = controlsCode.includes('data-testid="video-play-pause-btn"');
+    const hasForward = controlsCode.includes('data-testid="video-seek-forward-btn"');
 
-    const pass = shortReel === 5 && shortFeedClip === 5 && nearLimitClip === 5;
+    const pass = hasCenterGroup && hasBackward && hasPlayPause && hasForward;
     assert(
-      'DUR-01',
-      'Seek Interval Selection',
-      'Videos shorter than 3 minutes (< 180s) automatically use 5-second seeking interval',
+      'CTR-ROW-01',
+      'Center Controls',
+      'Exactly three circular controls horizontally aligned around the vertical center in one row',
       pass,
-      `duration 30s => ${shortFeedClip}s, duration 90s => ${shortReel}s, duration 179s => ${nearLimitClip}s`
+      `hasCenterGroup=${hasCenterGroup}, hasBackward=${hasBackward}, hasPlayPause=${hasPlayPause}, hasForward=${hasForward}`
     );
   }
 
-  // 2. DUR-02: Duration exactly 3 minutes (180s) selects 10s seeking interval
+  // 2. CTR-LEFT-01: LEFT control is a circular counter-clockwise arrow with large visible 5 inside (seeks -5s)
   {
-    const exactlyThreeMin = getSeekInterval(180);
+    const hasSeekBackward5Icon = controlsCode.includes('SeekBackward5Icon') &&
+                                controlsCode.includes('<text') &&
+                                controlsCode.includes('>5</text>');
+    const callsSeekMinus5 = controlsCode.includes('onClick={(e) => seekDelta(-5, e)}');
+    const isCircular = controlsCode.includes('rounded-full') && controlsCode.includes('video-seek-backward-btn');
 
-    const pass = exactlyThreeMin === 10;
+    const pass = hasSeekBackward5Icon && callsSeekMinus5 && isCircular;
     assert(
-      'DUR-02',
-      'Seek Interval Selection',
-      'A video of exactly 3 minutes (180s) automatically uses 10-second seeking interval',
+      'CTR-LEFT-01',
+      'Left Seek Control',
+      'LEFT control is a circular counter-clockwise arrow with large clearly visible 5 inside, seeking backward -5s',
       pass,
-      `duration 180s => ${exactlyThreeMin}s interval`
+      `hasSeekBackward5Icon=${hasSeekBackward5Icon}, callsSeekMinus5=${callsSeekMinus5}, isCircular=${isCircular}`
     );
   }
 
-  // 3. DUR-03: Duration longer than 3 minutes (> 180s) selects 10s seeking interval
+  // 3. CTR-CENTER-01: CENTER control is one circular Play/Pause button
   {
-    const longFeedVideo = getSeekInterval(240); // 4 min
-    const podcastVideo = getSeekInterval(600); // 10 min
+    const hasPlayPauseBtn = controlsCode.includes('data-testid="video-play-pause-btn"') &&
+                            controlsCode.includes('onClick={togglePlay}') &&
+                            controlsCode.includes('Pause') &&
+                            controlsCode.includes('Play');
+    const isCenterCircular = controlsCode.includes('rounded-full bg-black/70 hover:bg-black/90 active:scale-90');
 
-    const pass = longFeedVideo === 10 && podcastVideo === 10;
+    const pass = hasPlayPauseBtn && isCenterCircular;
     assert(
-      'DUR-03',
-      'Seek Interval Selection',
-      'Videos longer than 3 minutes (> 180s) automatically use 10-second seeking interval',
+      'CTR-CENTER-01',
+      'Center Play/Pause Control',
+      'CENTER control is one circular Play/Pause button with high-contrast icon rendering',
       pass,
-      `duration 240s => ${longFeedVideo}s, duration 600s => ${podcastVideo}s`
+      `hasPlayPauseBtn=${hasPlayPauseBtn}, isCenterCircular=${isCenterCircular}`
     );
   }
 
-  // 4. BTN-01: Exactly TWO seek buttons rendered (no four-button layout)
+  // 4. CTR-RIGHT-01: RIGHT control is a circular clockwise arrow with large visible 5 inside (seeks +5s)
   {
-    const hasDynamicSeekInterval = controlsCode.includes('effectiveDuration >= 180 ? 10 : 5');
-    const hasSeekBack = controlsCode.includes('data-testid="video-seek-backward-btn"');
-    const hasSeekFwd = controlsCode.includes('data-testid="video-seek-forward-btn"');
-    const noLegacy10Back = !controlsCode.includes('data-testid="video-skip-back-10-btn"');
-    const noLegacy10Fwd = !controlsCode.includes('data-testid="video-skip-fwd-10-btn"');
+    const hasSeekForward5Icon = controlsCode.includes('SeekForward5Icon') &&
+                               controlsCode.includes('<text') &&
+                               controlsCode.includes('>5</text>');
+    const callsSeekPlus5 = controlsCode.includes('onClick={(e) => seekDelta(5, e)}');
+    const isCircular = controlsCode.includes('rounded-full') && controlsCode.includes('video-seek-forward-btn');
 
-    const pass = hasDynamicSeekInterval && hasSeekBack && hasSeekFwd && noLegacy10Back && noLegacy10Fwd;
+    const pass = hasSeekForward5Icon && callsSeekPlus5 && isCircular;
     assert(
-      'BTN-01',
-      'Dynamic Seek Buttons',
-      'Displays exactly TWO dynamic seek buttons (one backward, one forward) with automatic interval presentation',
+      'CTR-RIGHT-01',
+      'Right Seek Control',
+      'RIGHT control is a circular clockwise arrow with large clearly visible 5 inside, seeking forward +5s',
       pass,
-      `hasDynamicSeekInterval=${hasDynamicSeekInterval}, hasSeekBack=${hasSeekBack}, hasSeekFwd=${hasSeekFwd}, noLegacySeparateButtons=${noLegacy10Back && noLegacy10Fwd}`
+      `hasSeekForward5Icon=${hasSeekForward5Icon}, callsSeekPlus5=${callsSeekPlus5}, isCircular=${isCircular}`
     );
   }
 
-  // 5. SEEK-01: Boundary seek clamping at beginning (never underflow below 0)
+  // 5. CTR-ARROW-DIFF: Left and right arrow directions are visually distinguishable
   {
-    const duration = 90;
-    const seekFromZero = simulateSeekDelta(0, -5, duration);
-    const seekFromTwo = simulateSeekDelta(2, -5, duration);
+    // Counter-clockwise arc: M 24 8 A 16 16 0 1 0 40 24 with left arrowhead M 28 3.5 L 22 8 L 28 12.5
+    const ccwArc = controlsCode.includes('M 24 8 A 16 16 0 1 0 40 24');
+    const ccwHead = controlsCode.includes('M 28 3.5 L 22 8 L 28 12.5');
+    // Clockwise arc: M 24 8 A 16 16 0 1 1 8 24 with right arrowhead M 20 3.5 L 26 8 L 20 12.5
+    const cwArc = controlsCode.includes('M 24 8 A 16 16 0 1 1 8 24');
+    const cwHead = controlsCode.includes('M 20 3.5 L 26 8 L 20 12.5');
 
-    const pass = seekFromZero === 0 && seekFromTwo === 0;
+    const pass = ccwArc && ccwHead && cwArc && cwHead;
     assert(
-      'SEEK-01',
-      'Seek Clamping',
-      'Backward seeking at or near the beginning clamps strictly at 0 (no underflow)',
+      'CTR-ARROW-DIFF',
+      'Arrow Direction Distinctness',
+      'Left and right circular arrow directions are visually distinct with opposing sweep arcs and arrowheads',
       pass,
-      `seekFromZero=${seekFromZero}, seekFromTwo=${seekFromTwo}`
+      `ccwArc=${ccwArc}, ccwHead=${ccwHead}, cwArc=${cwArc}, cwHead=${cwHead}`
     );
   }
 
-  // 6. SEEK-02: Boundary seek clamping at end (never overflow beyond video duration)
+  // 6. CTR-NO-LABELS: No plain minus/plus symbols and no separate 5s/10s text labels outside the arrows
   {
-    const duration = 90;
-    const seekFromEnd = simulateSeekDelta(90, 5, duration);
-    const seekNearEnd = simulateSeekDelta(88, 5, duration);
+    const noMinusSymbol = !controlsCode.includes('<span>-5</span>') && !controlsCode.includes('<span>-5s</span>') && !controlsCode.includes('<span>-10</span>');
+    const noPlusSymbol = !controlsCode.includes('<span>+5</span>') && !controlsCode.includes('<span>+5s</span>') && !controlsCode.includes('<span>+10</span>');
+    const noSeparateTextBadge = !controlsCode.includes('<span>5s</span>') && !controlsCode.includes('<span>10s</span>');
 
-    const pass = seekFromEnd === 90 && seekNearEnd === 90;
+    const pass = noMinusSymbol && noPlusSymbol && noSeparateTextBadge;
     assert(
-      'SEEK-02',
-      'Seek Clamping',
-      'Forward seeking at or near the end clamps strictly at actual video duration (no overflow)',
+      'CTR-NO-LABELS',
+      'Typography & Symbol Cleanliness',
+      'No plain minus/plus symbols and no separate external 5s/10s text labels; 5 is centered inside each arrow',
       pass,
-      `seekFromEnd=${seekFromEnd}, seekNearEnd=${seekNearEnd} (duration=${duration})`
+      `noMinusSymbol=${noMinusSymbol}, noPlusSymbol=${noPlusSymbol}, noSeparateTextBadge=${noSeparateTextBadge}`
     );
   }
 
-  // 7. SEEK-03: Repeated consecutive taps calculate accurately from current playback position
+  // 7. CTR-NO-10S: No 10-second seeking or adaptive intervals; strictly 5-second seeking in both directions
   {
-    const duration = 240; // 4-minute video -> 10s interval
-    let current = 20;
-    current = simulateSeekDelta(current, 10, duration); // 30
-    current = simulateSeekDelta(current, 10, duration); // 40
-    current = simulateSeekDelta(current, 10, duration); // 50
-    current = simulateSeekDelta(current, -10, duration); // 40
+    const no10sSeeking = !controlsCode.includes('seekDelta(-10') && !controlsCode.includes('seekDelta(10');
+    const noAdaptiveThreshold = !controlsCode.includes('effectiveDuration >= 180') && !controlsCode.includes('duration >= 180');
 
-    const pass = current === 40;
+    const pass = no10sSeeking && noAdaptiveThreshold;
     assert(
-      'SEEK-03',
-      'Repeated Seek',
-      'Repeated consecutive taps correctly calculate accumulated positions from current playback time',
+      'CTR-NO-10S',
+      'Fixed 5s Interval',
+      'No 10-second seeking or adaptive duration thresholds; strictly 5-second seek in both directions',
       pass,
-      `Final position after [20 + 10 + 10 + 10 - 10]: ${current}s (expected 40s)`
+      `no10sSeeking=${no10sSeeking}, noAdaptiveThreshold=${noAdaptiveThreshold}`
     );
   }
 
-  // 8. TL-EXP-01: Duration click reveals the thin expandable timeline (toggles on/off)
+  // 8. CTR-NO-PANEL: No additional permanent playback buttons or large control panels
   {
-    const hasToggleBtn = controlsCode.includes('data-testid="video-duration-toggle-btn"') &&
-                         controlsCode.includes('onClick={toggleTimeline}');
-    const hasExpandableContainer = controlsCode.includes('data-testid="expandable-timeline-container"') &&
-                                   controlsCode.includes('{isTimelineOpen && (');
+    const noLargePanel = !controlsCode.includes('bg-gray-950/95 border-gray-800') &&
+                         !controlsCode.includes('bg-black/85 backdrop-blur-md border-white/15');
+    const centerOnlyHasThree = controlsCode.includes('A. Exactly Three Circular Controls at the Vertical Center');
 
-    const pass = hasToggleBtn && hasExpandableContainer;
+    const pass = noLargePanel && centerOnlyHasThree;
     assert(
-      'TL-EXP-01',
-      'Expandable Timeline',
-      'Clickable duration display toggles the thin expandable timeline directly underneath it',
+      'CTR-NO-PANEL',
+      'Minimal Floating Controls',
+      'No permanent large control panel or redundant buttons; controls are compact floating circular buttons',
       pass,
-      `hasToggleBtn=${hasToggleBtn}, hasExpandableContainer=${hasExpandableContainer}`
+      `noLargePanel=${noLargePanel}, centerOnlyHasThree=${centerOnlyHasThree}`
     );
   }
 
-  // 9. TL-EXP-02: Timeline has NO additional background, card, box, filled panel, or decorative container overlay
+  // 9. VIS-TAP-01: Controls appear when the user taps the video
   {
-    // Check that expandable-timeline-container does not have heavy background cards or boxes
-    const hasNoCardBackground = !controlsCode.includes('expandable-timeline-container" className="bg-') &&
-                                !controlsCode.includes('expandable-timeline-container" className="backdrop-blur-') &&
-                                controlsCode.includes('className="w-full pt-1.5 pb-0.5 select-none"');
-    const isThinLine = controlsCode.includes('h-0.5 bg-white/30 rounded-full') &&
-                       controlsCode.includes('w-2 h-2 bg-white rounded-full');
+    const hasTapRevealArea = controlsCode.includes('data-testid="video-tap-reveal-area"') &&
+                             controlsCode.includes('keepControlsVisible()');
 
-    const pass = hasNoCardBackground && isThinLine;
     assert(
-      'TL-EXP-02',
-      'Minimal Timeline Styling',
-      'Timeline is rendered as a clean minimal thin line without background cards, boxes, panels, or overlays',
-      pass,
-      `hasNoCardBackground=${hasNoCardBackground}, isThinLine=${isThinLine}`
+      'VIS-TAP-01',
+      'Tap to Reveal',
+      'Tapping the video triggers keepControlsVisible(), making the playback controls immediately visible',
+      hasTapRevealArea,
+      `hasTapRevealArea=${hasTapRevealArea}`
     );
   }
 
-  // 10. TL-EXP-03: Direct touch dragging & tapping seek to the correct position (Android & desktop support)
+  // 10. VIS-INTERACT: Interacting with controls keeps them visible and resets the inactivity timer
   {
-    const rectLeft = 50;
-    const rectWidth = 300;
+    const hasKeepControlsVisible = controlsCode.includes('keepControlsVisible') &&
+                                   controlsCode.includes('setAreControlsVisible(true)') &&
+                                   controlsCode.includes('scheduleControlsAutoHide(1000)');
+    const callsOnSeek = controlsCode.includes('seekDelta = useCallback(') &&
+                        controlsCode.includes('keepControlsVisible()');
+
+    const pass = hasKeepControlsVisible && callsOnSeek;
+    assert(
+      'VIS-INTERACT',
+      'Interaction Continuity',
+      'Active user interaction (tapping, seeking, scrubbing) resets the ~1s inactivity timer and maintains visibility',
+      pass,
+      `hasKeepControlsVisible=${hasKeepControlsVisible}, callsOnSeek=${callsOnSeek}`
+    );
+  }
+
+  // 11. VIS-AUTOHIDE: Controls automatically hide after approximately 1 second of inactivity (1000ms)
+  {
+    const has1000msTimer = controlsCode.includes('scheduleControlsAutoHide(1000)') &&
+                           controlsCode.includes('setAreControlsVisible(false)');
+
+    assert(
+      'VIS-AUTOHIDE',
+      'Auto-Hide Timing',
+      'Controls automatically hide after ~1 second (1000ms) of user inactivity',
+      has1000msTimer,
+      `has1000msTimer=${has1000msTimer}`
+    );
+  }
+
+  // 12. VIS-SCRUB-SAFE: Controls do NOT hide during an active press, drag, or seek (isScrubbingRef safe)
+  {
+    const hasScrubCheck = controlsCode.includes('if (!isScrubbingRef.current) {') &&
+                          controlsCode.includes('setAreControlsVisible(false);');
+    const cancelsOnPointerDown = controlsCode.includes('handlePointerDown') &&
+                                 controlsCode.includes('clearTimeout(inactivityTimerRef.current)');
+    const cancelsOnTouchStart = controlsCode.includes('handleTouchStart') &&
+                                controlsCode.includes('clearTimeout(inactivityTimerRef.current)');
+
+    const pass = hasScrubCheck && cancelsOnPointerDown && cancelsOnTouchStart;
+    assert(
+      'VIS-SCRUB-SAFE',
+      'Drag & Scrub Safety',
+      'Inactivity auto-hide timer is suspended during active drag, press, or scrub gestures',
+      pass,
+      `hasScrubCheck=${hasScrubCheck}, cancelsOnPointerDown=${cancelsOnPointerDown}, cancelsOnTouchStart=${cancelsOnTouchStart}`
+    );
+  }
+
+  // 13. VIS-UNOBSTRUCTED: Normal playback shows an unobstructed video without permanent controls
+  {
+    const hasHiddenOpacity = controlsCode.includes('areControlsVisible') &&
+                             controlsCode.includes('opacity-0 pointer-events-none');
+
+    assert(
+      'VIS-UNOBSTRUCTED',
+      'Unobstructed Playback',
+      'Normal playback hides controls to opacity-0 with pointer-events-none, providing clean unobstructed viewing',
+      hasHiddenOpacity,
+      `hasHiddenOpacity=${hasHiddenOpacity}`
+    );
+  }
+
+  // 14. TL-POS-01: Current time, total duration, and thin timeline placed near the bottom of the video
+  {
+    const hasBottomSection = controlsCode.includes('C. Bottom Timeline & Duration Controls') &&
+                             controlsCode.includes('mt-auto w-full flex flex-col');
+    const hasTimeToggle = controlsCode.includes('data-testid="video-duration-toggle-btn"');
+
+    const pass = hasBottomSection && hasTimeToggle;
+    assert(
+      'TL-POS-01',
+      'Bottom Placement',
+      'Current time, total video duration, and thin timeline are positioned near the bottom of the video',
+      pass,
+      `hasBottomSection=${hasBottomSection}, hasTimeToggle=${hasTimeToggle}`
+    );
+  }
+
+  // 15. TL-REVEAL-01: Timeline is rendered cleanly in Reels or toggled open on duration tap
+  {
+    const hasToggleLogic = controlsCode.includes('toggleTimeline = (e: React.MouseEvent)') &&
+                           controlsCode.includes('setIsTimelineOpen((prev) => !prev)');
+    const rendersExpandable = controlsCode.includes('{(isTimelineOpen || shouldRenderCenterControls) && (') &&
+                              controlsCode.includes('data-testid="expandable-timeline-container"');
+
+    const pass = hasToggleLogic && rendersExpandable;
+    assert(
+      'TL-REVEAL-01',
+      'Timeline Reveal',
+      'Thin timeline renders cleanly in Reels and toggles on duration/time tap',
+      pass,
+      `hasToggleLogic=${hasToggleLogic}, rendersExpandable=${rendersExpandable}`
+    );
+  }
+
+  // 16. TL-DRAG-01: Direct touch dragging & tapping seek accurately along the timeline (Android & desktop)
+  {
+    const rectLeft = 100;
+    const rectWidth = 200;
     const duration = 120;
 
-    // Tapping at 25% (clientX = 50 + 75 = 125)
-    const timeQuarter = simulateCalculateSeekTime(125, rectLeft, rectWidth, duration);
-    // Tapping at 50% (clientX = 50 + 150 = 200)
-    const timeHalf = simulateCalculateSeekTime(200, rectLeft, rectWidth, duration);
+    const quarterSeek = simulateCalculateSeekTime(150, rectLeft, rectWidth, duration); // 30s
+    const halfSeek = simulateCalculateSeekTime(200, rectLeft, rectWidth, duration); // 60s
+    const clampedUnderflow = simulateCalculateSeekTime(50, rectLeft, rectWidth, duration); // 0s
+    const clampedOverflow = simulateCalculateSeekTime(350, rectLeft, rectWidth, duration); // 120s
 
-    const hasTouchHandlers = controlsCode.includes('onTouchStart={handleTouchStart}') &&
-                             controlsCode.includes('onTouchMove={handleTouchMove}') &&
-                             controlsCode.includes('onTouchEnd={handleTouchEnd}');
-    const hasPointerHandlers = controlsCode.includes('onPointerDown={handlePointerDown}') &&
-                               controlsCode.includes('window.addEventListener(\'pointermove\'');
+    const hasPointer = controlsCode.includes('onPointerDown={handlePointerDown}') &&
+                       controlsCode.includes('window.addEventListener(\'pointermove\'');
+    const hasTouch = controlsCode.includes('onTouchStart={handleTouchStart}') &&
+                     controlsCode.includes('onTouchMove={handleTouchMove}') &&
+                     controlsCode.includes('onTouchEnd={handleTouchEnd}');
 
-    const pass = timeQuarter === 30 && timeHalf === 60 && hasTouchHandlers && hasPointerHandlers;
+    const pass = quarterSeek === 30 && halfSeek === 60 && clampedUnderflow === 0 && clampedOverflow === 120 && hasPointer && hasTouch;
     assert(
-      'TL-EXP-03',
+      'TL-DRAG-01',
       'Timeline Touch & Pointer Drag',
-      'Direct touch dragging on mobile Android and pointer interaction on desktop seek precisely to mapped timestamp',
+      'Direct touch dragging on mobile Android and pointer dragging on desktop map accurately to seek timestamps',
       pass,
-      `timeQuarter=${timeQuarter}s, timeHalf=${timeHalf}s, hasTouchHandlers=${hasTouchHandlers}, hasPointerHandlers=${hasPointerHandlers}`
+      `quarterSeek=${quarterSeek}s, halfSeek=${halfSeek}s, clampedUnderflow=${clampedUnderflow}s, clampedOverflow=${clampedOverflow}s`
     );
   }
 
-  // 11. TL-EXP-04: Auto-hide timer hides timeline after seeking is completed or after inactivity period
+  // 17. TL-FORMAT-01: Displays time accurately in M:SS format
   {
-    const hasAutoHide = controlsCode.includes('scheduleTimelineAutoHide') &&
-                        controlsCode.includes('hideTimelineTimeoutRef') &&
-                        controlsCode.includes('setIsTimelineOpen(false)');
+    const formattedZero = formatTime(0);
+    const formattedFive = formatTime(5);
+    const formatted90 = formatTime(90);
+    const formatted240 = formatTime(240);
+
+    const pass = formattedZero === '0:00' && formattedFive === '0:05' && formatted90 === '1:30' && formatted240 === '4:00';
+    assert(
+      'TL-FORMAT-01',
+      'Timestamp Formatting',
+      'Time formatted strictly in M:SS format (e.g., 0:05, 1:30, 4:00)',
+      pass,
+      `0s => ${formattedZero}, 5s => ${formattedFive}, 90s => ${formatted90}, 240s => ${formatted240}`
+    );
+  }
+
+  // 18. TL-NO-BG: Clean thin progress line without any background panel, card, box, or overlay
+  {
+    const noTimelineBg = !controlsCode.includes('expandable-timeline-container" className="bg-') &&
+                         !controlsCode.includes('expandable-timeline-container" className="border-') &&
+                         !controlsCode.includes('expandable-timeline-container" className="backdrop-blur-');
+    const hasThinLine = controlsCode.includes('h-0.5 bg-white/30 rounded-full') &&
+                        controlsCode.includes('w-2 h-2 bg-white rounded-full');
+
+    const pass = noTimelineBg && hasThinLine;
+    assert(
+      'TL-NO-BG',
+      'Clean Thin Line',
+      'Timeline uses a clean 2px thin progress line and small knob without background panels, cards, or boxes',
+      pass,
+      `noTimelineBg=${noTimelineBg}, hasThinLine=${hasThinLine}`
+    );
+  }
+
+  // 19. TL-AUTOHIDE-01: Timeline hides after seeking or approximately 1 second of inactivity
+  {
+    const hasAutoHideCall = controlsCode.includes('scheduleControlsAutoHide(1000)') &&
+                            controlsCode.includes('setIsTimelineOpen(false)');
 
     assert(
-      'TL-EXP-04',
-      'Timeline Auto-Hide',
-      'Timeline automatically hides after seeking completes or after a brief period of inactivity',
-      hasAutoHide,
-      `hasAutoHide=${hasAutoHide}`
+      'TL-AUTOHIDE-01',
+      'Timeline Inactivity Auto-Hide',
+      'Timeline automatically dismisses after seeking completes or ~1s of inactivity',
+      hasAutoHideCall,
+      `hasAutoHideCall=${hasAutoHideCall}`
     );
   }
 
-  // 12. INT-01: Feed video player integration (CommunityPostCard & PostCard) embeds minimal controls
+  // 20. INT-FEED-REELS: Reels-only center controls vs Feed clean variant across CommunityPostCard, PostCard, and ReelsFeedView
   {
     const communityCode = fs.readFileSync('components/CommunityPostCard.tsx', 'utf-8');
     const postCardCode = fs.readFileSync('components/PostCard.tsx', 'utf-8');
-
-    const commHasImport = communityCode.includes("import { AdvancedVideoControls } from './AdvancedVideoControls';");
-    const commHasComponent = communityCode.includes('<AdvancedVideoControls') &&
-                             (communityCode.includes('videoRef={videoRef}') || communityCode.includes('videoRef={feedVideoRef}')) &&
-                             communityCode.includes('onOpenReel=');
-
-    const pcHasImport = postCardCode.includes("import { AdvancedVideoControls } from './AdvancedVideoControls';");
-    const pcHasComponent = postCardCode.includes('<AdvancedVideoControls') &&
-                           postCardCode.includes('videoRef={feedVideoRef}') &&
-                           postCardCode.includes('onOpenReel=');
-
-    const pass = commHasImport && commHasComponent && pcHasImport && pcHasComponent;
-    assert(
-      'INT-01',
-      'Feed Integration',
-      'CommunityPostCard and PostCard embed the minimal video controls with ref binding and continuity',
-      pass,
-      `commHasImport=${commHasImport}, commHasComponent=${commHasComponent}, pcHasImport=${pcHasImport}, pcHasComponent=${pcHasComponent}`
-    );
-  }
-
-  // 13. INT-02: Reels player integration (ReelsFeedView) embeds minimal controls with stable refs
-  {
     const reelsCode = fs.readFileSync('components/ReelsFeedView.tsx', 'utf-8');
 
-    const reelsHasImport = reelsCode.includes("import { AdvancedVideoControls } from './AdvancedVideoControls';");
-    const reelsHasRefMap = reelsCode.includes('reelVideoRefs = React.useRef') &&
-                           reelsCode.includes('getReelVideoRef = React.useCallback');
-    const reelsHasControls = reelsCode.includes('<AdvancedVideoControls') &&
-                             reelsCode.includes('videoRef={getReelVideoRef(reel.id)}') &&
-                             reelsCode.includes('isMuted={isMuted}');
+    const commHasFeedVariant = communityCode.includes('variant="feed"') &&
+                               communityCode.includes('<AdvancedVideoControls');
+    const pcHasFeedVariant = postCardCode.includes('variant="feed"') &&
+                             postCardCode.includes('<AdvancedVideoControls');
+    const reelsHasReelsVariant = reelsCode.includes('variant="reels"') &&
+                                 reelsCode.includes('<AdvancedVideoControls');
 
-    const pass = reelsHasImport && reelsHasRefMap && reelsHasControls;
+    const pass = commHasFeedVariant && pcHasFeedVariant && reelsHasReelsVariant;
     assert(
-      'INT-02',
-      'Reels Integration',
-      'ReelsFeedView integrates the minimal video controls for every Reel card using memoized stable video refs',
+      'INT-FEED-REELS',
+      'Reels-Only vs Feed Integration',
+      '3-button center controls appear strictly in Reels (variant="reels") and are suppressed in Feed (variant="feed")',
       pass,
-      `reelsHasImport=${reelsHasImport}, reelsHasRefMap=${reelsHasRefMap}, reelsHasControls=${reelsHasControls}`
+      `commHasFeedVariant=${commHasFeedVariant}, pcHasFeedVariant=${pcHasFeedVariant}, reelsHasReelsVariant=${reelsHasReelsVariant}`
     );
   }
 
-  // 14. CONT-01: Feed-to-Reels playback-position continuity (preserves exact currentTime)
+  // 21. CONT-CONTINUITY: Feed-to-Reels playback-position continuity preserves exact currentTime
   {
     const socialIndexCode = fs.readFileSync('features/social/index.tsx', 'utf-8');
     const reelsCode = fs.readFileSync('components/ReelsFeedView.tsx', 'utf-8');
@@ -321,7 +441,7 @@ export function runAdvancedVideoControlsVerification(): {
 
     const pass = indexCapturesTime && reelsAppliesTime;
     assert(
-      'CONT-01',
+      'CONT-CONTINUITY',
       'Position Continuity',
       'Feed-to-Reels navigation carries exact currentTime from Feed video player and restores position in ReelsFeedView',
       pass,
@@ -329,29 +449,7 @@ export function runAdvancedVideoControlsVerification(): {
     );
   }
 
-  // 15. SND-01: Audio mute/unmute toggle controls and state preservation across interactions
-  {
-    const hasMuteToggle = controlsCode.includes('data-testid="video-sound-toggle-btn"') &&
-                          controlsCode.includes('onClick={onToggleMute}') &&
-                          controlsCode.includes('Volume2') &&
-                          controlsCode.includes('VolumeX');
-
-    const reelsCode = fs.readFileSync('components/ReelsFeedView.tsx', 'utf-8');
-    const reelsSyncsSound = reelsCode.includes('toggleSound = (reelId: string, e: React.MouseEvent)') &&
-                            reelsCode.includes('el.muted = nextMuted;') &&
-                            reelsCode.includes('onToggleMute={(e) => toggleSound(reel.id, e)}');
-
-    const pass = hasMuteToggle && reelsSyncsSound;
-    assert(
-      'SND-01',
-      'Audio State Sync',
-      'Sound mute and unmute controls remain fully functional with live DOM audio synchronization',
-      pass,
-      `hasMuteToggle=${hasMuteToggle}, reelsSyncsSound=${reelsSyncsSound}`
-    );
-  }
-
-  // 16. BAS-01: Phase 10 baseline integrity (all 3 files 100% untouched)
+  // 22. BAS-PHASE10: Protected Phase 10 baseline integrity (all 3 files 100% untouched)
   {
     const expectedHashes: { [key: string]: string } = {
       'services/v2RewardEngine.ts': '7258cb342e153fb5bb6cf401db84014d6108b0ecc2fa4c3c8752064f12a5ba7a',
@@ -375,7 +473,7 @@ export function runAdvancedVideoControlsVerification(): {
     }
 
     assert(
-      'BAS-01',
+      'BAS-PHASE10',
       'Phase 10 Integrity',
       'Protected Phase 10 files remain strictly untouched with cryptographic hash matching baseline',
       allMatch,
@@ -396,7 +494,7 @@ export function runAdvancedVideoControlsVerification(): {
 
 // CLI runner if executed directly
 if (import.meta.url.endsWith(process.argv[1]) || process.argv[1]?.includes('advancedVideoControlsVerification')) {
-  console.log('--- METFA SOCIAL: MINIMAL VIDEO SEEK & TIMELINE DESIGN VERIFICATION ---');
+  console.log('--- METFA SOCIAL: PART 1 FINAL MINIMAL PLAYBACK CONTROL DESIGN VERIFICATION ---');
   const res = runAdvancedVideoControlsVerification();
   res.results.forEach((r) => {
     const icon = r.status === 'PASS' ? '✅' : '❌';

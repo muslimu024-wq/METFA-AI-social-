@@ -1,4 +1,4 @@
-import React, { useState, useEffect, Suspense, lazy } from 'react';
+import React, { useState, useEffect, useRef, Suspense, lazy } from 'react';
 import {
   Film,
   Heart,
@@ -6,7 +6,6 @@ import {
   Share2,
   Sparkles,
   Plus,
-  Play,
   Volume2,
   VolumeX,
   Repeat,
@@ -21,11 +20,16 @@ import {
   Music,
   ShieldCheck,
   Loader2,
+  ArrowLeft,
+  Radio,
+  Search,
+  Send,
+  UserPlus,
+  UserCheck,
 } from 'lucide-react';
-import { ReelHighlight, UserProfile } from '../types/community';
+import { ReelHighlight, UserProfile, PostComment } from '../types/community';
 import { AudioTrack } from '../types/audio';
 import {
-  getReelHighlights,
   saveReelHighlights,
   incrementReelShares,
   deleteReelHighlight,
@@ -35,19 +39,32 @@ import {
   deletePersistentReel,
   editPersistentReel,
 } from '../services/reelService';
+import { fetchComments, createComment } from '../services/engagementService';
+import { followUser, unfollowUser, fetchFollowedUserIds, isValidProfileUuid } from '../services/followService';
+import { getFollowedUserIds, isUserFollowed, syncFollowCache } from '../utils/followStore';
 import { getAudioTracks } from '../utils/audioStore';
 import { isContentOwner } from '../utils/communityStore';
-import { toggleSaveReel, isReelSaved } from '../utils/bookmarkStore';
+import { toggleSaveReel } from '../utils/bookmarkStore';
 import { executeNativeShare, SharePayload } from '../utils/shareUtils';
 import { AdvancedVideoControls } from './AdvancedVideoControls';
+import { VideoPlaybackSessionTracker } from '../utils/videoTracker';
+import {
+  reelToContentDescriptor,
+  trackContentImpression,
+  trackEngagementAction,
+  trackFollowAttribution,
+} from '../utils/contentTracker';
+import { TrendingUp } from 'lucide-react';
 
 // Lazy-load action modals
 const SocialShareModal = lazy(() => import('./SocialShareModal'));
 const ConfirmActionModal = lazy(() => import('./ConfirmActionModal'));
 const AudioLicenseInfoModal = lazy(() => import('./AudioLicenseInfoModal'));
+const ContentAnalyticsModal = lazy(() => import('./ContentAnalyticsModal'));
 
 interface ReelsFeedViewProps {
   reels: ReelHighlight[];
+  directSelectedReel?: ReelHighlight | null;
   onUpdateReels: (reels: ReelHighlight[]) => void;
   userProfile: UserProfile;
   onRemixPrompt: (prompt: string) => void;
@@ -56,10 +73,13 @@ interface ReelsFeedViewProps {
   targetReelId?: string | null;
   onClearTargetReel?: () => void;
   initialCurrentTime?: number;
+  onNavigateTab?: (tabId: string) => void;
+  onViewProfile?: (userId: string) => void;
 }
 
 export const ReelsFeedView: React.FC<ReelsFeedViewProps> = ({
   reels,
+  directSelectedReel,
   onUpdateReels,
   userProfile,
   onRemixPrompt,
@@ -68,14 +88,52 @@ export const ReelsFeedView: React.FC<ReelsFeedViewProps> = ({
   targetReelId,
   onClearTargetReel,
   initialCurrentTime,
+  onNavigateTab,
+  onViewProfile,
 }) => {
-  // When targetReelId is provided, hoist the requested Reel to the top of the feed
+  // Immersive Reels Overlay Feed Filters & Search
+  const [feedFilter, setFeedFilter] = useState<'forYou' | 'following'>('forYou');
+  const [isSearchOpen, setIsSearchOpen] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [followedAuthorIds, setFollowedAuthorIds] = useState<string[]>(() => getFollowedUserIds());
+
+  // Combine persistent reels with any transient Feed-selected reel (without polluting persistent catalog),
+  // hoist targetReelId to top, and apply Following / Search filters cleanly.
+  const baseReels = React.useMemo(() => {
+    const combined =
+      directSelectedReel && !reels.some((r) => r.id === directSelectedReel.id)
+        ? [directSelectedReel, ...reels]
+        : reels;
+    if (!targetReelId) return combined;
+    const target = combined.find((r) => r.id === targetReelId);
+    if (!target) return combined;
+    return [target, ...combined.filter((r) => r.id !== targetReelId)];
+  }, [reels, directSelectedReel, targetReelId]);
+
   const displayedReels = React.useMemo(() => {
-    if (!targetReelId) return reels;
-    const target = reels.find((r) => r.id === targetReelId);
-    if (!target) return reels;
-    return [target, ...reels.filter((r) => r.id !== targetReelId)];
-  }, [reels, targetReelId]);
+    let list = baseReels;
+    if (feedFilter === 'following') {
+      const normalized = new Set(followedAuthorIds.map((id) => id.toLowerCase()));
+      list = list.filter((r) => {
+        const aid = r.author?.id?.toLowerCase();
+        const uname = r.author?.username?.toLowerCase();
+        return (aid && normalized.has(aid)) || (uname && normalized.has(uname)) || isUserFollowed(r.author?.id) || isUserFollowed(r.author?.username);
+      });
+    }
+    const q = searchQuery.trim().toLowerCase();
+    if (q) {
+      list = list.filter(
+        (r) =>
+          r.title?.toLowerCase().includes(q) ||
+          r.caption?.toLowerCase().includes(q) ||
+          r.author?.name?.toLowerCase().includes(q) ||
+          r.author?.username?.toLowerCase().includes(q) ||
+          r.musicTrack?.toLowerCase().includes(q)
+      );
+    }
+    return list;
+  }, [baseReels, feedFilter, followedAuthorIds, searchQuery]);
+
   const [activeSharePayload, setActiveSharePayload] = useState<SharePayload | null>(null);
   const [isShareModalOpen, setIsShareModalOpen] = useState(false);
   const [sharingReelId, setSharingReelId] = useState<string | null>(null);
@@ -93,13 +151,39 @@ export const ReelsFeedView: React.FC<ReelsFeedViewProps> = ({
   } | null>(null);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [inspectingAudioTrack, setInspectingAudioTrack] = useState<AudioTrack | null>(null);
+  const [inspectingAnalyticsReel, setInspectingAnalyticsReel] = useState<ReelHighlight | null>(null);
+
+  // Comments Drawer State
+  const [activeCommentsReel, setActiveCommentsReel] = useState<ReelHighlight | null>(null);
+  const [reelComments, setReelComments] = useState<PostComment[]>([]);
+  const [isLoadingComments, setIsLoadingComments] = useState(false);
+  const [commentText, setCommentText] = useState('');
+  const [isSubmittingComment, setIsSubmittingComment] = useState(false);
+
+  // Follow state synchronization
+  useEffect(() => {
+    const refreshFollows = () => setFollowedAuthorIds(getFollowedUserIds());
+    window.addEventListener('metfa_following_updated', refreshFollows);
+
+    fetchFollowedUserIds().then(({ followedIds }) => {
+      if (followedIds.size > 0) {
+        setFollowedAuthorIds((prev) => Array.from(new Set([...prev, ...Array.from(followedIds)])));
+      }
+    });
+
+    return () => window.removeEventListener('metfa_following_updated', refreshFollows);
+  }, []);
 
   // Reels Audio Mute / Unmute State & Direct Video Element DOM synchronization
   const [isMuted, setIsMuted] = useState<boolean>(false);
-  const videoRefs = React.useRef<{ [id: string]: HTMLVideoElement | null }>({});
+  const [activeVisibleReelId, setActiveVisibleReelId] = useState<string | null>(
+    () => targetReelId || directSelectedReel?.id || reels[0]?.id || null
+  );
+  const scrollContainerRef = useRef<HTMLDivElement | null>(null);
+  const videoRefs = useRef<{ [id: string]: HTMLVideoElement | null }>({});
 
   // Stable ref map for AdvancedVideoControls integration
-  const reelVideoRefs = React.useRef<Map<string, { current: HTMLVideoElement | null }>>(new Map());
+  const reelVideoRefs = useRef<Map<string, { current: HTMLVideoElement | null }>>(new Map());
   const getReelVideoRef = React.useCallback((id: string): React.RefObject<HTMLVideoElement | null> => {
     if (!reelVideoRefs.current.has(id)) {
       reelVideoRefs.current.set(id, { current: videoRefs.current[id] || null });
@@ -108,6 +192,46 @@ export const ReelsFeedView: React.FC<ReelsFeedViewProps> = ({
     r.current = videoRefs.current[id] || null;
     return r as React.RefObject<HTMLVideoElement | null>;
   }, []);
+
+  // Keep activeVisibleReelId synced when displayedReels list changes
+  useEffect(() => {
+    if (displayedReels.length === 0) {
+      setActiveVisibleReelId(null);
+      return;
+    }
+    if (targetReelId && displayedReels.some((r) => r.id === targetReelId)) {
+      setActiveVisibleReelId(targetReelId);
+      return;
+    }
+    if (!activeVisibleReelId || !displayedReels.some((r) => r.id === activeVisibleReelId)) {
+      setActiveVisibleReelId(displayedReels[0].id);
+    }
+  }, [displayedReels, targetReelId, activeVisibleReelId]);
+
+  // Track currently visible snapped Reel via IntersectionObserver
+  useEffect(() => {
+    const container = scrollContainerRef.current;
+    if (!container || typeof IntersectionObserver === 'undefined') return;
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        for (const entry of entries) {
+          if (entry.isIntersecting && entry.intersectionRatio >= 0.6) {
+            const rid = (entry.target as HTMLElement).dataset.reelId;
+            if (rid) {
+              setActiveVisibleReelId(rid);
+            }
+          }
+        }
+      },
+      { root: container, threshold: [0.6] }
+    );
+
+    const slides = container.querySelectorAll('[data-reel-id]');
+    slides.forEach((slide) => observer.observe(slide));
+
+    return () => observer.disconnect();
+  }, [displayedReels]);
 
   const toggleSound = (reelId: string, e: React.MouseEvent) => {
     e.stopPropagation();
@@ -127,26 +251,67 @@ export const ReelsFeedView: React.FC<ReelsFeedViewProps> = ({
     });
   };
 
-  // Synchronize muted property directly on DOM video elements whenever isMuted changes
+  // Play only the currently snapped active reel & pause offscreen reels (with muted autoplay policy fallback)
   useEffect(() => {
-    Object.values(videoRefs.current).forEach((el) => {
-      if (el) {
-        el.muted = isMuted;
-        if (!isMuted) {
-          el.play().catch((err) => {
-            console.log('[Reels Sound] Browser unmuted autoplay catch:', err);
-          });
-        }
+    Object.entries(videoRefs.current).forEach(([id, el]) => {
+      if (!el) return;
+      el.muted = isMuted;
+      if (!activeVisibleReelId || id === activeVisibleReelId) {
+        el.play().catch((err) => {
+          if (!isMuted && err?.name === 'NotAllowedError') {
+            el.muted = true;
+            setIsMuted(true);
+            el.play().catch(() => {});
+          } else {
+            console.log('[Reels Sound] Browser playback notice:', err);
+          }
+        });
+      } else {
+        try {
+          el.playbackRate = 1;
+          el.pause();
+        } catch {}
       }
     });
-  }, [isMuted, displayedReels]);
+    }, [isMuted, displayedReels, activeVisibleReelId]);
 
-  // Clean up and pause videos when unmounting Reels feed to prevent audio leaking
+  // Emit genuine Reel impression & attach VideoPlaybackSessionTracker to active reel video element
+  useEffect(() => {
+    if (!activeVisibleReelId) return;
+    const activeReel = displayedReels.find((r) => r.id === activeVisibleReelId);
+    const el = videoRefs.current[activeVisibleReelId];
+    if (!activeReel) return;
+
+    trackContentImpression({
+      contentId: activeReel.id,
+      contentType: 'reel',
+      creatorId: activeReel.author?.id || '',
+      viewerId: userProfile?.id,
+      trafficSource: 'reels',
+    });
+
+    if (!el) return;
+    const tracker = new VideoPlaybackSessionTracker({
+      videoId: activeReel.id,
+      videoType: 'reel',
+      creatorId: activeReel.author?.id || '',
+      viewerId: userProfile?.id,
+      trafficSource: 'reels',
+    });
+    tracker.attach(el);
+
+    return () => {
+      tracker.detach();
+    };
+  }, [activeVisibleReelId, displayedReels, userProfile?.id]);
+
+  // Clean up, restore 1X speed, and pause videos when unmounting Reels feed to prevent audio leaking
   useEffect(() => {
     return () => {
       Object.values(videoRefs.current).forEach((el) => {
         if (el) {
           try {
+            el.playbackRate = 1;
             el.pause();
           } catch {}
         }
@@ -161,8 +326,8 @@ export const ReelsFeedView: React.FC<ReelsFeedViewProps> = ({
 
   // Handle auto-scroll and fallback notification when targetReelId is passed
   useEffect(() => {
-    if (!isLoading && targetReelId && reels.length > 0) {
-      const exists = reels.some((r) => r.id === targetReelId);
+    if (!isLoading && targetReelId && baseReels.length > 0) {
+      const exists = baseReels.some((r) => r.id === targetReelId);
       if (!exists) {
         showToast('The selected reel is unavailable or has been removed.');
         if (onClearTargetReel) {
@@ -171,11 +336,11 @@ export const ReelsFeedView: React.FC<ReelsFeedViewProps> = ({
       } else {
         const el = document.getElementById(`reel-${targetReelId}`);
         if (el) {
-          el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+          el.scrollIntoView({ behavior: 'auto', block: 'start' });
         }
       }
     }
-  }, [isLoading, targetReelId, reels, onClearTargetReel]);
+  }, [isLoading, targetReelId, baseReels, onClearTargetReel]);
 
   // Seek target Reel to initialCurrentTime when navigating from Feed with position continuity
   useEffect(() => {
@@ -209,6 +374,134 @@ export const ReelsFeedView: React.FC<ReelsFeedViewProps> = ({
     window.addEventListener('click', handleGlobalClick);
     return () => window.removeEventListener('click', handleGlobalClick);
   }, []);
+
+  const handleExitReelsTo = (targetTab: string) => {
+    Object.values(videoRefs.current).forEach((el) => {
+      if (el) {
+        try {
+          el.playbackRate = 1;
+          el.pause();
+        } catch {}
+      }
+    });
+    if (onClearTargetReel) onClearTargetReel();
+    if (onNavigateTab) {
+      onNavigateTab(targetTab);
+    }
+  };
+
+  const handleCreatorProfileClick = (authorId: string) => {
+    if (!authorId) return;
+    Object.values(videoRefs.current).forEach((el) => {
+      if (el) {
+        try {
+          el.playbackRate = 1;
+          el.pause();
+        } catch {}
+      }
+    });
+    if (onViewProfile) {
+      onViewProfile(authorId);
+    } else if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('metfa_view_profile', { detail: { userId: authorId } }));
+    }
+  };
+
+  const handleFollowToggle = async (author: ReelHighlight['author'], sourceReelId?: string) => {
+    const currentlyFollowed =
+      followedAuthorIds.some(
+        (id) =>
+          id.toLowerCase() === author.id.toLowerCase() ||
+          id.toLowerCase() === author.username.toLowerCase()
+      ) || isUserFollowed(author.id) || isUserFollowed(author.username);
+
+    if (!isValidProfileUuid(author.id)) {
+      const nextFollow = !currentlyFollowed;
+      syncFollowCache(author, nextFollow);
+      setFollowedAuthorIds(getFollowedUserIds());
+      trackFollowAttribution({
+        creatorId: author.id,
+        viewerId: userProfile?.id,
+        contentId: sourceReelId,
+        contentType: 'reel',
+        attributionMethod: 'direct_content_follow',
+        followDelta: nextFollow ? 1 : -1,
+        trafficSource: 'reels',
+      });
+      showToast(nextFollow ? `Following @${author.username}` : `Unfollowed @${author.username}`);
+      return;
+    }
+
+    const res = currentlyFollowed ? await unfollowUser(author.id) : await followUser(author.id);
+    if (!res.success && res.error?.toLowerCase().includes('authentication')) {
+      window.dispatchEvent(new CustomEvent('metfa_open_auth_modal'));
+      return;
+    }
+    syncFollowCache(author, res.isFollowing);
+    setFollowedAuthorIds(getFollowedUserIds());
+    if (res.success) {
+      trackFollowAttribution({
+        creatorId: author.id,
+        viewerId: userProfile?.id,
+        contentId: sourceReelId,
+        contentType: 'reel',
+        attributionMethod: 'direct_content_follow',
+        followDelta: res.isFollowing ? 1 : -1,
+        trafficSource: 'reels',
+      });
+    }
+    showToast(res.isFollowing ? `Following @${author.username}` : `Unfollowed @${author.username}`);
+  };
+
+  const handleOpenComments = async (reel: ReelHighlight) => {
+    setActiveCommentsReel(reel);
+    setCommentText('');
+    setIsLoadingComments(true);
+    const { comments } = await fetchComments(reel.id);
+    setReelComments(comments);
+    setIsLoadingComments(false);
+  };
+
+  const handleSubmitComment = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!activeCommentsReel || isSubmittingComment) return;
+    const clean = commentText.trim();
+    if (!clean) return;
+
+    setIsSubmittingComment(true);
+    const { comment, error } = await createComment(activeCommentsReel.id, clean);
+    setIsSubmittingComment(false);
+
+    if (error && error.toLowerCase().includes('authentication')) {
+      window.dispatchEvent(new CustomEvent('metfa_open_auth_modal'));
+      return;
+    }
+    if (error || !comment) {
+      showToast(error || 'Could not post comment right now');
+      return;
+    }
+
+    setReelComments((prev) => [...prev, comment]);
+    setCommentText('');
+
+    trackEngagementAction({
+      contentId: activeCommentsReel.id,
+      contentType: 'reel',
+      creatorId: activeCommentsReel.author?.id || '',
+      viewerId: userProfile?.id,
+      action: 'comment',
+      trafficSource: 'reels',
+    });
+
+    const updated = reels.map((r) =>
+      r.id === activeCommentsReel.id ? { ...r, commentsCount: (r.commentsCount || 0) + 1 } : r
+    );
+    onUpdateReels(updated);
+    saveReelHighlights(updated);
+    setActiveCommentsReel((prev) =>
+      prev ? { ...prev, commentsCount: (prev.commentsCount || 0) + 1 } : prev
+    );
+  };
 
   const handleStartEditReel = (reel: ReelHighlight) => {
     setEditingReel(reel);
@@ -254,6 +547,17 @@ export const ReelsFeedView: React.FC<ReelsFeedViewProps> = ({
   };
 
   const handleLike = (id: string) => {
+    const targetReel = reels.find((r) => r.id === id);
+    if (targetReel) {
+      trackEngagementAction({
+        contentId: targetReel.id,
+        contentType: 'reel',
+        creatorId: targetReel.author?.id || '',
+        viewerId: userProfile?.id,
+        action: 'like',
+        trafficSource: 'reels',
+      });
+    }
     const updated = reels.map((r) => {
       if (r.id === id) {
         const isLiked = !r.isLiked;
@@ -271,11 +575,30 @@ export const ReelsFeedView: React.FC<ReelsFeedViewProps> = ({
 
   const handleToggleSaveReel = (reelId: string) => {
     const res = toggleSaveReel(reelId);
+    if (res.isSaved) {
+      const targetReel = reels.find((r) => r.id === reelId);
+      trackEngagementAction({
+        contentId: reelId,
+        contentType: 'reel',
+        creatorId: targetReel?.author?.id || '',
+        viewerId: userProfile?.id,
+        action: 'save',
+        trafficSource: 'reels',
+      });
+    }
     onUpdateReels(res.updatedReels);
     showToast(res.isSaved ? 'Saved reel to your bookmarks!' : 'Removed reel from bookmarks');
   };
 
   const handleShareReel = async (reel: ReelHighlight) => {
+    trackEngagementAction({
+      contentId: reel.id,
+      contentType: 'reel',
+      creatorId: reel.author?.id || '',
+      viewerId: userProfile?.id,
+      action: 'share',
+      trafficSource: 'reels',
+    });
     setSharingReelId(reel.id);
     const payload: SharePayload = {
       id: reel.id,
@@ -305,28 +628,157 @@ export const ReelsFeedView: React.FC<ReelsFeedViewProps> = ({
   };
 
   return (
-    <div className="flex-1 overflow-y-auto w-full max-w-md mx-auto px-4 py-4 space-y-6">
-      <div className="flex items-center justify-between bg-gray-900/80 p-3 rounded-2xl border border-gray-800 backdrop-blur-md">
-        <div className="flex items-center gap-2">
-          <Film className="w-5 h-5 text-purple-400" />
-          <h3 className="text-sm font-bold text-white">90s AI Creation Reels</h3>
+    <div
+      data-testid="reels-immersive-viewport"
+      className="relative flex-1 w-full h-full min-h-0 bg-black text-white overflow-hidden select-none"
+    >
+      {/* Immersive Transparent Overlay Top Navigation (METFA's own Reels Chrome) */}
+      <div
+        data-testid="reels-top-overlay-nav"
+        className="absolute top-0 inset-x-0 z-30 pt-2.5 pb-3 px-3 sm:px-4 bg-gradient-to-b from-black/75 via-black/35 to-transparent pointer-events-none"
+      >
+        <div className="flex items-center justify-between gap-2 pointer-events-auto">
+          {/* Left: Back to Feed & Live */}
+          <div className="flex items-center gap-1.5 shrink-0">
+            <button
+              type="button"
+              data-testid="reels-nav-back-btn"
+              onClick={() => handleExitReelsTo('feed')}
+              className="w-9 h-9 rounded-full flex items-center justify-center text-white/90 hover:text-white hover:bg-white/15 active:scale-95 transition cursor-pointer"
+              title="Back to Feed"
+              aria-label="Back to Feed"
+            >
+              <ArrowLeft className="w-5 h-5" />
+            </button>
+
+            <button
+              type="button"
+              data-testid="reels-nav-live-btn"
+              onClick={() => handleExitReelsTo('live')}
+              className="px-2 py-1.5 rounded-lg text-[11px] font-bold text-white/85 hover:text-white hover:bg-white/10 active:scale-95 transition flex items-center gap-1 cursor-pointer"
+              title="METFA Live"
+              aria-label="Live"
+            >
+              <Radio className="w-3.5 h-3.5 text-rose-400" />
+              <span>Live</span>
+            </button>
+          </div>
+
+          {/* Center: Following / For You / Community */}
+          <div className="flex items-center justify-center gap-3 sm:gap-4 min-w-0">
+            <button
+              type="button"
+              data-testid="reels-tab-following"
+              onClick={() => setFeedFilter('following')}
+              className={`relative py-1 text-xs sm:text-sm font-bold transition cursor-pointer whitespace-nowrap ${
+                feedFilter === 'following' ? 'text-white' : 'text-white/65 hover:text-white/90'
+              }`}
+            >
+              <span>Following</span>
+              {feedFilter === 'following' && (
+                <span className="absolute bottom-0 left-1/2 -translate-x-1/2 w-5 h-0.5 bg-teal-400 rounded-full" />
+              )}
+            </button>
+
+            <button
+              type="button"
+              data-testid="reels-tab-foryou"
+              onClick={() => setFeedFilter('forYou')}
+              className={`relative py-1 text-xs sm:text-sm font-bold transition cursor-pointer whitespace-nowrap ${
+                feedFilter === 'forYou' ? 'text-white' : 'text-white/65 hover:text-white/90'
+              }`}
+            >
+              <span>For You</span>
+              {feedFilter === 'forYou' && (
+                <span className="absolute bottom-0 left-1/2 -translate-x-1/2 w-5 h-0.5 bg-teal-400 rounded-full" />
+              )}
+            </button>
+
+            <button
+              type="button"
+              data-testid="reels-tab-community"
+              onClick={() => handleExitReelsTo('feed')}
+              className="py-1 text-xs sm:text-sm font-bold text-white/65 hover:text-white transition cursor-pointer whitespace-nowrap"
+            >
+              Community
+            </button>
+          </div>
+
+          {/* Right: Search & Post Reel */}
+          <div className="flex items-center gap-1.5 shrink-0">
+            <button
+              type="button"
+              data-testid="reels-nav-search-btn"
+              onClick={() => setIsSearchOpen((prev) => !prev)}
+              className={`w-9 h-9 rounded-full flex items-center justify-center transition active:scale-95 cursor-pointer ${
+                isSearchOpen || searchQuery.trim()
+                  ? 'bg-teal-500/25 text-teal-300'
+                  : 'text-white/90 hover:text-white hover:bg-white/15'
+              }`}
+              title="Search Reels"
+              aria-label="Search Reels"
+            >
+              <Search className="w-4.5 h-4.5" />
+            </button>
+
+            <button
+              type="button"
+              data-testid="reels-nav-create-btn"
+              onClick={onCreateReelClick}
+              className="w-9 h-9 rounded-full bg-gradient-to-tr from-purple-600 to-teal-500 hover:from-purple-500 hover:to-teal-400 text-white flex items-center justify-center shadow-md active:scale-95 transition cursor-pointer"
+              title="Post Reel"
+              aria-label="Post Reel"
+            >
+              <Plus className="w-4.5 h-4.5" />
+            </button>
+          </div>
         </div>
 
-        <button
-          type="button"
-          onClick={onCreateReelClick}
-          className="px-3 py-1.5 bg-gradient-to-r from-purple-600 to-teal-500 hover:from-purple-500 hover:to-teal-400 text-white text-xs font-bold rounded-xl flex items-center gap-1 shadow-md transition"
-        >
-          <Plus className="w-3.5 h-3.5" />
-          <span>Post Reel</span>
-        </button>
+        {/* Inline Working Reels Search Input */}
+        {isSearchOpen && (
+          <div className="mt-2 flex items-center gap-2 bg-black/80 backdrop-blur-md border border-white/15 rounded-xl px-3 py-1.5 pointer-events-auto animate-fadeIn">
+            <Search className="w-4 h-4 text-teal-400 shrink-0" />
+            <input
+              type="text"
+              data-testid="reels-search-input"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              placeholder="Search reels by title, creator, caption, or music..."
+              className="w-full bg-transparent text-xs text-white placeholder-white/50 focus:outline-none"
+              autoFocus
+            />
+            {searchQuery && (
+              <button
+                type="button"
+                onClick={() => setSearchQuery('')}
+                className="text-white/60 hover:text-white p-0.5 cursor-pointer"
+                aria-label="Clear reels search"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={() => {
+                setSearchQuery('');
+                setIsSearchOpen(false);
+              }}
+              className="text-[11px] font-bold text-white/70 hover:text-white px-1.5 cursor-pointer"
+            >
+              Done
+            </button>
+          </div>
+        )}
       </div>
 
-      {/* Vertical Reels Stack */}
-      <div className="space-y-6">
-        {isLoading && reels.length === 0 ? (
-          <div className="text-center py-20 px-6 bg-gray-900/40 rounded-3xl border border-gray-800/80 backdrop-blur-md flex flex-col items-center justify-center space-y-3 animate-pulse">
-            <div className="w-14 h-14 rounded-3xl bg-purple-950/60 text-purple-400 border border-purple-800/50 flex items-center justify-center shadow-inner">
+      {/* Full-Viewport Vertical Snap-Scroll Reels Container */}
+      <div
+        ref={scrollContainerRef}
+        className="w-full h-full overflow-y-auto snap-y snap-mandatory scroll-smooth [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+      >
+        {isLoading && displayedReels.length === 0 ? (
+          <div className="w-full h-full flex flex-col items-center justify-center px-6 text-center space-y-3 bg-black">
+            <div className="w-14 h-14 rounded-full bg-purple-950/60 text-purple-400 border border-purple-800/50 flex items-center justify-center">
               <Loader2 className="w-7 h-7 animate-spin text-purple-400" />
             </div>
             <div className="space-y-1">
@@ -334,345 +786,515 @@ export const ReelsFeedView: React.FC<ReelsFeedViewProps> = ({
               <p className="text-xs text-slate-400">Fetching latest creations from cloud storage</p>
             </div>
           </div>
-        ) : reels.length === 0 ? (
-          <div className="text-center py-16 px-6 bg-gray-900/60 rounded-3xl border border-gray-800 backdrop-blur-md flex flex-col items-center justify-center space-y-4 animate-fadeIn">
-            <div className="w-16 h-16 rounded-3xl bg-purple-950/60 text-purple-400 border border-purple-800/50 flex items-center justify-center shadow-inner">
+        ) : displayedReels.length === 0 ? (
+          <div className="w-full h-full flex flex-col items-center justify-center px-6 text-center space-y-4 bg-black animate-fadeIn">
+            <div className="w-16 h-16 rounded-full bg-purple-950/60 text-purple-400 border border-purple-800/50 flex items-center justify-center">
               <Film className="w-8 h-8 text-purple-400" />
             </div>
-            <div className="space-y-1">
-              <h3 className="text-base font-bold text-white">No Reels yet</h3>
-              <p className="text-xs text-slate-400 max-w-xs mx-auto">
-                Be the first creator to share a 90-second AI reel with the METFA Social community!
+            <div className="space-y-1 max-w-xs">
+              <h3 className="text-base font-bold text-white">
+                {searchQuery.trim()
+                  ? `No reels match "${searchQuery.trim()}"`
+                  : feedFilter === 'following'
+                    ? 'No reels from followed creators yet'
+                    : 'No Reels yet'}
+              </h3>
+              <p className="text-xs text-slate-400">
+                {searchQuery.trim()
+                  ? 'Try another keyword or clear your search filter.'
+                  : feedFilter === 'following'
+                    ? 'Follow creators in For You to see their latest Reels here.'
+                    : 'Be the first creator to share a 90-second AI reel with the METFA Social community!'}
               </p>
             </div>
-            <button
-              type="button"
-              onClick={onCreateReelClick}
-              className="px-5 py-2.5 bg-gradient-to-r from-purple-600 to-teal-500 hover:from-purple-500 hover:to-teal-400 text-white text-xs font-bold rounded-2xl shadow-md transition transform active:scale-95 cursor-pointer inline-flex items-center gap-2"
-            >
-              <Plus className="w-4 h-4" />
-              <span>Create First Reel</span>
-            </button>
+            {searchQuery.trim() ? (
+              <button
+                type="button"
+                onClick={() => setSearchQuery('')}
+                className="px-5 py-2.5 bg-white/15 hover:bg-white/25 text-white text-xs font-bold rounded-xl transition cursor-pointer"
+              >
+                Clear Search
+              </button>
+            ) : feedFilter === 'following' ? (
+              <button
+                type="button"
+                onClick={() => setFeedFilter('forYou')}
+                className="px-5 py-2.5 bg-gradient-to-r from-purple-600 to-teal-500 text-white text-xs font-bold rounded-xl transition cursor-pointer"
+              >
+                Explore For You
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={onCreateReelClick}
+                className="px-5 py-2.5 bg-gradient-to-r from-purple-600 to-teal-500 hover:from-purple-500 hover:to-teal-400 text-white text-xs font-bold rounded-xl shadow-md transition transform active:scale-95 cursor-pointer inline-flex items-center gap-2"
+              >
+                <Plus className="w-4 h-4" />
+                <span>Create First Reel</span>
+              </button>
+            )}
           </div>
         ) : (
-          displayedReels.map((reel, idx) => (
-            <div
-              key={reel.id}
-              id={`reel-${reel.id}`}
-              data-testid={`reel-card-${reel.id}`}
-              className={`relative rounded-3xl overflow-hidden bg-black border shadow-2xl aspect-[9/16] flex flex-col justify-between p-4 transition-all duration-300 ${
-                targetReelId === reel.id
-                  ? 'border-teal-400 ring-2 ring-teal-400/60 shadow-teal-500/20'
-                  : 'border-gray-800'
-              }`}
-            >
-            {/* Video Background */}
-            <video
-              ref={(el) => {
-                videoRefs.current[reel.id] = el;
-                const stable = reelVideoRefs.current.get(reel.id);
-                if (stable) stable.current = el;
-              }}
-              src={reel.videoSrc}
-              poster={reel.thumbnailSrc}
-              autoPlay
-              loop
-              muted={isMuted}
-              playsInline
-              className="absolute inset-0 w-full h-full object-cover"
-            />
+          displayedReels.map((reel, idx) => {
+            const isFollowingAuthor =
+              followedAuthorIds.some(
+                (id) =>
+                  id.toLowerCase() === reel.author.id.toLowerCase() ||
+                  id.toLowerCase() === reel.author.username.toLowerCase()
+              ) || isUserFollowed(reel.author.id) || isUserFollowed(reel.author.username);
+            const isOwner = isContentOwner(reel.author.id, userProfile.id);
 
-            {/* Gradient Overlays */}
-            <div className="absolute inset-0 bg-gradient-to-b from-black/60 via-transparent to-black/80 pointer-events-none" />
+            return (
+              <div
+                key={reel.id}
+                id={`reel-${reel.id}`}
+                data-reel-id={reel.id}
+                data-testid={`reel-card-${reel.id}`}
+                className="relative w-full h-full min-h-full snap-start snap-always overflow-hidden bg-black flex flex-col justify-between"
+              >
+                {/* Full-Viewport Edge-to-Edge Video */}
+                <video
+                  ref={(el) => {
+                    videoRefs.current[reel.id] = el;
+                    const stable = reelVideoRefs.current.get(reel.id);
+                    if (stable) stable.current = el;
+                  }}
+                  src={reel.videoSrc}
+                  poster={reel.thumbnailSrc}
+                  autoPlay
+                  loop
+                  muted={isMuted}
+                  playsInline
+                  preload="metadata"
+                  className="absolute inset-0 w-full h-full object-cover bg-black"
+                />
 
-            {/* Top Bar */}
-            <div className="relative z-10 flex items-center justify-between text-xs text-white">
-              <div className="flex items-center gap-2">
-                <span className="px-2.5 py-1 bg-black/60 rounded-full font-bold text-teal-300 border border-white/10 backdrop-blur-md flex items-center gap-1">
-                  <Sparkles className="w-3 h-3 text-teal-400" />
-                  {reel.duration}s Reel
-                </span>
-                {targetReelId === reel.id && (
-                  <span
-                    data-testid={`reel-target-badge-${reel.id}`}
-                    className="px-2 py-0.5 bg-teal-500/20 text-teal-300 border border-teal-500/40 rounded-full text-[10px] font-semibold flex items-center gap-1"
-                  >
-                    Opened from Feed
-                  </span>
-                )}
-              </div>
+                {/* Edge-legibility dark gradients (never blocks touch) */}
+                <div className="absolute inset-0 bg-gradient-to-b from-black/45 via-transparent to-black/75 pointer-events-none" />
 
-              {/* Right controls: Sound Toggle & Context Menu */}
-              <div className="flex items-center gap-2">
-                {/* Visible Sound On / Off Toggle Button */}
-                <button
-                  type="button"
-                  data-testid={`reel-sound-toggle-btn-${reel.id}`}
-                  onClick={(e) => toggleSound(reel.id, e)}
-                  className={`p-1.5 rounded-full backdrop-blur-md border transition cursor-pointer flex items-center justify-center ${
-                    isMuted
-                      ? 'bg-black/60 border-rose-500/50 text-rose-300 hover:bg-black/80'
-                      : 'bg-teal-950/80 border-teal-500/50 text-teal-300 hover:bg-teal-900 shadow-sm shadow-teal-500/20'
-                  }`}
-                  title={isMuted ? 'Unmute Reel Audio' : 'Mute Reel Audio'}
-                  aria-label={isMuted ? 'Unmute Reel Audio' : 'Mute Reel Audio'}
-                >
-                  {isMuted ? (
-                    <VolumeX className="w-4 h-4 text-rose-400" />
-                  ) : (
-                    <Volume2 className="w-4 h-4 text-teal-300 animate-pulse" />
-                  )}
-                </button>
-
-                {/* Reel Action Context Menu */}
-                <div className="relative" data-menu-root="true">
-                  <button
-                    type="button"
-                    id={`reel-menu-btn-${reel.id}`}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      setActiveReelMenuId((prev) => (prev === reel.id ? null : reel.id));
-                    }}
-                    className="p-1.5 rounded-full bg-black/60 hover:bg-black/80 text-white border border-white/10 backdrop-blur-md transition"
-                    title="Reel options"
-                    aria-label="Reel options"
-                  >
-                    <MoreVertical className="w-4 h-4" />
-                  </button>
-
-                {activeReelMenuId === reel.id && (
-                  <div
-                    id={`reel-menu-dropdown-${reel.id}`}
-                    className="absolute right-0 top-full mt-1.5 w-48 bg-white border border-slate-200 rounded-2xl shadow-xl py-1.5 z-30 animate-scaleUp text-xs"
-                    onClick={(e) => e.stopPropagation()}
-                  >
-                    {/* 1. Save Reel / Unsave Reel at top */}
-                    <button
-                      type="button"
-                      id={`save-reel-menu-btn-${reel.id}`}
-                      onClick={() => {
-                        handleToggleSaveReel(reel.id);
-                        setActiveReelMenuId(null);
-                      }}
-                      className="w-full px-3.5 py-2 text-left text-slate-700 hover:text-purple-700 hover:bg-purple-50 flex items-center gap-2.5 transition font-medium cursor-pointer"
-                    >
-                      <Bookmark className={`w-4 h-4 ${reel.isSaved ? 'text-amber-500 fill-amber-500' : 'text-amber-500'}`} />
-                      <span className="font-semibold">{reel.isSaved ? 'Unsave Reel' : 'Save Reel'}</span>
-                    </button>
-
-                    {/* 2. Copy Link */}
-                    <button
-                      type="button"
-                      onClick={() => {
-                        navigator.clipboard.writeText(`${window.location.origin}/#reel-${reel.id}`);
-                        setActiveReelMenuId(null);
-                        showToast('Reel link copied');
-                      }}
-                      className="w-full px-3.5 py-2 text-left text-slate-700 hover:text-slate-900 hover:bg-slate-50 flex items-center gap-2.5 transition cursor-pointer"
-                    >
-                      <Copy className="w-4 h-4 text-teal-600" />
-                      <span>Copy Link</span>
-                    </button>
-
-                    {/* 3. Author Actions vs Non-Author */}
-                    {isContentOwner(reel.author.id, userProfile.id) ? (
-                      <>
-                        <div className="h-px bg-slate-100 my-1" />
-                        <button
-                          type="button"
-                          id={`edit-reel-btn-${reel.id}`}
-                          onClick={() => handleStartEditReel(reel)}
-                          className="w-full px-3.5 py-2 text-left text-purple-700 hover:text-purple-900 hover:bg-purple-50 flex items-center gap-2.5 transition font-medium cursor-pointer"
-                        >
-                          <Edit3 className="w-4 h-4 text-purple-600" />
-                          <span>Edit Caption/Tags</span>
-                        </button>
-
-                        <button
-                          type="button"
-                          id={`delete-reel-btn-${reel.id}`}
-                          onClick={() => handleDeleteReel(reel.id)}
-                          className="w-full px-3.5 py-2 text-left text-rose-600 hover:text-rose-700 hover:bg-rose-50 flex items-center gap-2.5 transition font-medium cursor-pointer"
-                        >
-                          <Trash2 className="w-4 h-4" />
-                          <span>Delete Reel</span>
-                        </button>
-                      </>
-                    ) : (
-                      <>
-                        <div className="h-px bg-slate-100 my-1" />
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setActiveReelMenuId(null);
-                            showToast('Reel reported to moderators');
-                          }}
-                          className="w-full px-3.5 py-2 text-left text-slate-600 hover:text-slate-900 hover:bg-slate-50 flex items-center gap-2.5 transition cursor-pointer"
-                        >
-                          <Flag className="w-4 h-4 text-slate-400" />
-                          <span>Report Content</span>
-                        </button>
-                      </>
+                {/* Top Bar (z-30 stays clickable above tap-reveal layer) — Sound & Context Menu cleanly positioned under Global Overlay Nav */}
+                <div className="relative z-30 flex items-center justify-between pt-14 px-3 sm:px-4 text-xs text-white pointer-events-none">
+                  <div className="flex items-center gap-2 pointer-events-auto">
+                    {targetReelId === reel.id && (
+                      <span
+                        data-testid={`reel-target-badge-${reel.id}`}
+                        className="px-2 py-0.5 bg-teal-500/20 text-teal-300 border border-teal-500/40 rounded-md text-[10px] font-semibold backdrop-blur-xs"
+                      >
+                        From Feed
+                      </span>
                     )}
                   </div>
-                )}
-              </div>
-            </div>
-          </div>
 
-            {/* Advanced Video Controls (Timeline scrubber, 5s/10s skip, sound) */}
-            <div className="relative z-20 w-full mb-3" onClick={(e) => e.stopPropagation()}>
-              <AdvancedVideoControls
-                videoRef={getReelVideoRef(reel.id)}
-                isMuted={isMuted}
-                onToggleMute={(e) => toggleSound(reel.id, e)}
-                title={reel.title}
-                theme="glass"
-              />
-            </div>
+                  {/* Right controls: Sound Toggle & Context Menu */}
+                  <div className="flex items-center gap-2 pointer-events-auto">
+                    <button
+                      type="button"
+                      data-testid={`reel-sound-toggle-btn-${reel.id}`}
+                      onPointerDown={(e) => e.stopPropagation()}
+                      onClick={(e) => toggleSound(reel.id, e)}
+                      className={`w-9 h-9 rounded-full backdrop-blur-md border transition cursor-pointer flex items-center justify-center touch-manipulation ${
+                        isMuted
+                          ? 'bg-black/50 border-rose-500/50 text-rose-300 hover:bg-black/75'
+                          : 'bg-teal-950/75 border-teal-500/50 text-teal-300 hover:bg-teal-900 shadow-sm shadow-teal-500/20'
+                      }`}
+                      title={isMuted ? 'Unmute Reel Audio' : 'Mute Reel Audio'}
+                      aria-label={isMuted ? 'Unmute Reel Audio' : 'Mute Reel Audio'}
+                    >
+                      {isMuted ? (
+                        <VolumeX className="w-4 h-4 text-rose-400" />
+                      ) : (
+                        <Volume2 className="w-4 h-4 text-teal-300" />
+                      )}
+                    </button>
 
-            {/* Bottom Info & Right Actions */}
-            <div className="relative z-10 flex items-end justify-between gap-4">
-              <div className="flex-1 space-y-2">
-                <div className="flex items-center gap-2">
-                  <img
-                    src={reel.author.avatar}
-                    alt={reel.author.name}
-                    loading={idx === 0 ? undefined : 'lazy'}
-                    decoding="async"
-                    className="w-8 h-8 rounded-full border border-white/20 object-cover"
-                  />
-                  <span className="font-bold text-white text-xs">@{reel.author.username}</span>
+                    <div className="relative" data-menu-root="true">
+                      <button
+                        type="button"
+                        id={`reel-menu-btn-${reel.id}`}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setActiveReelMenuId((prev) => (prev === reel.id ? null : reel.id));
+                        }}
+                        className="w-9 h-9 rounded-full bg-black/50 hover:bg-black/75 text-white border border-white/15 backdrop-blur-md transition flex items-center justify-center cursor-pointer"
+                        title="Reel options"
+                        aria-label="Reel options"
+                      >
+                        <MoreVertical className="w-4 h-4" />
+                      </button>
+
+                      {activeReelMenuId === reel.id && (
+                        <div
+                          id={`reel-menu-dropdown-${reel.id}`}
+                          className="absolute right-0 top-full mt-1.5 w-48 bg-white border border-slate-200 rounded-2xl shadow-xl py-1.5 z-40 animate-scaleUp text-xs"
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          <button
+                            type="button"
+                            id={`save-reel-menu-btn-${reel.id}`}
+                            onClick={() => {
+                              handleToggleSaveReel(reel.id);
+                              setActiveReelMenuId(null);
+                            }}
+                            className="w-full px-3.5 py-2 text-left text-slate-700 hover:text-purple-700 hover:bg-purple-50 flex items-center gap-2.5 transition font-medium cursor-pointer"
+                          >
+                            <Bookmark className={`w-4 h-4 ${reel.isSaved ? 'text-amber-500 fill-amber-500' : 'text-amber-500'}`} />
+                            <span className="font-semibold">{reel.isSaved ? 'Unsave Reel' : 'Save Reel'}</span>
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() => {
+                              navigator.clipboard.writeText(`${window.location.origin}/#reel-${reel.id}`);
+                              setActiveReelMenuId(null);
+                              showToast('Reel link copied');
+                            }}
+                            className="w-full px-3.5 py-2 text-left text-slate-700 hover:text-slate-900 hover:bg-slate-50 flex items-center gap-2.5 transition cursor-pointer"
+                          >
+                            <Copy className="w-4 h-4 text-teal-600" />
+                            <span>Copy Link</span>
+                          </button>
+
+                          {isOwner ? (
+                            <>
+                              <div className="h-px bg-slate-100 my-1" />
+                              <button
+                                type="button"
+                                id={`analytics-reel-btn-${reel.id}`}
+                                onClick={() => {
+                                  setActiveReelMenuId(null);
+                                  setInspectingAnalyticsReel(reel);
+                                }}
+                                className="w-full px-3.5 py-2 text-left text-teal-700 hover:text-teal-900 hover:bg-teal-50 flex items-center gap-2.5 transition font-medium cursor-pointer"
+                              >
+                                <TrendingUp className="w-4 h-4 text-teal-600" />
+                                <span>Insights & Analytics</span>
+                              </button>
+
+                              <button
+                                type="button"
+                                id={`edit-reel-btn-${reel.id}`}
+                                onClick={() => handleStartEditReel(reel)}
+                                className="w-full px-3.5 py-2 text-left text-purple-700 hover:text-purple-900 hover:bg-purple-50 flex items-center gap-2.5 transition font-medium cursor-pointer"
+                              >
+                                <Edit3 className="w-4 h-4 text-purple-600" />
+                                <span>Edit Caption/Tags</span>
+                              </button>
+
+                              <button
+                                type="button"
+                                id={`delete-reel-btn-${reel.id}`}
+                                onClick={() => handleDeleteReel(reel.id)}
+                                className="w-full px-3.5 py-2 text-left text-rose-600 hover:text-rose-700 hover:bg-rose-50 flex items-center gap-2.5 transition font-medium cursor-pointer"
+                              >
+                                <Trash2 className="w-4 h-4" />
+                                <span>Delete Reel</span>
+                              </button>
+                            </>
+                          ) : (
+                            <>
+                              <div className="h-px bg-slate-100 my-1" />
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setActiveReelMenuId(null);
+                                  showToast('Reel reported to moderators');
+                                }}
+                                className="w-full px-3.5 py-2 text-left text-slate-600 hover:text-slate-900 hover:bg-slate-50 flex items-center gap-2.5 transition cursor-pointer"
+                              >
+                                <Flag className="w-4 h-4 text-slate-400" />
+                                <span>Report Content</span>
+                              </button>
+                            </>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  </div>
                 </div>
 
-                <h4 className="text-sm font-extrabold text-white leading-tight drop-shadow-md">
-                  {reel.title}
-                </h4>
-                <p className="text-xs text-gray-200 line-clamp-2 leading-relaxed drop-shadow">
-                  {reel.caption}
-                </p>
+                {/* Advanced Video Controls (Reels-only 3 center circular controls, 2X Hold-to-Speed, & Unobstructed Bottom Timeline) */}
+                <div className="absolute inset-0 z-20 pointer-events-none" onClick={(e) => e.stopPropagation()}>
+                  <AdvancedVideoControls
+                    videoRef={getReelVideoRef(reel.id)}
+                    reelId={reel.id}
+                    isMuted={isMuted}
+                    onToggleMute={(e) => toggleSound(reel.id, e)}
+                    title={reel.title}
+                    theme="glass"
+                    variant="reels"
+                  />
+                </div>
 
-                {/* Audio Track Badge */}
-                {reel.musicTrack && (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      const trackString = reel.musicTrack || 'Original Sound';
-                      const allTracks = getAudioTracks();
-                      const match = allTracks.find(
-                        (t) =>
-                          trackString.toLowerCase().includes(t.title.toLowerCase()) ||
-                          t.title.toLowerCase().includes(trackString.toLowerCase())
-                      );
-                      setInspectingAudioTrack(
-                        match ||
-                          reel.audioTrack || {
-                            id: `track_${reel.id}`,
-                            title: trackString.split('•')[0]?.trim() || trackString,
-                            artist: trackString.split('•')[1]?.trim() || 'Metfa Sound Studio',
-                            audio_url: 'https://actions.google.com/sounds/v1/science_fiction/scifi_engine_hum.ogg',
-                            cover_url: reel.thumbnailSrc || 'https://images.unsplash.com/photo-1508700115892-45ecd05ae2ad?w=400&q=80',
-                            duration: reel.duration || 30,
-                            genre: 'Electronic',
-                            mood: 'Energetic',
-                            track_type: 'royalty_free',
-                            license_type: 'Royalty-Free Commercial',
-                            license_source: 'Metfa Audio Catalog',
-                            attribution_required: false,
-                            commercial_use_allowed: true,
-                            territories: ['Worldwide'],
-                            license_start: '2025-01-01T00:00:00.000Z',
-                            license_expiry: null,
-                            status: 'active',
-                          }
-                      );
-                    }}
-                    className="flex items-center gap-1 text-[10px] text-purple-300 hover:text-teal-300 font-mono bg-black/50 hover:bg-black/80 px-2.5 py-1 rounded-full border border-purple-500/30 transition cursor-pointer max-w-full truncate"
-                    title="Inspect audio license & rights certificate"
-                  >
-                    <Music className="w-3 h-3 text-teal-400 shrink-0" />
-                    <span className="truncate">{reel.musicTrack}</span>
-                    <ShieldCheck className="w-3 h-3 text-teal-400 shrink-0 ml-0.5" />
-                  </button>
-                )}
+                {/* Bottom Info & Right Actions (z-30 stays clickable above tap-reveal layer; pb-14 + pointer-events-none keeps bottom timeline 100% unobstructed) */}
+                <div className="relative z-30 pb-14 px-3 sm:px-4 flex items-end justify-between gap-4 pointer-events-none">
+                  {/* Bottom-Left Creator, Caption, Music & Remix Info */}
+                  <div className="flex-1 min-w-0 space-y-1.5 pointer-events-auto">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <button
+                        type="button"
+                        onClick={() => handleCreatorProfileClick(reel.author.id)}
+                        className="flex items-center gap-2 text-left group cursor-pointer"
+                      >
+                        <img
+                          src={reel.author.avatar}
+                          alt={reel.author.name}
+                          loading={idx === 0 ? undefined : 'lazy'}
+                          decoding="async"
+                          className="w-8 h-8 rounded-full border border-white/30 object-cover shrink-0"
+                        />
+                        <span className="font-bold text-white text-xs group-hover:text-teal-300 transition truncate max-w-[160px] drop-shadow">
+                          @{reel.author.username}
+                        </span>
+                        {reel.author.isVerified && (
+                          <ShieldCheck className="w-3.5 h-3.5 text-teal-400 shrink-0" />
+                        )}
+                      </button>
 
-                {reel.promptUsed && (
-                  <button
-                    type="button"
-                    onClick={() => onRemixPrompt(reel.promptUsed || '')}
-                    className="px-3 py-1 bg-white/20 hover:bg-white/30 backdrop-blur-md text-white rounded-xl text-xs font-semibold flex items-center gap-1 transition cursor-pointer"
-                  >
-                    <Repeat className="w-3 h-3" />
-                    <span>Remix Prompt</span>
-                  </button>
-                )}
+                      {!isOwner && (
+                        <button
+                          type="button"
+                          onClick={() => handleFollowToggle(reel.author, reel.id)}
+                          className={`px-2.5 py-0.5 rounded-md text-[10px] font-bold flex items-center gap-1 transition cursor-pointer ${
+                            isFollowingAuthor
+                              ? 'bg-white/20 text-white hover:bg-white/30'
+                              : 'bg-teal-500 text-slate-950 hover:bg-teal-400'
+                          }`}
+                        >
+                          {isFollowingAuthor ? (
+                            <>
+                              <UserCheck className="w-3 h-3" />
+                              <span>Following</span>
+                            </>
+                          ) : (
+                            <>
+                              <UserPlus className="w-3 h-3" />
+                              <span>Follow</span>
+                            </>
+                          )}
+                        </button>
+                      )}
+                    </div>
+
+                    <h4 className="text-sm font-extrabold text-white leading-tight drop-shadow-md line-clamp-1">
+                      {reel.title}
+                    </h4>
+                    {reel.caption && (
+                      <p className="text-xs text-gray-100/90 line-clamp-2 leading-snug drop-shadow">
+                        {reel.caption}
+                      </p>
+                    )}
+
+                    {/* Music Track Info (Clean transparent trigger for AudioLicenseInfoModal) */}
+                    {reel.musicTrack && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const trackString = reel.musicTrack || 'Original Sound';
+                          const allTracks = getAudioTracks();
+                          const match = allTracks.find(
+                            (t) =>
+                              trackString.toLowerCase().includes(t.title.toLowerCase()) ||
+                              t.title.toLowerCase().includes(trackString.toLowerCase())
+                          );
+                          setInspectingAudioTrack(
+                            match ||
+                              reel.audioTrack || {
+                                id: `track_${reel.id}`,
+                                title: trackString.split('•')[0]?.trim() || trackString,
+                                artist: trackString.split('•')[1]?.trim() || 'Metfa Sound Studio',
+                                audio_url: 'https://actions.google.com/sounds/v1/science_fiction/scifi_engine_hum.ogg',
+                                cover_url: reel.thumbnailSrc || 'https://images.unsplash.com/photo-1508700115892-45ecd05ae2ad?w=400&q=80',
+                                duration: reel.duration || 30,
+                                genre: 'Electronic',
+                                mood: 'Energetic',
+                                track_type: 'royalty_free',
+                                license_type: 'Royalty-Free Commercial',
+                                license_source: 'Metfa Audio Catalog',
+                                attribution_required: false,
+                                commercial_use_allowed: true,
+                                territories: ['Worldwide'],
+                                license_start: '2025-01-01T00:00:00.000Z',
+                                license_expiry: null,
+                                status: 'active',
+                              }
+                          );
+                        }}
+                        className="flex items-center gap-1.5 text-[11px] text-white/90 hover:text-teal-300 font-medium transition cursor-pointer max-w-full truncate drop-shadow"
+                        title="Inspect audio license & rights certificate"
+                      >
+                        <Music className="w-3.5 h-3.5 text-teal-400 shrink-0" />
+                        <span className="truncate">{reel.musicTrack}</span>
+                        <ShieldCheck className="w-3 h-3 text-teal-400 shrink-0" />
+                      </button>
+                    )}
+
+                    {reel.promptUsed && (
+                      <button
+                        type="button"
+                        onClick={() => onRemixPrompt(reel.promptUsed || '')}
+                        className="px-2.5 py-1 bg-white/15 hover:bg-white/25 backdrop-blur-xs text-white rounded-lg text-[11px] font-semibold inline-flex items-center gap-1 transition cursor-pointer"
+                      >
+                        <Repeat className="w-3 h-3 text-teal-300" />
+                        <span>Remix Prompt</span>
+                      </button>
+                    )}
+                  </div>
+
+                  {/* Right Vertical Action Column (Like, Comment, Share, Save) */}
+                  <div className="flex flex-col items-center gap-3 shrink-0 pointer-events-auto">
+                    <button
+                      type="button"
+                      data-testid={`reel-like-btn-${reel.id}`}
+                      onClick={() => handleLike(reel.id)}
+                      className="flex flex-col items-center gap-0.5 text-white group cursor-pointer"
+                      aria-label="Like reel"
+                    >
+                      <div
+                        className={`w-11 h-11 rounded-full backdrop-blur-md flex items-center justify-center transition active:scale-90 ${
+                          reel.isLiked ? 'bg-rose-600/90 text-white' : 'bg-black/45 group-hover:bg-black/70'
+                        }`}
+                      >
+                        <Heart className={`w-5 h-5 ${reel.isLiked ? 'fill-current' : ''}`} />
+                      </div>
+                      <span className="text-[11px] font-bold drop-shadow">{reel.likesCount}</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      data-testid={`reel-comment-btn-${reel.id}`}
+                      onClick={() => handleOpenComments(reel)}
+                      className="flex flex-col items-center gap-0.5 text-white group cursor-pointer"
+                      aria-label="Comments"
+                    >
+                      <div className="w-11 h-11 rounded-full bg-black/45 group-hover:bg-black/70 backdrop-blur-md flex items-center justify-center transition active:scale-90">
+                        <MessageCircle className="w-5 h-5" />
+                      </div>
+                      <span className="text-[11px] font-bold drop-shadow">{reel.commentsCount}</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      id={`share-reel-${reel.id}`}
+                      onClick={() => handleShareReel(reel)}
+                      className="flex flex-col items-center gap-0.5 text-white group cursor-pointer"
+                      title="Share Reel"
+                      aria-label="Share Reel"
+                    >
+                      <div className="w-11 h-11 rounded-full bg-black/45 group-hover:bg-black/70 backdrop-blur-md flex items-center justify-center transition group-hover:scale-105 active:scale-90">
+                        <Share2 className="w-5 h-5" />
+                      </div>
+                      <span className="text-[11px] font-bold drop-shadow">{reel.sharesCount}</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      id={`save-reel-btn-${reel.id}`}
+                      onClick={() => handleToggleSaveReel(reel.id)}
+                      className="flex flex-col items-center gap-0.5 text-white group cursor-pointer"
+                      title={reel.isSaved ? 'Unsave Reel' : 'Save Reel'}
+                      aria-label={reel.isSaved ? 'Unsave Reel' : 'Save Reel'}
+                    >
+                      <div
+                        className={`w-11 h-11 rounded-full backdrop-blur-md flex items-center justify-center transition group-hover:scale-105 active:scale-90 ${
+                          reel.isSaved ? 'bg-amber-500 text-white shadow-md shadow-amber-500/40' : 'bg-black/45 group-hover:bg-black/70'
+                        }`}
+                      >
+                        <Bookmark className={`w-5 h-5 ${reel.isSaved ? 'fill-current text-white' : 'text-amber-400'}`} />
+                      </div>
+                      <span className="text-[11px] font-bold text-gray-100 drop-shadow">
+                        {reel.savesCount ?? 0}
+                      </span>
+                    </button>
+                  </div>
+                </div>
               </div>
-
-              {/* Right Action Icons (Like, Comment, Share, Save/Bookmark) */}
-              <div className="flex flex-col items-center gap-3 shrink-0">
-                <button
-                  type="button"
-                  onClick={() => handleLike(reel.id)}
-                  className="flex flex-col items-center gap-1 text-white group cursor-pointer"
-                >
-                  <div
-                    className={`p-2.5 rounded-full backdrop-blur-md transition ${
-                      reel.isLiked ? 'bg-rose-600/90 text-white' : 'bg-black/60 group-hover:bg-black/80'
-                    }`}
-                  >
-                    <Heart className={`w-5 h-5 ${reel.isLiked ? 'fill-current' : ''}`} />
-                  </div>
-                  <span className="text-[10px] font-bold">{reel.likesCount}</span>
-                </button>
-
-                <button
-                  type="button"
-                  className="flex flex-col items-center gap-1 text-white group cursor-pointer"
-                >
-                  <div className="p-2.5 rounded-full bg-black/60 group-hover:bg-black/80 backdrop-blur-md transition">
-                    <MessageCircle className="w-5 h-5" />
-                  </div>
-                  <span className="text-[10px] font-bold">{reel.commentsCount}</span>
-                </button>
-
-                {/* Share Button */}
-                <button
-                  type="button"
-                  id={`share-reel-${reel.id}`}
-                  onClick={() => handleShareReel(reel)}
-                  className="flex flex-col items-center gap-1 text-white group cursor-pointer"
-                  title="Share Reel to Social Media"
-                >
-                  <div className="p-2.5 rounded-full bg-black/60 group-hover:bg-black/80 backdrop-blur-md transition group-hover:scale-105 active:scale-95">
-                    <Share2 className="w-5 h-5" />
-                  </div>
-                  <span className="text-[10px] font-bold">{reel.sharesCount}</span>
-                </button>
-
-                {/* Save / Bookmark Button directly below Share button */}
-                <button
-                  type="button"
-                  id={`save-reel-btn-${reel.id}`}
-                  onClick={() => handleToggleSaveReel(reel.id)}
-                  className="flex flex-col items-center gap-1 text-white group cursor-pointer"
-                  title={reel.isSaved ? 'Unsave Reel' : 'Save Reel'}
-                >
-                  <div
-                    className={`p-2.5 rounded-full backdrop-blur-md transition group-hover:scale-105 active:scale-95 ${
-                      reel.isSaved ? 'bg-amber-500 text-white shadow-md shadow-amber-500/40' : 'bg-black/60 group-hover:bg-black/80'
-                    }`}
-                  >
-                    <Bookmark className={`w-5 h-5 ${reel.isSaved ? 'fill-current text-white' : 'text-amber-400'}`} />
-                  </div>
-                  <span className="text-[10px] font-bold text-gray-200">
-                    {reel.savesCount ?? 0}
-                  </span>
-                </button>
-              </div>
-            </div>
-          </div>
-        )))}
+            );
+          })
+        )}
       </div>
+
+      {/* Real Persistent Comments Bottom Sheet Drawer */}
+      {activeCommentsReel && (
+        <div
+          data-testid="reels-comments-drawer"
+          onClick={() => setActiveCommentsReel(null)}
+          className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-end justify-center animate-fadeIn"
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="w-full max-w-lg max-h-[70dvh] bg-gray-950 border-t border-white/15 rounded-t-3xl flex flex-col overflow-hidden shadow-2xl"
+          >
+            <div className="px-4 py-3 border-b border-white/10 flex items-center justify-between shrink-0">
+              <div className="flex items-center gap-2">
+                <MessageCircle className="w-4 h-4 text-teal-400" />
+                <h3 className="text-xs font-bold text-white">
+                  Comments ({activeCommentsReel.commentsCount || reelComments.length})
+                </h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => setActiveCommentsReel(null)}
+                className="p-1.5 rounded-full text-white/60 hover:text-white hover:bg-white/10 cursor-pointer"
+                aria-label="Close comments"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="flex-1 overflow-y-auto p-4 space-y-3 min-h-[160px]">
+              {isLoadingComments ? (
+                <div className="flex items-center justify-center py-8 text-xs text-slate-400 gap-2">
+                  <Loader2 className="w-4 h-4 animate-spin text-teal-400" />
+                  <span>Loading comments...</span>
+                </div>
+              ) : reelComments.length === 0 ? (
+                <div className="text-center py-8 text-xs text-slate-400">
+                  No comments yet. Be the first to comment!
+                </div>
+              ) : (
+                reelComments.map((comment) => (
+                  <div key={comment.id} className="flex items-start gap-2.5">
+                    <img
+                      src={comment.author.avatar}
+                      alt={comment.author.name}
+                      className="w-7 h-7 rounded-full object-cover border border-white/15 shrink-0"
+                    />
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-1.5 text-[11px]">
+                        <span className="font-bold text-white truncate">{comment.author.name}</span>
+                        <span className="text-slate-400">@{comment.author.username}</span>
+                        <span className="text-slate-500">• {comment.timestamp}</span>
+                      </div>
+                      <p className="text-xs text-slate-200 mt-0.5 break-words">{comment.text}</p>
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+
+            <form
+              onSubmit={handleSubmitComment}
+              className="p-3 border-t border-white/10 bg-black/50 flex items-center gap-2 shrink-0"
+            >
+              <input
+                type="text"
+                value={commentText}
+                onChange={(e) => setCommentText(e.target.value)}
+                placeholder="Add a comment..."
+                className="flex-1 bg-white/10 border border-white/15 rounded-xl px-3 py-2 text-xs text-white placeholder-white/45 focus:outline-none focus:border-teal-400"
+              />
+              <button
+                type="submit"
+                disabled={isSubmittingComment || !commentText.trim()}
+                className="px-3.5 py-2 rounded-xl bg-teal-500 hover:bg-teal-400 disabled:opacity-40 text-slate-950 font-bold text-xs flex items-center gap-1 cursor-pointer transition"
+              >
+                {isSubmittingComment ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Send className="w-3.5 h-3.5" />}
+                <span>Post</span>
+              </button>
+            </form>
+          </div>
+        </div>
+      )}
 
       <Suspense fallback={null}>
         <SocialShareModal
@@ -699,7 +1321,7 @@ export const ReelsFeedView: React.FC<ReelsFeedViewProps> = ({
           className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs animate-fadeIn"
         >
           <div
-            className="w-full max-w-md bg-white border border-slate-200 rounded-3xl p-6 shadow-2xl space-y-4 animate-scaleUp"
+            className="w-full max-w-md bg-white border border-slate-200 rounded-3xl p-6 shadow-2xl space-y-4 animate-scaleUp text-slate-900"
             onClick={(e) => e.stopPropagation()}
           >
             <div className="flex items-center justify-between pb-3 border-b border-slate-100">
@@ -791,9 +1413,20 @@ export const ReelsFeedView: React.FC<ReelsFeedViewProps> = ({
         </Suspense>
       )}
 
+      {/* Unified Reel Analytics Modal */}
+      {inspectingAnalyticsReel && (
+        <Suspense fallback={null}>
+          <ContentAnalyticsModal
+            isOpen={!!inspectingAnalyticsReel}
+            onClose={() => setInspectingAnalyticsReel(null)}
+            content={reelToContentDescriptor(inspectingAnalyticsReel)}
+          />
+        </Suspense>
+      )}
+
       {/* Floating Action Toast Notification */}
       {toastMessage && (
-        <div className="fixed bottom-20 left-1/2 -translate-x-1/2 z-50 bg-gray-900/95 border border-purple-500/50 text-white text-xs px-4 py-2.5 rounded-2xl shadow-2xl backdrop-blur-md flex items-center gap-2 animate-fadeIn">
+        <div className="fixed bottom-16 left-1/2 -translate-x-1/2 z-50 bg-gray-900/95 border border-purple-500/50 text-white text-xs px-4 py-2.5 rounded-2xl shadow-2xl backdrop-blur-md flex items-center gap-2 animate-fadeIn">
           <CheckCircle2 className="w-4 h-4 text-teal-400" />
           <span>{toastMessage}</span>
         </div>

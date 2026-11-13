@@ -1,7 +1,9 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { AlertCircle, Film, Volume2, VolumeX } from 'lucide-react';
 import { CommunityPost } from '../types/community';
 import { AdvancedVideoControls } from './AdvancedVideoControls';
+import { VideoPlaybackSessionTracker } from '../utils/videoTracker';
+import type { TrafficSourceType } from '../utils/contentTracker';
 
 export interface CommunityVideoPlayerProps {
   src?: string;
@@ -10,6 +12,9 @@ export interface CommunityVideoPlayerProps {
   title?: string;
   isReel?: boolean;
   reelId?: string;
+  creatorId?: string;
+  viewerId?: string | null;
+  trafficSource?: TrafficSourceType;
   onOpenReel?: (reelId: string, payload?: { videoSrc?: string; title?: string; currentTime?: number }) => void;
 }
 
@@ -24,12 +29,31 @@ export const CommunityVideoPlayer: React.FC<CommunityVideoPlayerProps> = ({
   title = 'Video',
   isReel = false,
   reelId,
+  creatorId = '',
+  viewerId,
+  trafficSource = 'feed',
   onOpenReel,
 }) => {
   const [hasError, setHasError] = useState(false);
   const [isFeedMuted, setIsFeedMuted] = useState(true);
   const lastNavTimeRef = useRef(0);
   const videoRef = useRef<HTMLVideoElement | null>(null);
+
+  useEffect(() => {
+    const el = videoRef.current;
+    if (!reelId || !src || !el) return;
+    const tracker = new VideoPlaybackSessionTracker({
+      videoId: reelId,
+      videoType: isReel ? 'reel' : 'post_video',
+      creatorId,
+      viewerId,
+      trafficSource,
+    });
+    tracker.attach(el);
+    return () => {
+      tracker.detach();
+    };
+  }, [reelId, src, isReel, creatorId, viewerId, trafficSource]);
 
   // Touch gesture scroll detection to prevent accidental navigation while scrolling on mobile
   const touchStartPosRef = useRef<{ x: number; y: number } | null>(null);
@@ -157,8 +181,8 @@ export const CommunityVideoPlayer: React.FC<CommunityVideoPlayerProps> = ({
         onError={() => setHasError(true)}
       />
 
-      {/* Advanced Playback Controls (Timeline, Scrubber, Skip -10s/-5s/+5s/+10s, Sound, Continuity) */}
-      <div className="absolute inset-x-2 bottom-2 z-30 pointer-events-auto">
+      {/* Advanced Playback Controls (Feed mode: clean without center controls) */}
+      <div className="absolute inset-0 z-30 pointer-events-none">
         <AdvancedVideoControls
           videoRef={videoRef}
           isMuted={isFeedMuted}
@@ -167,6 +191,7 @@ export const CommunityVideoPlayer: React.FC<CommunityVideoPlayerProps> = ({
           reelId={reelId}
           title={title}
           theme="glass"
+          variant="feed"
         />
       </div>
     </div>
@@ -193,6 +218,8 @@ export const CommunityPostCard: React.FC<CommunityPostCardProps> = ({
           src={post.videoSrc}
           poster={post.videoThumbnail || post.imageSrc}
           title={post.videoTitle || post.prompt}
+          isReel={post.postType === 'reel' || Boolean(post.videoSrc)}
+          reelId={post.id}
         />
       ) : post.imageSrc ? (
         <img

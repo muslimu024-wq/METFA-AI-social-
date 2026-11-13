@@ -6,6 +6,7 @@
  */
 
 import { VideoAnalyticsSummary, CreatorInsightsSummary } from '../services/videoAnalyticsEngine';
+import { trackVideoRetentionBucket, TrafficSourceType } from './contentTracker';
 
 export interface VideoSessionPayload {
   videoId: string;
@@ -137,22 +138,26 @@ export class VideoPlaybackSessionTracker {
   private videoType: 'reel' | 'post_video' | 'premium_content';
   private creatorId: string;
   private viewerId?: string | null;
+  private trafficSource: TrafficSourceType;
 
   private isTracking = false;
   private accumulatedWatchSeconds = 0;
   private lastPlayTimestamp: number | null = null;
   private sessionStartedAt: string | null = null;
+  private recordedBuckets = new Set<number>();
 
   constructor(config: {
     videoId: string;
     videoType: 'reel' | 'post_video' | 'premium_content';
     creatorId: string;
     viewerId?: string | null;
+    trafficSource?: TrafficSourceType;
   }) {
     this.videoId = config.videoId;
     this.videoType = config.videoType;
     this.creatorId = config.creatorId;
     this.viewerId = config.viewerId;
+    this.trafficSource = config.trafficSource || (config.videoType === 'reel' ? 'reels' : 'feed');
   }
 
   public attach(videoElement: HTMLVideoElement | null): void {
@@ -168,6 +173,7 @@ export class VideoPlaybackSessionTracker {
     this.videoEl.addEventListener('ended', this.handleEnded);
     this.videoEl.addEventListener('seeking', this.handleSeeking);
     this.videoEl.addEventListener('seeked', this.handleSeeked);
+    this.videoEl.addEventListener('timeupdate', this.handleTimeUpdate);
 
     // If already playing when attached
     if (!this.videoEl.paused && !this.videoEl.seeking) {
@@ -184,10 +190,32 @@ export class VideoPlaybackSessionTracker {
     this.videoEl.removeEventListener('ended', this.handleEnded);
     this.videoEl.removeEventListener('seeking', this.handleSeeking);
     this.videoEl.removeEventListener('seeked', this.handleSeeked);
+    this.videoEl.removeEventListener('timeupdate', this.handleTimeUpdate);
 
     this.videoEl = null;
     this.isTracking = false;
   }
+
+  private handleTimeUpdate = (): void => {
+    if (!this.videoEl || this.videoEl.paused || this.videoEl.seeking) return;
+    const duration = this.videoEl.duration;
+    if (!duration || !isFinite(duration) || duration <= 0) return;
+
+    const ratio = Math.min(0.9999, Math.max(0, this.videoEl.currentTime / duration));
+    const bucketIndex = Math.min(9, Math.max(0, Math.floor(ratio * 10)));
+
+    if (!this.recordedBuckets.has(bucketIndex)) {
+      this.recordedBuckets.add(bucketIndex);
+      trackVideoRetentionBucket({
+        contentId: this.videoId,
+        contentType: this.videoType === 'reel' ? 'reel' : 'video',
+        creatorId: this.creatorId,
+        viewerId: this.viewerId,
+        bucketIndex,
+        trafficSource: this.trafficSource,
+      });
+    }
+  };
 
   private handlePlay = (): void => {
     if (!this.sessionStartedAt) {
@@ -201,6 +229,17 @@ export class VideoPlaybackSessionTracker {
   };
 
   private handleEnded = (): void => {
+    if (!this.recordedBuckets.has(9)) {
+      this.recordedBuckets.add(9);
+      trackVideoRetentionBucket({
+        contentId: this.videoId,
+        contentType: this.videoType === 'reel' ? 'reel' : 'video',
+        creatorId: this.creatorId,
+        viewerId: this.viewerId,
+        bucketIndex: 9,
+        trafficSource: this.trafficSource,
+      });
+    }
     this.accumulateCurrentSegment();
     this.flush();
   };

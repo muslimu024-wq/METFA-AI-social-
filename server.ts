@@ -1,5 +1,5 @@
 declare global { namespace Express { interface Request { v2Auth?: { userId: string; email?: string; roles: string[]; token: string; }; } } }
-var __defProp=Object.defineProperty;var __name=(target,value)=>__defProp(target,"name",{value,configurable:true});import express from"express";import path from"path";import fs from"fs";import crypto from"crypto";import{createServer as createViteServer}from"vite";import{GoogleGenAI}from"@google/genai";import{createClient}from"@supabase/supabase-js";import{checkContentSafety,METFA_AI_SAFETY_SYSTEM_INSTRUCTION}from"./utils/contentSafety";import{v2RevenueEngine}from"./services/v2RevenueEngine";import{v2ContributionEngine}from"./services/v2ContributionEngine";import{v2RewardEngine}from"./services/v2RewardEngine";import{v2WalletEngine}from"./services/v2WalletEngine";import{v2RiskEngine}from"./services/v2RiskEngine";import{v2AdminEngine}from"./services/v2AdminEngine";import{v2PremiumContentEngine}from"./services/v2PremiumContentEngine";import{requireAuth,requireV2Role,getServerSupabaseClient,getPublicSupabaseClient,extractBearerToken,verifySupabaseToken,getVerifiedUserRoles}from"./services/serverAuth";import{videoAnalyticsEngine}from"./services/videoAnalyticsEngine";import{v2IntegrationAdapter}from"./services/v2IntegrationAdapter";async function startServer(){const app=express();const PORT=Number(process.env.DEFAULT_APP_PORT)||3000;app.set("trust proxy",1);app.use((req,res,next)=>{res.setHeader("X-Content-Type-Options","nosniff");res.setHeader("X-XSS-Protection","1; mode=block");res.setHeader("Referrer-Policy","strict-origin-when-cross-origin");const origin=req.headers.origin;if(origin){res.setHeader("Access-Control-Allow-Origin",origin);res.setHeader("Access-Control-Allow-Credentials","true");res.setHeader("Access-Control-Allow-Methods","GET, POST, PUT, DELETE, OPTIONS");res.setHeader("Access-Control-Allow-Headers","Content-Type, Authorization, X-Requested-With, Accept")}else{res.setHeader("Access-Control-Allow-Origin","*")}if(req.method==="OPTIONS"){return res.sendStatus(204)}if(process.env.NODE_ENV==="production"){const canonicalDomain=process.env.CANONICAL_DOMAIN?.trim();const forceHttps=process.env.FORCE_HTTPS==="true"||process.env.FORCE_HTTPS==="1";const isHttp=req.headers["x-forwarded-proto"]==="http";const currentHost=(req.headers.host||"").toLowerCase();if(canonicalDomain&&currentHost&&currentHost!==canonicalDomain.toLowerCase()){return res.redirect(301,`https://${canonicalDomain}${req.originalUrl||req.url}`)}if(forceHttps&&isHttp){return res.redirect(301,`https://${req.headers.host}${req.originalUrl||req.url}`)}if(req.secure||req.headers["x-forwarded-proto"]==="https"){res.setHeader("Strict-Transport-Security","max-age=31536000; includeSubDomains; preload")}}next()});app.use(express.json({limit:"50mb"}));app.use(express.urlencoded({limit:"50mb",extended:true}));const sanitizeApiKey=__name(key=>{if(!key||typeof key!=="string")return null;const trimmed=key.trim();if(!trimmed||trimmed==="undefined"||trimmed==="null"||trimmed==="[object Object]"||trimmed.toLowerCase().includes("placeholder")||trimmed==="..."||trimmed==="sk-..."||trimmed==="AIzaSy..."||trimmed==="xai-..."||trimmed.length<4){return null}return trimmed},"sanitizeApiKey");const sanitizeErrorMessage=__name(msg=>{if(typeof msg!=="string")msg=msg?.message||"Internal server error";return String(msg).replace(/AIzaSy[A-Za-z0-9_-]+/g,"[REDACTED_API_KEY]").replace(/sk-[A-Za-z0-9_-]+/g,"[REDACTED_API_KEY]").replace(/xai-[A-Za-z0-9_-]+/g,"[REDACTED_API_KEY]").replace(/eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/g,"[REDACTED_TOKEN]")},"sanitizeErrorMessage");const isValidGeminiApiKey=__name(key=>{return Boolean(sanitizeApiKey(key))},"isValidGeminiApiKey");const getGeminiApiKey=__name((customKey,req)=>{const direct=sanitizeApiKey(customKey);if(direct)return direct;if(req?.body){const fromBody=sanitizeApiKey(req.body.geminiApiKey||req.body.settings?.geminiApiKey);if(fromBody)return fromBody}if(req?.headers){const fromHeader=sanitizeApiKey(req.headers["x-gemini-api-key"]);if(fromHeader)return fromHeader}const envKey=sanitizeApiKey(process.env.GEMINI_API_KEY)||sanitizeApiKey(process.env.API_KEY)||sanitizeApiKey(process.env.GOOGLE_API_KEY)||sanitizeApiKey(process.env.GOOGLE_GENAI_API_KEY)||sanitizeApiKey(process.env.VITE_GEMINI_API_KEY);if(envKey)return envKey;return null},"getGeminiApiKey");const getOpenAiApiKey=__name((customKey,req)=>{const direct=sanitizeApiKey(customKey);if(direct)return direct;if(req?.body){const fromBody=sanitizeApiKey(req.body.openaiApiKey||req.body.settings?.openaiApiKey);if(fromBody)return fromBody}if(req?.headers){const fromHeader=sanitizeApiKey(req.headers["x-openai-api-key"]);if(fromHeader)return fromHeader}const envKey=sanitizeApiKey(process.env.OPENAI_API_KEY)||sanitizeApiKey(process.env.VITE_OPENAI_API_KEY);if(envKey)return envKey;return null},"getOpenAiApiKey");const getXaiApiKey=__name((customKey,req)=>{const direct=sanitizeApiKey(customKey);if(direct)return direct;if(req?.body){const fromBody=sanitizeApiKey(req.body.grokApiKey||req.body.xaiApiKey||req.body.settings?.grokApiKey||req.body.settings?.xaiApiKey);if(fromBody)return fromBody}if(req?.headers){const fromHeader=sanitizeApiKey(req.headers["x-grok-api-key"]||req.headers["x-xai-api-key"]);if(fromHeader)return fromHeader}const envKey=sanitizeApiKey(process.env.XAI_API_KEY)||sanitizeApiKey(process.env.GROK_API_KEY)||sanitizeApiKey(process.env.VITE_XAI_API_KEY);if(envKey)return envKey;return null},"getXaiApiKey");const getAiClient=__name((customKey,req)=>{const rawKey=getGeminiApiKey(customKey,req);if(rawKey){return new GoogleGenAI({apiKey:rawKey,httpOptions:{headers:{"User-Agent":"aistudio-build"}}})}return null},"getAiClient");function withTimeout(promise,ms,modelName){let timer;const timeoutPromise=new Promise((_,reject)=>{timer=setTimeout(()=>{const err=new Error(`Request to model "${modelName}" timed out after ${ms}ms.`);err.name="TimeoutError";err.code="ETIMEDOUT";err.status=503;reject(err)},ms)});return Promise.race([promise,timeoutPromise]).finally(()=>{clearTimeout(timer)})}__name(withTimeout,"withTimeout");function cleanErrorMessage(rawMsg){if(!rawMsg)return"AI service encountered a temporary issue. Please try again.";if(rawMsg.includes("limit: 0")||rawMsg.includes("generate_content_free_tier")||rawMsg.includes("429")&&rawMsg.includes("quota")&&rawMsg.includes("image")){return"Direct AI image generation requires a Gemini API key with billing enabled, as image models have a quota limit of 0 on Google's free tier."}if(rawMsg.includes("429")||rawMsg.includes("RESOURCE_EXHAUSTED")||rawMsg.includes("quota")){return"The AI service reached its rate limit. Please wait a few moments and click Try Again."}if(rawMsg.includes("503")||rawMsg.includes("high demand")||rawMsg.includes("overloaded")||rawMsg.includes("unavailable")){return"Google Gemini models are currently experiencing high demand. Please try again in a few moments."}try{const match=rawMsg.match(/\{"error":\s*(\{.*?\})\s*\}/s);if(match){const parsed=JSON.parse(match[0]);if(parsed?.error?.message){return cleanErrorMessage(parsed.error.message)}}}catch{}return rawMsg.replace(/\{"error":\{.*?\}\}/gs,"").trim()||rawMsg}__name(cleanErrorMessage,"cleanErrorMessage");async function generateContentWithFallback(ai,options){const timeoutMs=options.timeoutMs??18e3;const errors=[];const validModels=options.models.map(m=>{if(!m||typeof m!=="string")return"gemini-3.8-flash";if(m==="gemini-3.7-flash"||m==="gemini-3.6-flash"||m==="gemini-2.5-flash"||m==="gemini-2.0-flash")return"gemini-3.8-flash";if(m==="gemini-2.5-flash-lite"||m==="gemini-2.0-flash-lite")return"gemini-3.1-flash-lite";if(!m.startsWith("gemini-")&&!m.startsWith("veo-")&&!m.startsWith("lyria-")&&!m.startsWith("imagen-")){return"gemini-3.8-flash"}return m}).filter((m,idx,arr)=>arr.indexOf(m)===idx);const isImageTask=validModels[0]?.includes("-image");if(!isImageTask){const standardFallbackChain=["gemini-3.8-flash","gemini-3.1-flash-lite","gemini-flash-latest"];for(const modelName of standardFallbackChain){if(!validModels.includes(modelName)){validModels.push(modelName)}}}let activeAi=ai;let attemptedEnvFallback=false;for(let i=0;i<validModels.length;i++){const model=validModels[i];const isLast=i===validModels.length-1;const startTime=Date.now();try{console.log(`[Gemini API] Invoking model "${model}" (attempt ${i+1}/${validModels.length}, timeout ${timeoutMs}ms)...`);const response=await withTimeout(activeAi.models.generateContent({model,contents:options.contents,config:options.config}),timeoutMs,model);const latencyMs=Date.now()-startTime;console.log(`[Gemini API] Successfully generated with "${model}" in ${latencyMs}ms (fallback: ${i>0})`);return{response,modelUsed:model,isFallback:i>0,attemptNumber:i+1,latencyMs}}catch(err){const durationMs=Date.now()-startTime;const errMsg=err?.message||String(err);const errCode=err?.code||(err?.name==="TimeoutError"?"TIMEOUT_EXCEEDED":err?.status||"503");console.log(`[Gemini API] Model "${model}" failover triggered (${durationMs}ms): ${cleanErrorMessage(errMsg).slice(0,100)}`);errors.push({model,error:errMsg,code:String(errCode),durationMs});if(isImageTask&&(errMsg.includes("limit: 0")||errMsg.includes("free_tier")||errMsg.includes("RESOURCE_EXHAUSTED"))){const quotaErr=new Error("Direct AI image generation requires a Gemini API key with billing enabled, as image models have a quota limit of 0 on Google's free tier.");quotaErr.isImageQuotaExceeded=true;quotaErr.status=429;throw quotaErr}if(errMsg.includes("API_KEY_INVALID")||errMsg.includes("API key not valid")||errMsg.includes("ACCESS_TOKEN_TYPE_UNSUPPORTED")||errMsg.includes("UNAUTHENTICATED")||err?.status===400||err?.status===401){const validEnvKey=isValidGeminiApiKey(process.env.GEMINI_API_KEY)&&process.env.GEMINI_API_KEY?.trim()||isValidGeminiApiKey(process.env.VITE_GEMINI_API_KEY)&&process.env.VITE_GEMINI_API_KEY?.trim();if(!attemptedEnvFallback&&validEnvKey){console.log("[Gemini API] Key authentication error. Switching to system GEMINI_API_KEY...");attemptedEnvFallback=true;activeAi=new GoogleGenAI({apiKey:validEnvKey,httpOptions:{headers:{"User-Agent":"aistudio-build"}}});i--;continue}else{throw new Error(`Gemini authentication error: ${cleanErrorMessage(errMsg)}`)}}if(errMsg.includes("503")||errMsg.includes("high demand")||errMsg.includes("429")||errMsg.includes("quota")){const backoffDelay=Math.min(800+Math.floor(Math.random()*400),1500);await new Promise(resolve=>setTimeout(resolve,backoffDelay))}if(isLast){console.error(`[Gemini API] All fallback models exhausted for request.`);const userFriendlyError=new Error(cleanErrorMessage(errMsg));userFriendlyError.allErrors=errors;userFriendlyError.status=err?.status===429?429:err?.status===503?503:500;throw userFriendlyError}const nextModel=validModels[i+1];console.log(`[Gemini API] Automatically switching to fallback model "${nextModel}"...`)}}throw new Error("Failed to generate response after all retry attempts.")}__name(generateContentWithFallback,"generateContentWithFallback");async function executeGrok(prompt,attachments=[],settings={},req){const apiKey=getXaiApiKey(settings?.grokApiKey||settings?.xaiApiKey,req);if(!apiKey){throw new Error("xAI Grok API key is not configured.")}const startTime=Date.now();const hasImages=Array.isArray(attachments)&&attachments.some(a=>a.type==="image"&&a.base64);const candidateModels=hasImages?["grok-2-vision-1212","grok-vision-beta"]:settings?.model&&settings.model!=="grok-2-latest"?[settings.model,"grok-2-1212","grok-2","grok-beta","grok-3"]:["grok-2-1212","grok-2","grok-beta","grok-3"];const messages=[{role:"system",content:`You are Metfa Social Assistant powered by xAI Grok. Universal Multilingual Policy: Automatically detect the user's language (Bengali, Hindi, Tagalog, Malay, Arabic, Spanish, French, English, etc.) and ALWAYS reply fluently in that exact same language. Provide insightful, structured, and helpful responses.
+var __defProp=Object.defineProperty;var __name=(target,value)=>__defProp(target,"name",{value,configurable:true});import express from"express";import path from"path";import fs from"fs";import crypto from"crypto";import{createServer as createViteServer}from"vite";import{GoogleGenAI}from"@google/genai";import{createClient}from"@supabase/supabase-js";import{checkContentSafety,METFA_AI_SAFETY_SYSTEM_INSTRUCTION}from"./utils/contentSafety";import{v2RevenueEngine}from"./services/v2RevenueEngine";import{v2ContributionEngine}from"./services/v2ContributionEngine";import{v2RewardEngine}from"./services/v2RewardEngine";import{v2WalletEngine}from"./services/v2WalletEngine";import{v2RiskEngine}from"./services/v2RiskEngine";import{v2AdminEngine}from"./services/v2AdminEngine";import{v2PremiumContentEngine}from"./services/v2PremiumContentEngine";import{requireAuth,requireV2Role,getServerSupabaseClient,getPublicSupabaseClient,extractBearerToken,verifySupabaseToken,getVerifiedUserRoles}from"./services/serverAuth";import{videoAnalyticsEngine}from"./services/videoAnalyticsEngine";import{v2IntegrationAdapter}from"./services/v2IntegrationAdapter";import{contentAnalyticsEngine,type ContentCatalogDescriptor,type ContentFilterType,type AnalyticsDateRange,type AIInsightItem}from"./services/contentAnalyticsEngine";async function startServer(){const app=express();const PORT=Number(process.env.DEFAULT_APP_PORT)||3000;app.set("trust proxy",1);app.use((req,res,next)=>{res.setHeader("X-Content-Type-Options","nosniff");res.setHeader("X-XSS-Protection","1; mode=block");res.setHeader("Referrer-Policy","strict-origin-when-cross-origin");const origin=req.headers.origin;if(origin){res.setHeader("Access-Control-Allow-Origin",origin);res.setHeader("Access-Control-Allow-Credentials","true");res.setHeader("Access-Control-Allow-Methods","GET, POST, PUT, DELETE, OPTIONS");res.setHeader("Access-Control-Allow-Headers","Content-Type, Authorization, X-Requested-With, Accept")}else{res.setHeader("Access-Control-Allow-Origin","*")}if(req.method==="OPTIONS"){return res.sendStatus(204)}if(process.env.NODE_ENV==="production"){const canonicalDomain=process.env.CANONICAL_DOMAIN?.trim();const forceHttps=process.env.FORCE_HTTPS==="true"||process.env.FORCE_HTTPS==="1";const isHttp=req.headers["x-forwarded-proto"]==="http";const currentHost=(req.headers.host||"").toLowerCase();if(canonicalDomain&&currentHost&&currentHost!==canonicalDomain.toLowerCase()){return res.redirect(301,`https://${canonicalDomain}${req.originalUrl||req.url}`)}if(forceHttps&&isHttp){return res.redirect(301,`https://${req.headers.host}${req.originalUrl||req.url}`)}if(req.secure||req.headers["x-forwarded-proto"]==="https"){res.setHeader("Strict-Transport-Security","max-age=31536000; includeSubDomains; preload")}}next()});app.use(express.json({limit:"50mb"}));app.use(express.urlencoded({limit:"50mb",extended:true}));const sanitizeApiKey=__name(key=>{if(!key||typeof key!=="string")return null;const trimmed=key.trim();if(!trimmed||trimmed==="undefined"||trimmed==="null"||trimmed==="[object Object]"||trimmed.toLowerCase().includes("placeholder")||trimmed==="..."||trimmed==="sk-..."||trimmed==="AIzaSy..."||trimmed==="xai-..."||trimmed.length<4){return null}return trimmed},"sanitizeApiKey");const sanitizeErrorMessage=__name(msg=>{if(typeof msg!=="string")msg=msg?.message||"Internal server error";return String(msg).replace(/AIzaSy[A-Za-z0-9_-]+/g,"[REDACTED_API_KEY]").replace(/sk-[A-Za-z0-9_-]+/g,"[REDACTED_API_KEY]").replace(/xai-[A-Za-z0-9_-]+/g,"[REDACTED_API_KEY]").replace(/eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/g,"[REDACTED_TOKEN]")},"sanitizeErrorMessage");const isValidGeminiApiKey=__name(key=>{return Boolean(sanitizeApiKey(key))},"isValidGeminiApiKey");const getGeminiApiKey=__name((customKey,req)=>{const direct=sanitizeApiKey(customKey);if(direct)return direct;if(req?.body){const fromBody=sanitizeApiKey(req.body.geminiApiKey||req.body.settings?.geminiApiKey);if(fromBody)return fromBody}if(req?.headers){const fromHeader=sanitizeApiKey(req.headers["x-gemini-api-key"]);if(fromHeader)return fromHeader}const envKey=sanitizeApiKey(process.env.GEMINI_API_KEY)||sanitizeApiKey(process.env.API_KEY)||sanitizeApiKey(process.env.GOOGLE_API_KEY)||sanitizeApiKey(process.env.GOOGLE_GENAI_API_KEY)||sanitizeApiKey(process.env.VITE_GEMINI_API_KEY);if(envKey)return envKey;return null},"getGeminiApiKey");const getOpenAiApiKey=__name((customKey,req)=>{const direct=sanitizeApiKey(customKey);if(direct)return direct;if(req?.body){const fromBody=sanitizeApiKey(req.body.openaiApiKey||req.body.settings?.openaiApiKey);if(fromBody)return fromBody}if(req?.headers){const fromHeader=sanitizeApiKey(req.headers["x-openai-api-key"]);if(fromHeader)return fromHeader}const envKey=sanitizeApiKey(process.env.OPENAI_API_KEY)||sanitizeApiKey(process.env.VITE_OPENAI_API_KEY);if(envKey)return envKey;return null},"getOpenAiApiKey");const getXaiApiKey=__name((customKey,req)=>{const direct=sanitizeApiKey(customKey);if(direct)return direct;if(req?.body){const fromBody=sanitizeApiKey(req.body.grokApiKey||req.body.xaiApiKey||req.body.settings?.grokApiKey||req.body.settings?.xaiApiKey);if(fromBody)return fromBody}if(req?.headers){const fromHeader=sanitizeApiKey(req.headers["x-grok-api-key"]||req.headers["x-xai-api-key"]);if(fromHeader)return fromHeader}const envKey=sanitizeApiKey(process.env.XAI_API_KEY)||sanitizeApiKey(process.env.GROK_API_KEY)||sanitizeApiKey(process.env.VITE_XAI_API_KEY);if(envKey)return envKey;return null},"getXaiApiKey");const getAiClient=__name((customKey,req)=>{const rawKey=getGeminiApiKey(customKey,req);if(rawKey){return new GoogleGenAI({apiKey:rawKey,httpOptions:{headers:{"User-Agent":"aistudio-build"}}})}return null},"getAiClient");function withTimeout(promise,ms,modelName){let timer;const timeoutPromise=new Promise((_,reject)=>{timer=setTimeout(()=>{const err=new Error(`Request to model "${modelName}" timed out after ${ms}ms.`);err.name="TimeoutError";err.code="ETIMEDOUT";err.status=503;reject(err)},ms)});return Promise.race([promise,timeoutPromise]).finally(()=>{clearTimeout(timer)})}__name(withTimeout,"withTimeout");function cleanErrorMessage(rawMsg){if(!rawMsg)return"AI service encountered a temporary issue. Please try again.";if(rawMsg.includes("limit: 0")||rawMsg.includes("generate_content_free_tier")||rawMsg.includes("429")&&rawMsg.includes("quota")&&rawMsg.includes("image")){return"Direct AI image generation requires a Gemini API key with billing enabled, as image models have a quota limit of 0 on Google's free tier."}if(rawMsg.includes("429")||rawMsg.includes("RESOURCE_EXHAUSTED")||rawMsg.includes("quota")){return"The AI service reached its rate limit. Please wait a few moments and click Try Again."}if(rawMsg.includes("503")||rawMsg.includes("high demand")||rawMsg.includes("overloaded")||rawMsg.includes("unavailable")){return"Google Gemini models are currently experiencing high demand. Please try again in a few moments."}try{const match=rawMsg.match(/\{"error":\s*(\{.*?\})\s*\}/s);if(match){const parsed=JSON.parse(match[0]);if(parsed?.error?.message){return cleanErrorMessage(parsed.error.message)}}}catch{}return rawMsg.replace(/\{"error":\{.*?\}\}/gs,"").trim()||rawMsg}__name(cleanErrorMessage,"cleanErrorMessage");async function generateContentWithFallback(ai,options){const timeoutMs=options.timeoutMs??18e3;const errors=[];const validModels=options.models.map(m=>{if(!m||typeof m!=="string")return"gemini-3.8-flash";if(m==="gemini-3.7-flash"||m==="gemini-3.6-flash"||m==="gemini-2.5-flash"||m==="gemini-2.0-flash")return"gemini-3.8-flash";if(m==="gemini-2.5-flash-lite"||m==="gemini-2.0-flash-lite")return"gemini-3.1-flash-lite";if(!m.startsWith("gemini-")&&!m.startsWith("veo-")&&!m.startsWith("lyria-")&&!m.startsWith("imagen-")){return"gemini-3.8-flash"}return m}).filter((m,idx,arr)=>arr.indexOf(m)===idx);const isImageTask=validModels[0]?.includes("-image");if(!isImageTask){const standardFallbackChain=["gemini-3.8-flash","gemini-3.1-flash-lite","gemini-flash-latest"];for(const modelName of standardFallbackChain){if(!validModels.includes(modelName)){validModels.push(modelName)}}}let activeAi=ai;let attemptedEnvFallback=false;for(let i=0;i<validModels.length;i++){const model=validModels[i];const isLast=i===validModels.length-1;const startTime=Date.now();try{console.log(`[Gemini API] Invoking model "${model}" (attempt ${i+1}/${validModels.length}, timeout ${timeoutMs}ms)...`);const response=await withTimeout(activeAi.models.generateContent({model,contents:options.contents,config:options.config}),timeoutMs,model);const latencyMs=Date.now()-startTime;console.log(`[Gemini API] Successfully generated with "${model}" in ${latencyMs}ms (fallback: ${i>0})`);return{response,modelUsed:model,isFallback:i>0,attemptNumber:i+1,latencyMs}}catch(err){const durationMs=Date.now()-startTime;const errMsg=err?.message||String(err);const errCode=err?.code||(err?.name==="TimeoutError"?"TIMEOUT_EXCEEDED":err?.status||"503");console.log(`[Gemini API] Model "${model}" failover triggered (${durationMs}ms): ${cleanErrorMessage(errMsg).slice(0,100)}`);errors.push({model,error:errMsg,code:String(errCode),durationMs});if(isImageTask&&(errMsg.includes("limit: 0")||errMsg.includes("free_tier")||errMsg.includes("RESOURCE_EXHAUSTED"))){const quotaErr=new Error("Direct AI image generation requires a Gemini API key with billing enabled, as image models have a quota limit of 0 on Google's free tier.");quotaErr.isImageQuotaExceeded=true;quotaErr.status=429;throw quotaErr}if(errMsg.includes("API_KEY_INVALID")||errMsg.includes("API key not valid")||errMsg.includes("ACCESS_TOKEN_TYPE_UNSUPPORTED")||errMsg.includes("UNAUTHENTICATED")||err?.status===400||err?.status===401){const validEnvKey=isValidGeminiApiKey(process.env.GEMINI_API_KEY)&&process.env.GEMINI_API_KEY?.trim()||isValidGeminiApiKey(process.env.VITE_GEMINI_API_KEY)&&process.env.VITE_GEMINI_API_KEY?.trim();if(!attemptedEnvFallback&&validEnvKey){console.log("[Gemini API] Key authentication error. Switching to system GEMINI_API_KEY...");attemptedEnvFallback=true;activeAi=new GoogleGenAI({apiKey:validEnvKey,httpOptions:{headers:{"User-Agent":"aistudio-build"}}});i--;continue}else{throw new Error(`Gemini authentication error: ${cleanErrorMessage(errMsg)}`)}}if(errMsg.includes("503")||errMsg.includes("high demand")||errMsg.includes("429")||errMsg.includes("quota")){const backoffDelay=Math.min(800+Math.floor(Math.random()*400),1500);await new Promise(resolve=>setTimeout(resolve,backoffDelay))}if(isLast){console.error(`[Gemini API] All fallback models exhausted for request.`);const userFriendlyError=new Error(cleanErrorMessage(errMsg));userFriendlyError.allErrors=errors;userFriendlyError.status=err?.status===429?429:err?.status===503?503:500;throw userFriendlyError}const nextModel=validModels[i+1];console.log(`[Gemini API] Automatically switching to fallback model "${nextModel}"...`)}}throw new Error("Failed to generate response after all retry attempts.")}__name(generateContentWithFallback,"generateContentWithFallback");async function executeGrok(prompt,attachments=[],settings={},req){const apiKey=getXaiApiKey(settings?.grokApiKey||settings?.xaiApiKey,req);if(!apiKey){throw new Error("xAI Grok API key is not configured.")}const startTime=Date.now();const hasImages=Array.isArray(attachments)&&attachments.some(a=>a.type==="image"&&a.base64);const candidateModels=hasImages?["grok-2-vision-1212","grok-vision-beta"]:settings?.model&&settings.model!=="grok-2-latest"?[settings.model,"grok-2-1212","grok-2","grok-beta","grok-3"]:["grok-2-1212","grok-2","grok-beta","grok-3"];const messages=[{role:"system",content:`You are Metfa Social Assistant powered by xAI Grok. Universal Multilingual Policy: Automatically detect the user's language (Bengali, Hindi, Tagalog, Malay, Arabic, Spanish, French, English, etc.) and ALWAYS reply fluently in that exact same language. Provide insightful, structured, and helpful responses.
 
 ${METFA_AI_SAFETY_SYSTEM_INSTRUCTION}`}];if(hasImages){const userContent=[];attachments.forEach(att=>{if(att.type==="image"&&att.base64){const mime=att.mimeType||"image/png";userContent.push({type:"image_url",image_url:{url:`data:${mime};base64,${att.base64}`}})}});userContent.push({type:"text",text:prompt||"Analyze this image and provide insights."});messages.push({role:"user",content:userContent})}else{messages.push({role:"user",content:prompt||"Hello"})}let lastError=null;for(const model of candidateModels){try{const res=await fetch("https://api.x.ai/v1/chat/completions",{method:"POST",headers:{"Content-Type":"application/json",Authorization:`Bearer ${apiKey}`},body:JSON.stringify({model,messages,temperature:Math.min(Math.max(typeof settings?.temperature==="number"?settings.temperature:.7,0),1)})});if(!res.ok){const errText=await res.text().catch(()=>"");let errMsg=`xAI API returned status ${res.status}`;try{const errJson=JSON.parse(errText);errMsg=errJson?.error?.message||errJson?.error||errJson?.message||errText}catch{errMsg=errText||errMsg}if(res.status===400||res.status===404){lastError=new Error(`xAI Grok error (${res.status}): ${errMsg}`);continue}throw new Error(`xAI Grok error (${res.status}): ${errMsg}`)}const data=await res.json();const latencyMs=Date.now()-startTime;const text=data.choices?.[0]?.message?.content||"No response generated from Grok.";return{text,isImageGeneration:false,modelUsed:data.model||model,latencyMs}}catch(err){lastError=err;if(err?.message?.includes("401")||err?.message?.includes("403")){throw err}}}throw lastError||new Error("Failed to execute xAI Grok request across all candidate models.")}__name(executeGrok,"executeGrok");async function executeOpenAI(prompt,attachments=[],settings={},req){const apiKey=getOpenAiApiKey(settings?.openaiApiKey,req);if(!apiKey){throw new Error("OpenAI API key is not configured.")}const startTime=Date.now();const hasImages=Array.isArray(attachments)&&attachments.some(a=>a.type==="image"&&a.base64);const model=settings?.model&&(settings.model.startsWith("gpt-")||settings.model.startsWith("o3-"))?settings.model:"gpt-4o";const messages=[{role:"system",content:`You are Metfa Social Assistant powered by OpenAI ChatGPT. Universal Multilingual Policy: Automatically detect the user's language (Bengali, Hindi, Tagalog, Malay, Arabic, Spanish, French, English, etc.) and ALWAYS reply fluently in that exact same language. Provide insightful, structured, multimodal-friendly responses.
 
@@ -732,6 +732,338 @@ app.get("/api/analytics/creator/:creatorId", (req, res) => {
 // Video Analytics Real-Data Verification Tests (Disabled in production)
 app.get("/api/analytics/run-tests", (_req, res) => {
   res.status(404).json({ error: "Endpoint disabled in production environment." });
+});
+
+// =====================================================================
+// UNIFIED MULTI-CONTENT CREATOR STUDIO ANALYTICS (ALL 5 FORMATS)
+// =====================================================================
+
+function sanitizeInsightsForScope(items: AIInsightItem[], scope: ContentFilterType): AIInsightItem[] {
+  const VIDEO_ONLY_TERMS = /\b(watch time|playback|retention curve|video completion|average watch|play time|drop-off second)\b/i;
+  return items
+    .filter((item) => item && typeof item.title === "string" && typeof item.detail === "string")
+    .filter((item) => {
+      if (scope === "image" || scope === "carousel" || scope === "text") {
+        const combined = `${item.category} ${item.title} ${item.detail} ${item.actionableStep} ${item.basedOnMetric}`;
+        return !VIDEO_ONLY_TERMS.test(combined);
+      }
+      return true;
+    })
+    .map((item, idx) => ({
+      id: item.id || `ai_${scope}_${idx}_${Date.now()}`,
+      contentTypeScope: scope,
+      priority: item.priority === "high" || item.priority === "medium" || item.priority === "info" ? item.priority : "medium",
+      category: String(item.category || "Performance Insight").slice(0, 64),
+      title: String(item.title).slice(0, 120),
+      detail: String(item.detail).slice(0, 320),
+      actionableStep: String(item.actionableStep || "").slice(0, 260),
+      basedOnMetric: String(item.basedOnMetric || "Verified telemetry").slice(0, 100),
+    }));
+}
+
+function persistentPostToDescriptor(p: any): ContentCatalogDescriptor {
+  return {
+    id: String(p.id),
+    postType: p.postType || p.post_type,
+    feedType: p.feedType || p.feed_type,
+    videoSrc: p.videoSrc || p.video_src,
+    imageSrc: p.imageSrc || p.image_src,
+    imageGallery: Array.isArray(p.imageGallery || p.image_gallery) ? (p.imageGallery || p.image_gallery) : undefined,
+    textBackgroundPreset: p.textBackgroundPreset || p.text_background_preset,
+    title: p.videoTitle || p.video_title || p.caption || p.prompt,
+    caption: p.caption,
+    prompt: p.prompt,
+    thumbnailUrl: p.videoThumbnail || p.video_thumbnail || p.imageSrc || p.image_src,
+    videoThumbnail: p.videoThumbnail || p.video_thumbnail,
+    creatorId: String(p.author?.id || p.author_id || p.userId || ""),
+    createdAtLabel: p.createdAt || "Recently",
+    createdAtIso: p.createdAtIso || p.created_at || p.updatedAt,
+    likesCount: Number(p.likesCount ?? p.likes_count) || 0,
+    commentsCount: Number(p.commentsCount ?? p.comments_count) || 0,
+    sharesCount: Number(p.sharesCount ?? p.shares_count) || 0,
+    savesCount: p.isBookmarked ? 1 : 0,
+    isBookmarked: Boolean(p.isBookmarked),
+    reactionCounts: p.reactionCounts,
+  };
+}
+
+// Record verified multi-content telemetry event
+app.post("/api/analytics/content/event", async (req, res) => {
+  try {
+    const body = req.body || {};
+    let viewerId: string | null = body.viewerId || null;
+
+    const token = extractBearerToken(req);
+    if (token) {
+      const supabase = getServerSupabaseClient();
+      if (supabase) {
+        const { user } = await verifySupabaseToken(supabase, token);
+        if (user) {
+          viewerId = user.id;
+        }
+      }
+    }
+
+    const ip = (req.headers["x-forwarded-for"] as string)?.split(",")[0]?.trim() || req.ip || "127.0.0.1";
+    const ua = (req.headers["user-agent"] as string) || "";
+    const viewerFingerprint =
+      viewerId ||
+      (typeof body.viewerFingerprint === "string" && body.viewerFingerprint.trim()
+        ? body.viewerFingerprint.trim().slice(0, 64)
+        : crypto.createHash("sha256").update(`${ip}:${ua}`).digest("hex").slice(0, 16));
+
+    const result = contentAnalyticsEngine.recordEvent({
+      kind: body.kind,
+      contentId: String(body.contentId || ""),
+      contentType: body.contentType,
+      creatorId: String(body.creatorId || ""),
+      viewerId,
+      viewerFingerprint,
+      trafficSource: body.trafficSource,
+      deviceType: body.deviceType || (ua.toLowerCase().includes("mobi") ? "mobile" : "desktop"),
+      slideIndex: typeof body.slideIndex === "number" ? body.slideIndex : undefined,
+      totalSlides: typeof body.totalSlides === "number" ? body.totalSlides : undefined,
+      bucketIndex: typeof body.bucketIndex === "number" ? body.bucketIndex : undefined,
+      dwellSeconds: typeof body.dwellSeconds === "number" ? body.dwellSeconds : undefined,
+      attributionMethod: body.attributionMethod,
+      followDelta: body.followDelta === -1 ? -1 : 1,
+      engagementAction: body.engagementAction,
+      createdAt: body.createdAt,
+    });
+
+    if (!result.success) {
+      return res.status(400).json(result);
+    }
+
+    res.json(result);
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message || "Failed to record content analytics event" });
+  }
+});
+
+// Unified analytics for a single content item (Reel, Video, Single Image, Carousel, or Text)
+app.post("/api/analytics/content/item", (req, res) => {
+  try {
+    const { content, contentId, dateRange } = req.body || {};
+    const resolvedRange: AnalyticsDateRange =
+      dateRange === "7d" || dateRange === "30d" || dateRange === "90d" || dateRange === "all" ? dateRange : "30d";
+
+    let descriptor: ContentCatalogDescriptor | null = content && content.id ? content : null;
+    if (!descriptor && contentId) {
+      const posts = readPersistentPosts();
+      const matched = posts.find((p: any) => p.id === contentId);
+      if (matched) {
+        descriptor = persistentPostToDescriptor(matched);
+      } else {
+        descriptor = { id: String(contentId), creatorId: "" };
+      }
+    }
+
+    if (!descriptor || !descriptor.id) {
+      return res.status(400).json({ success: false, error: "content descriptor or contentId is required" });
+    }
+
+    const analytics = contentAnalyticsEngine.getContentAnalytics(descriptor, { dateRange: resolvedRange });
+    res.json({ success: true, analytics });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message || "Failed to compute content analytics" });
+  }
+});
+
+app.get("/api/analytics/content/:contentId", (req, res) => {
+  try {
+    const { contentId } = req.params;
+    const rangeParam = String(req.query.dateRange || "30d");
+    const resolvedRange: AnalyticsDateRange =
+      rangeParam === "7d" || rangeParam === "30d" || rangeParam === "90d" || rangeParam === "all" ? rangeParam : "30d";
+
+    const posts = readPersistentPosts();
+    const matched = posts.find((p: any) => p.id === contentId);
+    const descriptor: ContentCatalogDescriptor = matched
+      ? persistentPostToDescriptor(matched)
+      : { id: String(contentId), creatorId: "" };
+
+    const analytics = contentAnalyticsEngine.getContentAnalytics(descriptor, { dateRange: resolvedRange });
+    res.json({ success: true, analytics });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message || "Failed to retrieve content analytics" });
+  }
+});
+
+// Unified Creator Studio account summary across ALL 5 content formats
+app.post("/api/analytics/content/studio", (req, res) => {
+  try {
+    const { creatorId, catalog, contentFilter, dateRange } = req.body || {};
+    if (!creatorId || typeof creatorId !== "string") {
+      return res.status(400).json({ success: false, error: "creatorId is required" });
+    }
+
+    const resolvedFilter: ContentFilterType =
+      contentFilter === "all" ||
+      contentFilter === "reel" ||
+      contentFilter === "video" ||
+      contentFilter === "image" ||
+      contentFilter === "carousel" ||
+      contentFilter === "text"
+        ? contentFilter
+        : "all";
+
+    const resolvedRange: AnalyticsDateRange =
+      dateRange === "7d" || dateRange === "30d" || dateRange === "90d" || dateRange === "all" ? dateRange : "30d";
+
+    const mergedCatalogMap = new Map<string, ContentCatalogDescriptor>();
+    if (Array.isArray(catalog)) {
+      for (const item of catalog) {
+        if (item && item.id) {
+          mergedCatalogMap.set(String(item.id), item);
+        }
+      }
+    }
+
+    const diskPosts = readPersistentPosts();
+    for (const p of diskPosts) {
+      const authorId = p.author?.id || p.author_id || p.userId;
+      if (authorId === creatorId && p.id && !mergedCatalogMap.has(String(p.id))) {
+        mergedCatalogMap.set(String(p.id), persistentPostToDescriptor(p));
+      }
+    }
+
+    const studio = contentAnalyticsEngine.getCreatorStudioAnalytics(creatorId, Array.from(mergedCatalogMap.values()), {
+      contentFilter: resolvedFilter,
+      dateRange: resolvedRange,
+    });
+
+    res.json({ success: true, studio });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message || "Failed to build Creator Studio analytics" });
+  }
+});
+
+// Content-Type-Scoped AI Insights (Gemini-enhanced when telemetry exists + key active, strict zero-leakage sanitizer)
+app.post("/api/analytics/content/ai-insights", async (req, res) => {
+  try {
+    const { contentFilter, summary } = req.body || {};
+    const scope: ContentFilterType =
+      contentFilter === "all" ||
+      contentFilter === "reel" ||
+      contentFilter === "video" ||
+      contentFilter === "image" ||
+      contentFilter === "carousel" ||
+      contentFilter === "text"
+        ? contentFilter
+        : "all";
+
+    const baseInsights: AIInsightItem[] = Array.isArray(summary?.aiInsights) ? summary.aiInsights : [];
+    const sanitizedBase = sanitizeInsightsForScope(baseInsights, scope);
+
+    const hasTelemetry =
+      Number(summary?.impressions || 0) > 0 || Number(summary?.totalEngagements || 0) > 0;
+    const ai = getAiClient(null, req);
+
+    if (!ai || !hasTelemetry) {
+      return res.json({
+        success: true,
+        insights: sanitizedBase,
+        source: "deterministic",
+      });
+    }
+
+    const cleanMetricsSnapshot = {
+      contentTypeScope: scope,
+      dateRange: summary?.dateRange || "30d",
+      impressions: summary?.impressions || 0,
+      reach: summary?.reach || 0,
+      likesAndReactions: summary?.likesAndReactions || 0,
+      comments: summary?.comments || 0,
+      shares: summary?.shares || 0,
+      saves: summary?.saves || 0,
+      engagementRate: summary?.engagementRate ?? null,
+      followersGained: summary?.followersGained?.netGained ?? 0,
+      trafficSources: (summary?.trafficSources?.entries || []).slice(0, 4),
+      ...(scope === "reel" || scope === "video"
+        ? {
+            videoMetrics: summary?.videoMetrics || summary?.videoRollup || null,
+          }
+        : {}),
+      ...(scope === "carousel"
+        ? {
+            carouselMetrics: summary?.carouselMetrics || null,
+          }
+        : {}),
+      ...(scope === "text"
+        ? {
+            textMetrics: summary?.textMetrics || null,
+          }
+        : {}),
+      ...(scope === "image"
+        ? {
+            imageMetrics: summary?.imageMetrics || null,
+          }
+        : {}),
+      ...(scope === "all"
+        ? {
+            formatBreakdown: summary?.formatBreakdown || [],
+          }
+        : {}),
+    };
+
+    const scopeRules =
+      scope === "image"
+        ? "CONTENT TYPE IS SINGLE IMAGE ONLY. Focus exclusively on image impressions, reach, saves, shares, likes/reactions, comments, and caption context. STRICTLY FORBIDDEN: Never mention video watch time, retention curves, playback completion, or carousel slides."
+        : scope === "carousel"
+        ? "CONTENT TYPE IS MULTI-IMAGE CAROUSEL ONLY. Focus exclusively on carousel slide progression, last-slide completion rate, slide drop-off, impressions, saves, and shares. STRICTLY FORBIDDEN: Never mention video watch time, video playback, or audio/video retention curves."
+        : scope === "text"
+        ? "CONTENT TYPE IS TEXT POST ONLY. Focus exclusively on text impressions, See More expand clicks, focused reading engagement (>=3s dwell), comments, shares, and saves. STRICTLY FORBIDDEN: Never mention video watch time, playback completion, video retention, or carousel slides."
+        : scope === "reel" || scope === "video"
+        ? `CONTENT TYPE IS ${scope.toUpperCase()}. Focus on qualified views, watch time, completion rate, retention drop-off buckets, shares, saves, and traffic sources.`
+        : "SCOPE IS ALL FORMATS. Compare performance across Reels, Video Posts, Single Images, Carousels, and Text Posts accurately based on the formatBreakdown numbers.";
+
+    const prompt = `You are the METFA Social Creator Studio Analytics Strategist.
+Analyze this real, verified telemetry JSON and return strictly 2 to 3 concise, high-impact coaching insights in valid JSON.
+
+STRICT RULES:
+1. Ground EVERY insight strictly in the real numbers provided in METRICS_JSON. NEVER invent, extrapolate, or guess numbers that are not present.
+2. ${scopeRules}
+3. Return ONLY a JSON object with shape: { "insights": [ { "category": string, "priority": "high"|"medium"|"info", "title": string, "detail": string, "actionableStep": string, "basedOnMetric": string } ] }.
+
+METRICS_JSON:
+${JSON.stringify(cleanMetricsSnapshot)}`;
+
+    try {
+      const result = await generateContentWithFallback(ai, {
+        models: ["gemini-3.8-flash", "gemini-3.1-flash-lite"],
+        timeoutMs: 12000,
+        contents: { parts: [{ text: prompt }] },
+        config: {
+          responseMimeType: "application/json",
+          temperature: 0.3,
+        },
+      });
+
+      const rawText = result.response.text?.trim() || "";
+      const parsed = JSON.parse(rawText);
+      const rawArray = Array.isArray(parsed?.insights) ? parsed.insights : Array.isArray(parsed) ? parsed : [];
+      const sanitizedGemini = sanitizeInsightsForScope(rawArray, scope);
+
+      if (sanitizedGemini.length > 0) {
+        return res.json({
+          success: true,
+          insights: sanitizedGemini.slice(0, 4),
+          source: "gemini",
+        });
+      }
+    } catch (aiErr) {
+      console.warn("[CreatorStudio AI Insights] Falling back to deterministic insights:", aiErr);
+    }
+
+    res.json({
+      success: true,
+      insights: sanitizedBase,
+      source: "deterministic",
+    });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message || "Failed to generate AI insights" });
+  }
 });
 
 

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, Suspense, lazy } from 'react';
+import React, { useState, useEffect, useMemo, useRef, useCallback, Suspense, lazy } from 'react';
 import CommunityFeed from '../../components/CommunityFeed';
 import ReelsFeedView from '../../components/ReelsFeedView';
 import CreatePostModal from '../../components/CreatePostModal';
@@ -95,6 +95,16 @@ export const SocialEcosystemModule: React.FC<SocialEcosystemProps> = ({
     }
     return null;
   });
+  const [directSelectedReel, setDirectSelectedReel] = useState<ReelHighlight | null>(null);
+
+  const postsRef = useRef<CommunityPost[]>(posts);
+  const reelsRef = useRef<ReelHighlight[]>(reels);
+  useEffect(() => {
+    postsRef.current = posts;
+  }, [posts]);
+  useEffect(() => {
+    reelsRef.current = reels;
+  }, [reels]);
 
   // Creation Modals
   const [isCreatePostOpen, setIsCreatePostOpen] = useState(false);
@@ -145,14 +155,20 @@ export const SocialEcosystemModule: React.FC<SocialEcosystemProps> = ({
   // Automatically load and synchronize reels from persistent cloud storage / Supabase
   useEffect(() => {
     let isMounted = true;
-    setIsLoadingReels(true);
+    if (reelsRef.current.length === 0) {
+      setIsLoadingReels(true);
+    }
 
-    fetchPersistentReels().then(({ reels: persistentReels }) => {
-      if (isMounted) {
-        setReels(persistentReels);
-        setIsLoadingReels(false);
-      }
-    });
+    fetchPersistentReels()
+      .then(({ reels: persistentReels }) => {
+        if (isMounted) {
+          setReels(persistentReels);
+          setIsLoadingReels(false);
+        }
+      })
+      .catch(() => {
+        if (isMounted) setIsLoadingReels(false);
+      });
 
     // If user is authenticated, attempt safe idempotent migration of legacy LocalStorage reels
     if (user?.id) {
@@ -168,7 +184,121 @@ export const SocialEcosystemModule: React.FC<SocialEcosystemProps> = ({
     return () => {
       isMounted = false;
     };
-  }, [user?.id, isSupabaseConnected]);
+  }, [user?.id, isSupabaseConnected, currentTab === 'reels']);
+
+  const [targetReelInitialTime, setTargetReelInitialTime] = useState<number>(0);
+
+  const resolveDirectSelectedReel = useCallback(
+    (
+      reelId: string,
+      videoPayload?: { videoSrc?: string; title?: string; author?: any; thumbnailSrc?: string; currentTime?: number }
+    ) => {
+      const inPersistent = reelsRef.current.some((r) => r.id === reelId);
+      if (inPersistent) {
+        setDirectSelectedReel(null);
+        return;
+      }
+
+      const matchedPost = postsRef.current.find((p) => p.id === reelId);
+      const effectiveVideoSrc = matchedPost?.videoSrc || videoPayload?.videoSrc;
+      if (effectiveVideoSrc) {
+        const transientReel: ReelHighlight = {
+          id: reelId,
+          title: matchedPost?.videoTitle || matchedPost?.prompt || videoPayload?.title || 'Metfa Reel',
+          caption: matchedPost?.caption || '',
+          author: {
+            id: matchedPost?.author?.id || videoPayload?.author?.id || userProfile?.id || 'creator',
+            name: matchedPost?.author?.name || videoPayload?.author?.name || userProfile?.name || 'Metfa Creator',
+            username: matchedPost?.author?.username || videoPayload?.author?.username || userProfile?.username || 'creator',
+            avatar: matchedPost?.author?.avatar || videoPayload?.author?.avatar || userProfile?.avatar || '',
+            isVerified: matchedPost?.author?.isVerified ?? true,
+          },
+          videoSrc: effectiveVideoSrc,
+          thumbnailSrc: matchedPost?.videoThumbnail || matchedPost?.imageSrc || videoPayload?.thumbnailSrc,
+          duration: 15,
+          likesCount: matchedPost?.likesCount || 0,
+          commentsCount: matchedPost?.commentsCount || 0,
+          sharesCount: matchedPost?.sharesCount || 0,
+          createdAt: matchedPost?.createdAt || 'Just now',
+        };
+        setDirectSelectedReel(transientReel);
+        return;
+      }
+
+      // If opened via deep link before posts loaded, resolve from Supabase by post ID
+      if (isSupabaseConfigured()) {
+        setIsLoadingReels(true);
+        fetchSupabasePostById(reelId)
+          .then(({ post }) => {
+            if (post && post.videoSrc) {
+              setDirectSelectedReel({
+                id: post.id,
+                title: post.videoTitle || post.prompt || 'Metfa Reel',
+                caption: post.caption || '',
+                author: {
+                  id: post.author?.id || 'creator',
+                  name: post.author?.name || 'Metfa Creator',
+                  username: post.author?.username || 'creator',
+                  avatar: post.author?.avatar || '',
+                  isVerified: post.author?.isVerified ?? true,
+                },
+                videoSrc: post.videoSrc,
+                thumbnailSrc: post.videoThumbnail || post.imageSrc,
+                duration: 15,
+                likesCount: post.likesCount || 0,
+                commentsCount: post.commentsCount || 0,
+                sharesCount: post.sharesCount || 0,
+                createdAt: post.createdAt || 'Just now',
+              });
+            }
+          })
+          .catch(() => {})
+          .finally(() => {
+            setIsLoadingReels(false);
+          });
+      }
+    },
+    [userProfile]
+  );
+
+  // If a deep-linked targetReelId was present before Supabase config loaded, resolve it once connected
+  useEffect(() => {
+    if (isSupabaseConnected && currentTab === 'reels' && targetReelId && !directSelectedReel) {
+      if (!reelsRef.current.some((r) => r.id === targetReelId)) {
+        resolveDirectSelectedReel(targetReelId);
+      }
+    }
+  }, [isSupabaseConnected, currentTab, targetReelId, directSelectedReel, resolveDirectSelectedReel]);
+
+  const handleOpenReel = useCallback(
+    (
+      reelId: string,
+      videoPayload?: { videoSrc?: string; title?: string; author?: any; thumbnailSrc?: string; currentTime?: number }
+    ) => {
+      if (!reelId) return;
+      console.log('[Metfa Nav] features/social handleOpenReel called with:', reelId, 'pos:', videoPayload?.currentTime);
+      setTargetReelId(reelId);
+      if (typeof videoPayload?.currentTime === 'number' && videoPayload.currentTime > 0) {
+        setTargetReelInitialTime(videoPayload.currentTime);
+      } else {
+        setTargetReelInitialTime(0);
+      }
+
+      resolveDirectSelectedReel(reelId, videoPayload);
+
+      if (typeof window !== 'undefined') {
+        try {
+          if (window.location.hash !== `#reel-${reelId}`) {
+            window.location.hash = `#reel-${reelId}`;
+          }
+        } catch {}
+      }
+      if (currentTab !== 'reels') {
+        onNavigateTab('reels');
+      }
+    },
+    [currentTab, onNavigateTab, resolveDirectSelectedReel]
+  );
 
   // Deep Link listener for URL hash changes (#post-post_1788406851913 or #reel-reel_123)
   useEffect(() => {
@@ -178,6 +308,7 @@ export const SocialEcosystemModule: React.FC<SocialEcosystemProps> = ({
       if (reelMatch) {
         const reelId = reelMatch[1];
         setTargetReelId(reelId);
+        resolveDirectSelectedReel(reelId);
         onNavigateTab('reels');
         return;
       }
@@ -215,12 +346,14 @@ export const SocialEcosystemModule: React.FC<SocialEcosystemProps> = ({
     return () => {
       window.removeEventListener('hashchange', handleHashChange);
     };
-  }, [onNavigateTab]);
+  }, [onNavigateTab, resolveDirectSelectedReel]);
 
-  // Clear targetReelId and any stale reel hash when currentTab is not reels
+  // Clear targetReelId, transient directSelectedReel, and any stale reel hash when currentTab is not reels
   useEffect(() => {
     if (currentTab !== 'reels') {
       setTargetReelId(null);
+      setDirectSelectedReel(null);
+      setTargetReelInitialTime(0);
       if (typeof window !== 'undefined' && window.location.hash.match(/^#\/?reel[_-]/)) {
         try {
           history.replaceState(null, '', window.location.pathname + window.location.search);
@@ -228,62 +361,6 @@ export const SocialEcosystemModule: React.FC<SocialEcosystemProps> = ({
       }
     }
   }, [currentTab]);
-
-  const [targetReelInitialTime, setTargetReelInitialTime] = useState<number>(0);
-
-  const handleOpenReel = (
-    reelId: string,
-    videoPayload?: { videoSrc?: string; title?: string; author?: any; thumbnailSrc?: string; currentTime?: number }
-  ) => {
-    if (!reelId) return;
-    console.log('[Metfa Nav] features/social handleOpenReel called with:', reelId, 'pos:', videoPayload?.currentTime);
-    setTargetReelId(reelId);
-    if (typeof videoPayload?.currentTime === 'number' && videoPayload.currentTime > 0) {
-      setTargetReelInitialTime(videoPayload.currentTime);
-    } else {
-      setTargetReelInitialTime(0);
-    }
-
-    // Guarantee the targeted reel is immediately present in reels state for instant display in ReelsFeedView
-    setReels((prevReels) => {
-      const alreadyPresent = prevReels.some((r) => r.id === reelId);
-      if (alreadyPresent) return prevReels;
-      const matchedPost = posts.find((p) => p.id === reelId);
-      const effectiveVideoSrc = matchedPost?.videoSrc || videoPayload?.videoSrc;
-      if (effectiveVideoSrc) {
-        const syntheticReel: ReelHighlight = {
-          id: reelId,
-          title: matchedPost?.videoTitle || matchedPost?.prompt || videoPayload?.title || 'Metfa Reel',
-          caption: matchedPost?.caption || '',
-          author: {
-            id: matchedPost?.author?.id || videoPayload?.author?.id || userProfile?.id || 'creator',
-            name: matchedPost?.author?.name || videoPayload?.author?.name || userProfile?.name || 'Metfa Creator',
-            username: matchedPost?.author?.username || videoPayload?.author?.username || userProfile?.username || 'creator',
-            avatar: matchedPost?.author?.avatar || videoPayload?.author?.avatar || userProfile?.avatar || '',
-            isVerified: matchedPost?.author?.isVerified ?? true,
-          },
-          videoSrc: effectiveVideoSrc,
-          thumbnailSrc: matchedPost?.videoThumbnail || matchedPost?.imageSrc || videoPayload?.thumbnailSrc,
-          duration: 15,
-          likesCount: matchedPost?.likesCount || 0,
-          commentsCount: matchedPost?.commentsCount || 0,
-          sharesCount: matchedPost?.sharesCount || 0,
-          createdAt: matchedPost?.createdAt || 'Just now',
-        };
-        return [syntheticReel, ...prevReels];
-      }
-      return prevReels;
-    });
-
-    if (typeof window !== 'undefined') {
-      try {
-        window.location.hash = `#reel-${reelId}`;
-      } catch {}
-    }
-    if (currentTab !== 'reels') {
-      onNavigateTab('reels');
-    }
-  };
 
   // Listen for custom event metfa_open_reel across the app
   useEffect(() => {
@@ -303,7 +380,7 @@ export const SocialEcosystemModule: React.FC<SocialEcosystemProps> = ({
     return () => {
       window.removeEventListener('metfa_open_reel', handleMetfaOpenReel);
     };
-  }, [onNavigateTab, posts]);
+  }, [handleOpenReel]);
 
   // Automatically dismiss active modals when currentTab changes
   useEffect(() => {
@@ -409,11 +486,13 @@ export const SocialEcosystemModule: React.FC<SocialEcosystemProps> = ({
       {currentTab === 'reels' && (
         <ReelsFeedView
           reels={reels}
+          directSelectedReel={directSelectedReel}
           isLoading={isLoadingReels}
           targetReelId={targetReelId}
           initialCurrentTime={targetReelInitialTime}
           onClearTargetReel={() => {
             setTargetReelId(null);
+            setDirectSelectedReel(null);
             setTargetReelInitialTime(0);
             if (typeof window !== 'undefined' && window.location.hash.startsWith('#reel')) {
               window.history.replaceState(null, '', window.location.pathname + window.location.search);
@@ -422,6 +501,8 @@ export const SocialEcosystemModule: React.FC<SocialEcosystemProps> = ({
           onUpdateReels={(r) => setReels(r)}
           userProfile={userProfile}
           onRemixPrompt={(prompt) => handleRemix(prompt)}
+          onNavigateTab={onNavigateTab}
+          onViewProfile={onViewProfile}
           onCreateReelClick={() => {
             if (!isAuthenticated) {
               if (onOpenAuthModal) onOpenAuthModal();

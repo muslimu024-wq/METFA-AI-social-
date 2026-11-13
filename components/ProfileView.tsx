@@ -58,6 +58,15 @@ import {
   toggleSavePost,
   toggleSaveReel,
 } from '../utils/bookmarkStore';
+import { BarChart3 } from 'lucide-react';
+import CreatorStudioAnalytics from './CreatorStudioAnalytics';
+import ContentAnalyticsModal from './ContentAnalyticsModal';
+import {
+  ContentCatalogDescriptor,
+  postToContentDescriptor,
+  reelToContentDescriptor,
+  trackFollowAttribution,
+} from '../utils/contentTracker';
 
 interface ProfileViewProps {
   userProfile: UserProfile;
@@ -163,18 +172,30 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
   const [bio, setBio] = useState(userProfile.bio);
   const [location, setLocation] = useState(userProfile.location || '');
   const [website, setWebsite] = useState(userProfile.website || '');
-  const [activeTab, setActiveTab] = useState<'creations' | 'reels' | 'saved'>('creations');
+  const [activeTab, setActiveTab] = useState<'creations' | 'reels' | 'analytics' | 'saved'>('creations');
   const [savedFilter, setSavedFilter] = useState<'all' | 'posts' | 'reels'>('all');
   const [savedPosts, setSavedPosts] = useState<CommunityPost[]>(() => getSavedPostsList(allPosts));
   const [savedReels, setSavedReels] = useState<ReelHighlight[]>(() => getSavedReelsList(allReels));
   const [toastMessage, setToastMessage] = useState<string | null>(null);
+  const [inspectingAnalyticsItem, setInspectingAnalyticsItem] = useState<ContentCatalogDescriptor | null>(null);
+
+  // Listen for Header / external Studio Analytics shortcut event
+  useEffect(() => {
+    const handleOpenStudioAnalytics = () => {
+      if (isOwnProfile) {
+        setActiveTab('analytics');
+      }
+    };
+    window.addEventListener('metfa_open_creator_analytics', handleOpenStudioAnalytics);
+    return () => window.removeEventListener('metfa_open_creator_analytics', handleOpenStudioAnalytics);
+  }, [isOwnProfile]);
 
   // Safety: reset edit states if viewing another user's profile
   useEffect(() => {
     if (!isOwnProfile) {
       setIsEditing(false);
       setIsSwitcherOpen(false);
-      if (activeTab === 'saved') {
+      if (activeTab === 'saved' || activeTab === 'analytics') {
         setActiveTab('creations');
       }
     }
@@ -662,6 +683,13 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
                           { id: targetUserId, name: displayProfile.name, username: displayProfile.username, avatar: displayProfile.avatar },
                           true
                         );
+                        trackFollowAttribution({
+                          creatorId: targetUserId,
+                          viewerId: authUser?.id || userProfile.id,
+                          attributionMethod: 'direct_profile_follow',
+                          followDelta: 1,
+                          trafficSource: 'profile',
+                        });
                         // Refresh profile stats to reflect updated counters from database trigger
                         fetchSupabaseProfile(targetUserId).then((prof) => {
                           if (prof) setFetchedProfile(prof);
@@ -679,6 +707,13 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
                           { id: targetUserId, name: displayProfile.name, username: displayProfile.username, avatar: displayProfile.avatar },
                           false
                         );
+                        trackFollowAttribution({
+                          creatorId: targetUserId,
+                          viewerId: authUser?.id || userProfile.id,
+                          attributionMethod: 'direct_profile_follow',
+                          followDelta: -1,
+                          trafficSource: 'profile',
+                        });
                         // Refresh profile stats to reflect updated counters from database trigger
                         fetchSupabaseProfile(targetUserId).then((prof) => {
                           if (prof) setFetchedProfile(prof);
@@ -696,6 +731,13 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
                       { id: targetUserId, name: displayProfile.name, username: displayProfile.username, avatar: displayProfile.avatar },
                       next
                     );
+                    trackFollowAttribution({
+                      creatorId: targetUserId,
+                      viewerId: authUser?.id || userProfile.id,
+                      attributionMethod: 'direct_profile_follow',
+                      followDelta: next ? 1 : -1,
+                      trafficSource: 'profile',
+                    });
                     showToast(next ? `You are now following ${displayProfile.name}` : `Unfollowed ${displayProfile.name}`);
                   }
                 }}
@@ -1125,6 +1167,22 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
             {isOwnProfile && (
               <button
                 type="button"
+                id="tab-analytics-btn"
+                onClick={() => setActiveTab('analytics')}
+                className={`px-4 py-2 rounded-xl text-xs font-bold transition flex items-center gap-1.5 cursor-pointer ${
+                  activeTab === 'analytics'
+                    ? 'bg-teal-600 text-white shadow-xs'
+                    : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
+                }`}
+              >
+                <BarChart3 className="w-3.5 h-3.5" />
+                <span>Studio Analytics</span>
+              </button>
+            )}
+
+            {isOwnProfile && (
+              <button
+                type="button"
                 id="tab-saved-btn"
                 onClick={() => setActiveTab('saved')}
                 className={`px-4 py-2 rounded-xl text-xs font-bold transition flex items-center gap-1.5 cursor-pointer ${
@@ -1147,11 +1205,18 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
               userPosts.map((post) => (
                 <div
                   key={post.id}
-                  className="group relative rounded-2xl overflow-hidden aspect-square bg-slate-100 border border-slate-200 shadow-xs"
+                  onClick={() => {
+                    if (isOwnProfile) {
+                      setInspectingAnalyticsItem(postToContentDescriptor(post));
+                    }
+                  }}
+                  className={`group relative rounded-2xl overflow-hidden aspect-square bg-slate-100 border border-slate-200 shadow-xs ${
+                    isOwnProfile ? 'cursor-pointer' : ''
+                  }`}
                 >
-                  {post.imageSrc ? (
+                  {post.imageSrc || post.imageGallery?.[0] ? (
                     <img
-                      src={post.imageSrc}
+                      src={post.imageSrc || post.imageGallery?.[0]}
                       alt={post.prompt}
                       loading="lazy"
                       decoding="async"
@@ -1161,6 +1226,11 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
                     <div className="w-full h-full p-4 flex items-center justify-center text-center bg-purple-50 text-xs font-bold text-slate-800">
                       {post.caption || post.prompt}
                     </div>
+                  )}
+                  {isOwnProfile && (
+                    <span className="absolute top-2 right-2 p-1.5 rounded-lg bg-black/65 text-teal-300 opacity-0 group-hover:opacity-100 transition">
+                      <BarChart3 className="w-3.5 h-3.5" />
+                    </span>
                   )}
                   <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-transparent to-transparent opacity-0 group-hover:opacity-100 transition flex items-end p-3">
                     <p className="text-[11px] text-white line-clamp-2 font-medium">{post.caption || post.prompt}</p>
@@ -1185,7 +1255,14 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
               userReels.map((reel) => (
                 <div
                   key={reel.id}
-                  className="group relative rounded-2xl overflow-hidden aspect-[9/16] bg-slate-100 border border-slate-200 shadow-xs"
+                  onClick={() => {
+                    if (isOwnProfile) {
+                      setInspectingAnalyticsItem(reelToContentDescriptor(reel));
+                    }
+                  }}
+                  className={`group relative rounded-2xl overflow-hidden aspect-[9/16] bg-slate-100 border border-slate-200 shadow-xs ${
+                    isOwnProfile ? 'cursor-pointer' : ''
+                  }`}
                 >
                   <img
                     src={reel.thumbnailSrc || reel.videoSrc}
@@ -1215,6 +1292,17 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
               </div>
             )}
           </div>
+        )}
+
+        {activeTab === 'analytics' && isOwnProfile && (
+          <CreatorStudioAnalytics
+            creatorId={authUser?.id || userProfile.id}
+            creatorName={userProfile.name}
+            catalog={[
+              ...userPosts.map(postToContentDescriptor),
+              ...userReels.map(reelToContentDescriptor),
+            ]}
+          />
         )}
 
         {activeTab === 'saved' && (
@@ -1539,6 +1627,15 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
             </div>
           </div>
         </div>
+      )}
+
+      {/* Individual Content Drilldown Analytics Modal */}
+      {inspectingAnalyticsItem && (
+        <ContentAnalyticsModal
+          isOpen={!!inspectingAnalyticsItem}
+          onClose={() => setInspectingAnalyticsItem(null)}
+          content={inspectingAnalyticsItem}
+        />
       )}
     </div>
   );

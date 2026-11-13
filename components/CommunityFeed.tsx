@@ -77,12 +77,23 @@ import {
   ReactionType,
 } from '../services/engagementService';
 import { checkContentSafety } from '../utils/contentSafety';
+import { MediaCarousel } from './MediaCarousel';
+import {
+  ContentTelemetryObserver,
+  clientResolveContentType,
+  postToContentDescriptor,
+  trackCarouselSlideView,
+  trackEngagementAction,
+  trackFollowAttribution,
+  trackTextExpand,
+} from '../utils/contentTracker';
 
 // Lazy-load non-initial action modals
 const SocialShareModal = lazy(() => import('./SocialShareModal'));
 const ConfirmActionModal = lazy(() => import('./ConfirmActionModal'));
 const EditPostModal = lazy(() => import('./EditPostModal'));
 const AudioLicenseInfoModal = lazy(() => import('./AudioLicenseInfoModal'));
+const ContentAnalyticsModal = lazy(() => import('./ContentAnalyticsModal'));
 
 interface CommunityFeedProps {
   posts: CommunityPost[];
@@ -94,7 +105,7 @@ interface CommunityFeedProps {
   targetSharedPostId?: string | null;
   isLoadingPosts?: boolean;
   onClearSharedPost?: () => void;
-  onOpenReel?: (reelId: string) => void;
+  onOpenReel?: (reelId: string, payload?: { videoSrc?: string; title?: string; author?: any; thumbnailSrc?: string; currentTime?: number }) => void;
 }
 
 const REACTION_EMOJIS: { [k: string]: { emoji: string; label: string; color: string } } = {
@@ -142,6 +153,7 @@ export const CommunityFeed: React.FC<CommunityFeedProps> = ({
   const [editingPost, setEditingPost] = useState<CommunityPost | null>(null);
   const [activeRecipePostId, setActiveRecipePostId] = useState<string | null>(null);
   const [inspectingAudioTrack, setInspectingAudioTrack] = useState<AudioTrack | null>(null);
+  const [inspectingAnalyticsPost, setInspectingAnalyticsPost] = useState<CommunityPost | null>(null);
   const [confirmModal, setConfirmModal] = useState<{
     isOpen: boolean;
     title: string;
@@ -224,11 +236,26 @@ export const CommunityFeed: React.FC<CommunityFeedProps> = ({
     return () => window.removeEventListener('metfa_following_updated', handleFollowUpdate);
   }, []);
 
-  const handleToggleFollow = async (author: { id?: string; name?: string; username?: string; avatar?: string }) => {
+  const handleToggleFollow = async (
+    author: { id?: string; name?: string; username?: string; avatar?: string },
+    sourcePost?: CommunityPost
+  ) => {
     const authorId = author.id;
     const authorName = author.name || `@${author.username || 'user'}`;
 
     if (!authorId) return;
+
+    const emitFollowTelemetry = (isNowFollowing: boolean) => {
+      trackFollowAttribution({
+        creatorId: authorId,
+        viewerId: authUser?.id || userProfile?.id,
+        contentId: sourcePost?.id,
+        contentType: sourcePost ? clientResolveContentType(sourcePost) : 'text',
+        attributionMethod: sourcePost ? 'direct_content_follow' : 'direct_profile_follow',
+        followDelta: isNowFollowing ? 1 : -1,
+        trafficSource: sourcePost?.groupId ? 'group' : sourcePost?.pageId ? 'page' : 'feed',
+      });
+    };
 
     if (isValidProfileUuid(authorId)) {
       if (isFollowActionLoading === authorId) return;
@@ -246,6 +273,7 @@ export const CommunityFeed: React.FC<CommunityFeedProps> = ({
             return next;
           });
           syncFollowCache(author, true);
+          emitFollowTelemetry(true);
           showToast(`You are now following ${authorName}`);
         } else {
           showToast(error || 'Failed to follow user.');
@@ -260,6 +288,7 @@ export const CommunityFeed: React.FC<CommunityFeedProps> = ({
             return next;
           });
           syncFollowCache(author, false);
+          emitFollowTelemetry(false);
           showToast(`Unfollowed ${authorName}`);
         } else {
           showToast(error || 'Failed to unfollow user.');
@@ -270,6 +299,7 @@ export const CommunityFeed: React.FC<CommunityFeedProps> = ({
       const currentlyFollowing = isUserFollowed(author.id) || isUserFollowed(author.username);
       const nextFollowing = !currentlyFollowing;
       syncFollowCache(author, nextFollowing);
+      emitFollowTelemetry(nextFollowing);
       if (nextFollowing) {
         showToast(`You are now following ${authorName}`);
       } else {
@@ -398,7 +428,18 @@ export const CommunityFeed: React.FC<CommunityFeedProps> = ({
   };
 
   const handleToggleBookmark = (postId: string) => {
+    const targetPost = posts.find((p) => p.id === postId);
     const res = toggleSavePost(postId);
+    if (res.isSaved && targetPost) {
+      trackEngagementAction({
+        contentId: targetPost.id,
+        contentType: clientResolveContentType(targetPost),
+        creatorId: targetPost.author?.id || '',
+        viewerId: authUser?.id || userProfile?.id,
+        action: 'save',
+        trafficSource: targetPost.groupId ? 'group' : targetPost.pageId ? 'page' : 'feed',
+      });
+    }
     onUpdatePosts(res.updatedPosts);
     showToast(res.isSaved ? 'Saved to your bookmarks!' : 'Removed from bookmarks');
   };
@@ -528,6 +569,17 @@ export const CommunityFeed: React.FC<CommunityFeedProps> = ({
   };
 
   const handleReactionSelect = async (postId: string, reactionType: 'like' | 'love' | 'haha' | 'wow' | 'sad' | 'fire') => {
+    const targetPost = posts.find((p) => p.id === postId);
+    if (targetPost) {
+      trackEngagementAction({
+        contentId: targetPost.id,
+        contentType: clientResolveContentType(targetPost),
+        creatorId: targetPost.author?.id || '',
+        viewerId: authUser?.id || userProfile?.id,
+        action: 'like',
+        trafficSource: targetPost.groupId ? 'group' : targetPost.pageId ? 'page' : 'feed',
+      });
+    }
     const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(postId);
 
     if (isUuid) {
@@ -638,6 +690,18 @@ export const CommunityFeed: React.FC<CommunityFeedProps> = ({
       setDictatingPostId(null);
     }
 
+    const targetPost = posts.find((p) => p.id === postId);
+    if (targetPost) {
+      trackEngagementAction({
+        contentId: targetPost.id,
+        contentType: clientResolveContentType(targetPost),
+        creatorId: targetPost.author?.id || '',
+        viewerId: authUser?.id || userProfile?.id,
+        action: 'comment',
+        trafficSource: targetPost.groupId ? 'group' : targetPost.pageId ? 'page' : 'feed',
+      });
+    }
+
     const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(postId);
 
     if (isUuid) {
@@ -712,6 +776,14 @@ export const CommunityFeed: React.FC<CommunityFeedProps> = ({
   };
 
   const handleSharePost = async (post: CommunityPost) => {
+    trackEngagementAction({
+      contentId: post.id,
+      contentType: clientResolveContentType(post),
+      creatorId: post.author?.id || '',
+      viewerId: authUser?.id || userProfile?.id,
+      action: 'share',
+      trafficSource: post.groupId ? 'group' : post.pageId ? 'page' : 'feed',
+    });
     setSharingPostId(post.id);
     const authorName = post.postingIdentity?.name || post.author.name;
     const authorHandle = post.postingIdentity?.username || post.author.username;
@@ -1177,19 +1249,29 @@ export const CommunityFeed: React.FC<CommunityFeedProps> = ({
 
           const hasGradient = post.textBackgroundPreset && GRADIENT_PRESETS[post.textBackgroundPreset];
           const isPureTextPost = (!post.imageSrc && (!post.imageGallery || post.imageGallery.length === 0) && !post.videoSrc) || hasGradient;
+          const resolvedContentType = clientResolveContentType(post);
+          const postTrafficSource = post.groupId ? 'group' : post.pageId ? 'page' : 'feed';
 
           const isTargetedCard = Boolean(targetedPost && post.id === targetedPost.id);
 
           return (
-            <div
+            <ContentTelemetryObserver
               key={post.id}
-              id={`post-${post.id}`}
-              className={`bg-white border rounded-3xl overflow-hidden shadow-sm transition-all duration-500 animate-fadeIn ${
-                highlightedPostId === post.id || isTargetedCard
-                  ? 'border-purple-500 ring-4 ring-purple-500/20 scale-[1.005] shadow-purple-500/20'
-                  : 'border-slate-200 hover:border-purple-300'
-              }`}
+              contentId={post.id}
+              contentType={resolvedContentType}
+              creatorId={post.author?.id || ''}
+              viewerId={authUser?.id || userProfile?.id}
+              trafficSource={postTrafficSource}
+              totalSlides={post.imageGallery?.length || 0}
             >
+              <div
+                id={`post-${post.id}`}
+                className={`bg-white border rounded-3xl overflow-hidden shadow-sm transition-all duration-500 animate-fadeIn ${
+                  highlightedPostId === post.id || isTargetedCard
+                    ? 'border-purple-500 ring-4 ring-purple-500/20 scale-[1.005] shadow-purple-500/20'
+                    : 'border-slate-200 hover:border-purple-300'
+                }`}
+              >
               {/* Linked Shared Post Header Banner */}
               {isTargetedCard && (
                 <div className="bg-gradient-to-r from-purple-50 to-indigo-50 border-b border-purple-100 px-4 py-2 flex items-center justify-between">
@@ -1238,7 +1320,7 @@ export const CommunityFeed: React.FC<CommunityFeedProps> = ({
                           id={`follow-author-btn-${post.id}`}
                           onClick={(e) => {
                             e.stopPropagation();
-                            handleToggleFollow(post.author);
+                            handleToggleFollow(post.author, post);
                           }}
                           className={`text-[11px] px-2.5 py-0.5 rounded-full font-bold transition flex items-center gap-1 cursor-pointer shrink-0 ml-1 ${
                             isFollowed
@@ -1378,10 +1460,23 @@ export const CommunityFeed: React.FC<CommunityFeedProps> = ({
                           <span>{post.audioTrack?.license_type ? `License: ${post.audioTrack.license_type}` : 'Copyright & Rights'}</span>
                         </button>
 
-                        {/* 3. Author actions (Edit / Delete) vs Non-author (Report) */}
+                        {/* 3. Author actions (Analytics / Edit / Delete) vs Non-author (Report) */}
                         {isOwner ? (
                           <>
                             <div className="h-px bg-slate-100 my-1" />
+                            <button
+                              type="button"
+                              id={`analytics-post-btn-${post.id}`}
+                              onClick={() => {
+                                setActivePostMenuId(null);
+                                setInspectingAnalyticsPost(post);
+                              }}
+                              className="w-full px-3.5 py-2 text-left text-teal-700 hover:text-teal-900 hover:bg-teal-50 flex items-center gap-2.5 transition font-medium cursor-pointer"
+                            >
+                              <TrendingUp className="w-4 h-4 text-teal-600" />
+                              <span>Insights & Analytics</span>
+                            </button>
+
                             <button
                               type="button"
                               id={`edit-post-btn-${post.id}`}
@@ -1442,6 +1537,16 @@ export const CommunityFeed: React.FC<CommunityFeedProps> = ({
                     text={post.caption || post.prompt}
                     charLimit={hasGradient ? 220 : 180}
                     className="w-full"
+                    onExpandToggle={(isExpanded) => {
+                      if (isExpanded) {
+                        trackTextExpand({
+                          contentId: post.id,
+                          creatorId: post.author?.id || '',
+                          viewerId: authUser?.id || userProfile?.id,
+                          trafficSource: postTrafficSource,
+                        });
+                      }
+                    }}
                     textClassName={
                       hasGradient
                         ? 'text-lg sm:text-xl font-black text-white leading-relaxed text-center'
@@ -1463,28 +1568,29 @@ export const CommunityFeed: React.FC<CommunityFeedProps> = ({
                       poster={post.videoThumbnail || post.imageSrc}
                       title={post.videoTitle || post.prompt}
                       className="w-full max-h-[520px] object-cover bg-black"
-                      isReel={Boolean(post.videoSrc)}
+                      isReel={resolvedContentType === 'reel'}
                       reelId={post.id}
+                      creatorId={post.author?.id || ''}
+                      viewerId={authUser?.id || userProfile?.id}
+                      trafficSource={postTrafficSource}
                       onOpenReel={onOpenReel}
                     />
                   ) : post.imageGallery && post.imageGallery.length > 1 ? (
-                    /* Multi-image Grid */
-                    <div
-                      className={`w-full grid gap-1 ${
-                        post.imageGallery.length === 2 ? 'grid-cols-2' : 'grid-cols-2 sm:grid-cols-3'
-                      }`}
-                    >
-                      {post.imageGallery.map((img, i) => (
-                        <div key={i} className="aspect-square bg-slate-950 overflow-hidden">
-                          <img
-                            src={img}
-                            alt={`Gallery ${i}`}
-                            loading={postIdx === 0 && i === 0 ? undefined : 'lazy'}
-                            decoding="async"
-                            className="w-full h-full object-cover hover:scale-105 transition"
-                          />
-                        </div>
-                      ))}
+                    <div className="w-full">
+                      <MediaCarousel
+                        images={post.imageGallery}
+                        altBase={post.caption || post.prompt || 'Carousel slide'}
+                        onSlideView={(slideIndex, totalSlides) => {
+                          trackCarouselSlideView({
+                            contentId: post.id,
+                            creatorId: post.author?.id || '',
+                            viewerId: authUser?.id || userProfile?.id,
+                            slideIndex,
+                            totalSlides,
+                            trafficSource: postTrafficSource,
+                          });
+                        }}
+                      />
                     </div>
                   ) : (
                     <img
@@ -1504,6 +1610,16 @@ export const CommunityFeed: React.FC<CommunityFeedProps> = ({
                   <PostContent
                     text={post.caption}
                     charLimit={160}
+                    onExpandToggle={(isExpanded) => {
+                      if (isExpanded) {
+                        trackTextExpand({
+                          contentId: post.id,
+                          creatorId: post.author?.id || '',
+                          viewerId: authUser?.id || userProfile?.id,
+                          trafficSource: postTrafficSource,
+                        });
+                      }
+                    }}
                     textClassName="text-sm text-slate-800 leading-relaxed font-normal"
                     buttonClassName="text-purple-600 hover:text-purple-700 font-semibold text-sm mt-1"
                   />
@@ -1997,6 +2113,7 @@ export const CommunityFeed: React.FC<CommunityFeedProps> = ({
                 )}
               </div>
             </div>
+            </ContentTelemetryObserver>
           );
         })}
       </div>
@@ -2055,6 +2172,17 @@ export const CommunityFeed: React.FC<CommunityFeedProps> = ({
             isOpen={Boolean(inspectingAudioTrack)}
             track={inspectingAudioTrack}
             onClose={() => setInspectingAudioTrack(null)}
+          />
+        </Suspense>
+      )}
+
+      {/* Unified Content Analytics Modal */}
+      {inspectingAnalyticsPost && (
+        <Suspense fallback={null}>
+          <ContentAnalyticsModal
+            isOpen={Boolean(inspectingAnalyticsPost)}
+            onClose={() => setInspectingAnalyticsPost(null)}
+            content={postToContentDescriptor(inspectingAnalyticsPost)}
           />
         </Suspense>
       )}
