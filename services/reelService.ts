@@ -1,12 +1,13 @@
 import { supabase, isSupabaseConfigured, getClientAuthToken } from './supabaseClient';
-import { ReelHighlight, UserProfile } from '../types/community';
+import { PostAudience, ProfilePrivacy, ReelHighlight } from '../types/community';
 import { AudioTrack } from '../types/audio';
 import { uploadMediaItem } from './storageService';
 import { getDefaultAvatar, sanitizeAvatarUrl } from './authService';
 import { fetchAuthorProfileById } from './postService';
+import { fetchProfilesPrivacyBatch } from './followService';
+import { normalizeProfilePrivacy } from '../utils/privacyPolicy';
 import {
   getReelHighlights,
-  saveReelHighlights,
   saveReelHighlight,
   deleteReelHighlight,
   editReelHighlight,
@@ -22,12 +23,14 @@ export interface CreateReelParams {
   duration: number;
   audioTrack?: AudioTrack;
   musicTrack?: string;
+  visibility?: PostAudience | 'private';
   author: {
     id: string;
     name: string;
     username: string;
     avatar: string;
     isVerified?: boolean;
+    profilePrivacy?: ProfilePrivacy;
   };
 }
 
@@ -43,8 +46,21 @@ export function isValidUuid(id: unknown): id is string {
   return typeof id === 'string' && UUID_REGEX.test(id.trim());
 }
 
+function isMissingPrivacyColumnError(err: any): boolean {
+  const code = String(err?.code || '');
+  const msg = String(err?.message || '').toLowerCase();
+  return code === '42703' || code === 'PGRST204' || msg.includes('profile_privacy');
+}
+
+function isVisibilityConstraintError(err: any): boolean {
+  const code = String(err?.code || '');
+  const msg = String(err?.message || '').toLowerCase();
+  return code === '23514' || msg.includes('posts_visibility_check') || msg.includes('check constraint');
+}
+
 /**
- * Maps a Supabase row (with joined profiles author) to a strongly typed ReelHighlight
+ * Maps a Supabase row (with joined profiles author) to a strongly typed ReelHighlight.
+ * Preserves `row.visibility ?? null` cleanly (never guessing NULL as `'public'`).
  */
 export function mapSupabaseRowToReel(row: any): ReelHighlight {
   const authorName =
@@ -52,8 +68,8 @@ export function mapSupabaseRowToReel(row: any): ReelHighlight {
   const authorUsername = row.author?.username || 'creator';
   const authorAvatar =
     row.author?.avatar_url?.trim() || getDefaultAvatar(authorUsername);
+  const authorProfilePrivacy = normalizeProfilePrivacy(row.author?.profile_privacy ?? null);
 
-  // Compute a human-readable relative time or formatted date string
   let relativeTime = 'Just now';
   if (row.created_at) {
     try {
@@ -92,7 +108,10 @@ export function mapSupabaseRowToReel(row: any): ReelHighlight {
       username: authorUsername,
       avatar: sanitizeAvatarUrl(authorAvatar, authorUsername),
       isVerified: Boolean(row.author?.is_verified),
+      profilePrivacy: authorProfilePrivacy,
     },
+    authorProfilePrivacy,
+    visibility: row.visibility !== undefined ? row.visibility : null,
     videoSrc: row.video_src || '',
     thumbnailSrc: row.video_thumbnail || undefined,
     duration: typeof row.duration === 'number' ? row.duration : 15,
@@ -109,11 +128,6 @@ export function mapSupabaseRowToReel(row: any): ReelHighlight {
   };
 }
 
-/**
- * Fetches persistent reels from Supabase public.posts (post_type = 'reel'),
- * joined with author profiles.
- * Falls back safely to local/server store if Supabase is offline.
- */
 async function resolveMissingReelAuthors(rows: any[]): Promise<void> {
   const missingAuthorIds = Array.from(
     new Set(
@@ -122,26 +136,48 @@ async function resolveMissingReelAuthors(rows: any[]): Promise<void> {
         .map((row: any) => row.author_id as string)
     )
   );
-  if (missingAuthorIds.length === 0) return;
-
-  await Promise.all(
-    missingAuthorIds.map(async (authorId) => {
-      const resolved = await fetchAuthorProfileById(authorId);
-      if (resolved) {
-        for (const row of rows) {
-          if (row.author_id === authorId && (!row.author || !row.author.display_name)) {
-            row.author = resolved;
+  if (missingAuthorIds.length > 0) {
+    await Promise.all(
+      missingAuthorIds.map(async (authorId) => {
+        const resolved = await fetchAuthorProfileById(authorId);
+        if (resolved) {
+          for (const row of rows) {
+            if (row.author_id === authorId && (!row.author || !row.author.display_name)) {
+              row.author = resolved;
+            }
           }
         }
-      }
-    })
+      })
+    );
+  }
+
+  const missingPrivacyIds = Array.from(
+    new Set(
+      rows
+        .filter((row: any) => row.author_id && !row.author?.profile_privacy)
+        .map((row: any) => row.author_id as string)
+    )
   );
+  if (missingPrivacyIds.length > 0) {
+    const privMap = await fetchProfilesPrivacyBatch(missingPrivacyIds);
+    for (const row of rows) {
+      if (row.author_id && privMap.has(row.author_id)) {
+        row.author = row.author || { id: row.author_id };
+        row.author.profile_privacy = privMap.get(row.author_id);
+      }
+    }
+  }
 }
 
 async function fetchServerPersistentReels(): Promise<ReelHighlight[]> {
   if (typeof fetch === 'undefined') return [];
   try {
-    const res = await fetch('/api/posts');
+    const token = await getClientAuthToken().catch(() => null);
+    const headers: Record<string, string> = {};
+    if (token) {
+      headers.Authorization = `Bearer ${token}`;
+    }
+    const res = await fetch('/api/posts', { headers });
     if (!res.ok) return [];
     const data = await res.json();
     if (!Array.isArray(data?.posts)) return [];
@@ -151,29 +187,37 @@ async function fetchServerPersistentReels(): Promise<ReelHighlight[]> {
           (p.postType === 'reel' || p.post_type === 'reel' || p.feedType === 'reels' || p.feed_type === 'reels') &&
           Boolean(p.videoSrc || p.video_src)
       )
-      .map((p: any) => ({
-        id: String(p.id),
-        title: p.videoTitle || p.video_title || p.prompt || 'Metfa Reel',
-        caption: p.caption || '',
-        author: {
-          id: p.author?.id || p.author_id || 'creator',
-          name: p.author?.name || p.author?.display_name || 'Metfa Creator',
-          username: p.author?.username || 'creator',
-          avatar: p.author?.avatar || p.author?.avatar_url || getDefaultAvatar(p.author?.username || 'creator'),
-          isVerified: Boolean(p.author?.isVerified ?? p.author?.is_verified ?? true),
-        },
-        videoSrc: p.videoSrc || p.video_src,
-        thumbnailSrc: p.videoThumbnail || p.video_thumbnail || p.imageSrc || undefined,
-        duration: typeof p.duration === 'number' ? p.duration : 15,
-        likesCount: Number(p.likesCount ?? p.likes_count) || 0,
-        commentsCount: Number(p.commentsCount ?? p.comments_count) || 0,
-        sharesCount: Number(p.sharesCount ?? p.shares_count) || 0,
-        createdAt: p.createdAt || 'Recently',
-        createdAtIso: p.createdAtIso || p.created_at || undefined,
-        promptUsed: p.promptUsed || p.prompt_used || p.prompt || undefined,
-        musicTrack: p.musicTrack,
-        audioTrack: p.audioTrack || p.audio_track,
-      }))
+      .map((p: any) => {
+        const authorPrivacy = normalizeProfilePrivacy(
+          p.authorProfilePrivacy || p.author?.profilePrivacy || p.author?.profile_privacy
+        );
+        return {
+          id: String(p.id),
+          title: p.videoTitle || p.video_title || p.prompt || 'Metfa Reel',
+          caption: p.caption || '',
+          author: {
+            id: p.author?.id || p.author_id || 'creator',
+            name: p.author?.name || p.author?.display_name || 'Metfa Creator',
+            username: p.author?.username || 'creator',
+            avatar: p.author?.avatar || p.author?.avatar_url || getDefaultAvatar(p.author?.username || 'creator'),
+            isVerified: Boolean(p.author?.isVerified ?? p.author?.is_verified ?? true),
+            profilePrivacy: authorPrivacy,
+          },
+          authorProfilePrivacy: authorPrivacy,
+          visibility: p.visibility !== undefined ? p.visibility : null,
+          videoSrc: p.videoSrc || p.video_src,
+          thumbnailSrc: p.videoThumbnail || p.video_thumbnail || p.imageSrc || undefined,
+          duration: typeof p.duration === 'number' ? p.duration : 15,
+          likesCount: Number(p.likesCount ?? p.likes_count) || 0,
+          commentsCount: Number(p.commentsCount ?? p.comments_count) || 0,
+          sharesCount: Number(p.sharesCount ?? p.shares_count) || 0,
+          createdAt: p.createdAt || 'Recently',
+          createdAtIso: p.createdAtIso || p.created_at || undefined,
+          promptUsed: p.promptUsed || p.prompt_used || p.prompt || undefined,
+          musicTrack: p.musicTrack,
+          audioTrack: p.audioTrack || p.audio_track,
+        } as ReelHighlight;
+      })
       .filter(isRealReel);
   } catch {
     return [];
@@ -189,76 +233,59 @@ export async function fetchPersistentReels(options?: {
 
   let supabaseReels: ReelHighlight[] | null = null;
 
+  const runReelQuery = async (withExplicitFkey: boolean, withPrivacyCol: boolean) => {
+    const profileRel = withExplicitFkey ? 'author:profiles!posts_author_id_fkey' : 'author:profiles';
+    const profileCols = withPrivacyCol
+      ? 'id, display_name, username, avatar_url, is_verified, profile_privacy'
+      : 'id, display_name, username, avatar_url, is_verified';
+    return supabase
+      .from('posts')
+      .select(`
+        id,
+        author_id,
+        prompt,
+        caption,
+        video_src,
+        video_title,
+        video_thumbnail,
+        post_type,
+        visibility,
+        likes_count,
+        comments_count,
+        shares_count,
+        tags,
+        audio_track,
+        created_at,
+        ${profileRel} (${profileCols})
+      `)
+      .eq('post_type', 'reel')
+      .order('created_at', { ascending: false })
+      .range(offset, offset + limit - 1);
+  };
+
   if (isSupabaseConfigured()) {
     try {
-      const { data, error } = await supabase
-        .from('posts')
-        .select(`
-          id,
-          author_id,
-          prompt,
-          caption,
-          video_src,
-          video_title,
-          video_thumbnail,
-          post_type,
-          likes_count,
-          comments_count,
-          shares_count,
-          tags,
-          audio_track,
-          created_at,
-          author:profiles!posts_author_id_fkey (
-            id,
-            display_name,
-            username,
-            avatar_url,
-            is_verified
-          )
-        `)
-        .eq('post_type', 'reel')
-        .order('created_at', { ascending: false })
-        .range(offset, offset + limit - 1);
+      let { data, error } = await runReelQuery(true, true);
+
+      if (error && isMissingPrivacyColumnError(error)) {
+        const retryNoPriv = await runReelQuery(true, false);
+        data = retryNoPriv.data;
+        error = retryNoPriv.error;
+      }
 
       if (error) {
         console.warn('[ReelService] Supabase fetch error, trying without explicit fkey:', error.message);
-        // Fallback without explicit fkey if foreign key name differs
-        const fallbackRes = await supabase
-          .from('posts')
-          .select(`
-            id,
-            author_id,
-            prompt,
-            caption,
-            video_src,
-            video_title,
-            video_thumbnail,
-            post_type,
-            likes_count,
-            comments_count,
-            shares_count,
-            tags,
-            audio_track,
-            created_at,
-            author:profiles (
-              id,
-              display_name,
-              username,
-              avatar_url,
-              is_verified
-            )
-          `)
-          .eq('post_type', 'reel')
-          .order('created_at', { ascending: false })
-          .range(offset, offset + limit - 1);
-
+        let fallbackRes = await runReelQuery(false, true);
+        if (fallbackRes.error && isMissingPrivacyColumnError(fallbackRes.error)) {
+          fallbackRes = await runReelQuery(false, false);
+        }
         if (!fallbackRes.error && fallbackRes.data) {
-          const validRows = fallbackRes.data.filter((row: any) => Boolean(row.video_src));
+          const validRows = (fallbackRes.data as any[]).filter((row) => Boolean(row.video_src));
           await resolveMissingReelAuthors(validRows);
           supabaseReels = validRows.map(mapSupabaseRowToReel).filter(isRealReel);
         }
       } else if (data) {
-        const validRows = data.filter((row: any) => Boolean(row.video_src));
+        const validRows = (data as any[]).filter((row) => Boolean(row.video_src));
         await resolveMissingReelAuthors(validRows);
         supabaseReels = validRows.map(mapSupabaseRowToReel).filter(isRealReel);
       }
@@ -267,7 +294,6 @@ export async function fetchPersistentReels(options?: {
     }
   }
 
-  // Merge strictly designated persistent reels from Supabase, server disk (/api/posts post_type='reel'), and offline local reels
   const localReels = getReelHighlights().filter(isRealReel);
   const serverReels = await fetchServerPersistentReels();
 
@@ -282,7 +308,6 @@ export async function fetchPersistentReels(options?: {
       }
     }
     for (const r of localReels) {
-      // Only merge locally-created non-UUID reels when Supabase succeeded (avoid resurrecting deleted Supabase UUIDs)
       if (!isValidUuid(r.id) && !mergedMap.has(r.id) && r.videoSrc && !r.videoSrc.startsWith('blob:')) {
         mergedMap.set(r.id, r);
       }
@@ -290,7 +315,6 @@ export async function fetchPersistentReels(options?: {
     return { reels: Array.from(mergedMap.values()), source: 'supabase' };
   }
 
-  // Fallback when Supabase is offline/unconfigured
   const fallbackMap = new Map<string, ReelHighlight>();
   for (const r of localReels) {
     if (r.videoSrc) fallbackMap.set(r.id, r);
@@ -301,13 +325,6 @@ export async function fetchPersistentReels(options?: {
   return { reels: Array.from(fallbackMap.values()), source: 'local' };
 }
 
-/**
- * Creates a persistent Reel:
- * 1. Uploads video file via uploadMediaItem (Supabase Storage 'posts' bucket or server fallback)
- * 2. Uploads thumbnail if provided
- * 3. Persists Reel record to Supabase public.posts with post_type = 'reel'
- * 4. Syncs with local store for offline availability
- */
 export async function createPersistentReel(
   params: CreateReelParams,
   onProgress?: (step: string) => void
@@ -320,10 +337,11 @@ export async function createPersistentReel(
     return { success: false, error: 'Video file is required to create a reel' };
   }
 
+  const resolvedVisibility = params.visibility || 'public';
+
   try {
     onProgress?.('Uploading video to cloud storage...');
 
-    // 1. Upload video persistently
     const videoUpload = await uploadMediaItem(params.videoSource, {
       userId: params.author.id,
       type: 'video',
@@ -336,9 +354,11 @@ export async function createPersistentReel(
 
     const permanentVideoUrl = videoUpload.url;
 
-    // 2. Upload thumbnail if provided and not already an HTTP URL
     let permanentThumbUrl = params.thumbnailSource;
-    if (params.thumbnailSource && (params.thumbnailSource.startsWith('data:') || params.thumbnailSource.startsWith('blob:'))) {
+    if (
+      params.thumbnailSource &&
+      (params.thumbnailSource.startsWith('data:') || params.thumbnailSource.startsWith('blob:'))
+    ) {
       try {
         onProgress?.('Processing reel cover thumbnail...');
         const thumbUpload = await uploadMediaItem(params.thumbnailSource, {
@@ -359,10 +379,9 @@ export async function createPersistentReel(
     const resolvedTitle = params.title.trim() || 'AI Creation Reel';
     const resolvedCaption = params.caption.trim() || 'Created with Metfa Studio #AI';
 
-    // 3. Persist to Supabase if configured and user is authenticated
     if (isSupabaseConfigured() && isValidUuid(params.author.id)) {
       try {
-        const insertPayload = {
+        const insertPayload: Record<string, any> = {
           author_id: params.author.id,
           prompt: params.promptUsed || resolvedTitle,
           caption: resolvedCaption,
@@ -377,7 +396,7 @@ export async function createPersistentReel(
           tags: ['reel', 'video'],
           feed_type: 'for_you',
           audio_track: params.audioTrack || null,
-          visibility: 'public',
+          visibility: resolvedVisibility,
           is_pinned: false,
           is_edited: false,
           is_ai_generated: Boolean(params.promptUsed),
@@ -386,23 +405,37 @@ export async function createPersistentReel(
           updated_at: new Date().toISOString(),
         };
 
-        const { data, error } = await supabase
-          .from('posts')
-          .insert(insertPayload)
-          .select(`
-            *,
-            author:profiles (
-              id,
-              display_name,
-              username,
-              avatar_url,
-              is_verified
-            )
-          `)
-          .single();
+        const runInsert = async (payload: Record<string, any>, includePrivacyCol: boolean) => {
+          const profileCols = includePrivacyCol
+            ? 'id, display_name, username, avatar_url, is_verified, profile_privacy'
+            : 'id, display_name, username, avatar_url, is_verified';
+          return supabase
+            .from('posts')
+            .insert(payload)
+            .select(`*, author:profiles (${profileCols})`)
+            .single();
+        };
+
+        let { data, error } = await runInsert(insertPayload, true);
+
+        if (error && isMissingPrivacyColumnError(error)) {
+          const retry = await runInsert(insertPayload, false);
+          data = retry.data;
+          error = retry.error;
+        }
+
+        if (error && resolvedVisibility === 'only_me' && isVisibilityConstraintError(error)) {
+          const retry = await runInsert({ ...insertPayload, visibility: 'private' }, false);
+          data = retry.data;
+          error = retry.error;
+        }
 
         if (!error && data) {
           const createdReel = mapSupabaseRowToReel(data);
+          if (params.author.profilePrivacy) {
+            createdReel.authorProfilePrivacy = params.author.profilePrivacy;
+            createdReel.author.profilePrivacy = params.author.profilePrivacy;
+          }
           saveReelHighlight(createdReel);
           return { success: true, reel: createdReel };
         } else if (error) {
@@ -413,7 +446,6 @@ export async function createPersistentReel(
       }
     }
 
-    // 4. Fallback: Local/Server creation with the permanent media URL
     const fallbackReel: ReelHighlight = {
       id: `reel_${Date.now()}`,
       title: resolvedTitle,
@@ -424,7 +456,10 @@ export async function createPersistentReel(
         username: params.author.username,
         avatar: params.author.avatar,
         isVerified: params.author.isVerified,
+        profilePrivacy: params.author.profilePrivacy,
       },
+      authorProfilePrivacy: params.author.profilePrivacy,
+      visibility: resolvedVisibility,
       videoSrc: permanentVideoUrl,
       thumbnailSrc: permanentThumbUrl,
       duration: params.duration || 15,
@@ -446,9 +481,6 @@ export async function createPersistentReel(
   }
 }
 
-/**
- * Permanently deletes a reel from Supabase and local store.
- */
 export async function deletePersistentReel(reelId: string, authorId: string): Promise<boolean> {
   if (isSupabaseConfigured() && isValidUuid(reelId)) {
     try {
@@ -470,12 +502,9 @@ export async function deletePersistentReel(reelId: string, authorId: string): Pr
   return true;
 }
 
-/**
- * Updates a reel's title or caption in Supabase and local store.
- */
 export async function editPersistentReel(
   reelId: string,
-  updates: { title?: string; caption?: string },
+  updates: { title?: string; caption?: string; visibility?: PostAudience | 'private' },
   authorId: string
 ): Promise<boolean> {
   if (isSupabaseConfigured() && isValidUuid(reelId)) {
@@ -488,12 +517,24 @@ export async function editPersistentReel(
       if (updates.caption !== undefined) {
         payload.caption = updates.caption;
       }
+      if (updates.visibility !== undefined) {
+        payload.visibility = updates.visibility;
+      }
 
-      const { error } = await supabase
+      let { error } = await supabase
         .from('posts')
         .update(payload)
         .eq('id', reelId)
         .eq('author_id', authorId);
+
+      if (error && updates.visibility === 'only_me' && isVisibilityConstraintError(error)) {
+        const retry = await supabase
+          .from('posts')
+          .update({ ...payload, visibility: 'private' })
+          .eq('id', reelId)
+          .eq('author_id', authorId);
+        error = retry.error;
+      }
 
       if (error) {
         console.warn('[ReelService] Supabase update error:', error.message);
@@ -504,19 +545,13 @@ export async function editPersistentReel(
   }
 
   editReelHighlight(reelId, {
-    title: updates.title,
-    caption: updates.caption,
+    ...(updates.title !== undefined ? { title: updates.title } : {}),
+    ...(updates.caption !== undefined ? { caption: updates.caption } : {}),
+    ...(updates.visibility !== undefined ? { visibility: updates.visibility } : {}),
   });
   return true;
 }
 
-/**
- * Safe, idempotent migration of legacy LocalStorage reels:
- * - Checks metfa_reels_v1
- * - Skips ephemeral blob: URLs (cannot be migrated across sessions)
- * - Migrates reels with permanent URLs to Supabase if authenticated
- * - Never silently deletes local records
- */
 export async function migrateLocalStorageReels(currentUserId: string): Promise<{
   totalLocal: number;
   migratedCount: number;
@@ -538,19 +573,16 @@ export async function migrateLocalStorageReels(currentUserId: string): Promise<{
   const errors: string[] = [];
 
   for (const reel of localReels) {
-    // Only migrate reels belonging to the current user
     if (reel.author?.id !== currentUserId) {
       skippedCount++;
       continue;
     }
 
-    // Skip ephemeral blob: URLs
     if (reel.videoSrc.startsWith('blob:')) {
       skippedCount++;
       continue;
     }
 
-    // If reel already has a valid UUID, it's already in Supabase
     if (isValidUuid(reel.id)) {
       skippedCount++;
       continue;
@@ -572,7 +604,7 @@ export async function migrateLocalStorageReels(currentUserId: string): Promise<{
         tags: ['reel', 'migrated'],
         feed_type: 'for_you',
         audio_track: reel.audioTrack || null,
-        visibility: 'public',
+        visibility: reel.visibility || 'public',
         created_at: new Date().toISOString(),
       };
 
@@ -584,7 +616,6 @@ export async function migrateLocalStorageReels(currentUserId: string): Promise<{
 
       if (!error && data?.id) {
         migratedCount++;
-        // Update local reel ID to the persistent UUID
         reel.id = data.id;
       } else if (error) {
         errors.push(`Reel "${reel.title}": ${error.message}`);
@@ -595,7 +626,8 @@ export async function migrateLocalStorageReels(currentUserId: string): Promise<{
   }
 
   if (migratedCount > 0) {
-    saveReelHighlights(localReels);
+    // Re-save local cache after migration updates
+    localReels.forEach((r) => saveReelHighlight(r));
   }
 
   return {

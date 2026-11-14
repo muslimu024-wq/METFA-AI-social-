@@ -12,7 +12,9 @@ import {
   ArrowRight,
   Clock,
   ShieldCheck,
-  Crown
+  Crown,
+  UserPlus,
+  UserCheck
 } from 'lucide-react';
 import { AppNotification, NotificationType } from '../types/notification';
 import {
@@ -73,7 +75,18 @@ export const NotificationsView: React.FC<NotificationsViewProps> = ({
   const filteredNotifications = notifications.filter((notif) => {
     if (filterType === 'unread') return !notif.isRead;
     if (filterType === 'rewards') return notif.type === 'ad_reward' || notif.type === 'credits_refill';
-    if (filterType === 'social') return notif.type === 'like' || notif.type === 'remix' || notif.type === 'comment' || notif.type === 'group_created' || notif.type === 'page_created';
+    if (filterType === 'social') {
+      return (
+        notif.type === 'like' ||
+        notif.type === 'remix' ||
+        notif.type === 'comment' ||
+        notif.type === 'group_created' ||
+        notif.type === 'page_created' ||
+        notif.type === 'follow' ||
+        notif.type === 'follow_request' ||
+        notif.type === 'follow_approved'
+      );
+    }
     return true;
   });
 
@@ -91,6 +104,11 @@ export const NotificationsView: React.FC<NotificationsViewProps> = ({
         return <Users className="w-4 h-4 text-indigo-400" />;
       case 'page_created':
         return <FileText className="w-4 h-4 text-purple-400" />;
+      case 'follow':
+      case 'follow_request':
+        return <UserPlus className="w-4 h-4 text-amber-400" />;
+      case 'follow_approved':
+        return <UserCheck className="w-4 h-4 text-teal-400" />;
       default:
         return <Sparkles className="w-4 h-4 text-purple-400" />;
     }

@@ -11,7 +11,8 @@ import {
   Smartphone,
   Link2,
   Mail,
-  Globe
+  Globe,
+  Lock
 } from 'lucide-react';
 import { SharePayload, getSocialShareLinks, getAppBaseUrl } from '../utils/shareUtils';
 
@@ -20,6 +21,8 @@ interface SocialShareModalProps {
   onClose: () => void;
   payload: SharePayload | null;
   onSharePerformed?: () => void;
+  canShare?: boolean;
+  restrictedReason?: string;
 }
 
 export const SocialShareModal: React.FC<SocialShareModalProps> = ({
@@ -27,6 +30,8 @@ export const SocialShareModal: React.FC<SocialShareModalProps> = ({
   onClose,
   payload,
   onSharePerformed,
+  canShare = true,
+  restrictedReason,
 }) => {
   const [copied, setCopied] = useState(false);
 
@@ -39,6 +44,7 @@ export const SocialShareModal: React.FC<SocialShareModalProps> = ({
   const links = getSocialShareLinks(payload);
 
   const handleCopyLink = async () => {
+    if (!canShare) return;
     try {
       if (navigator.clipboard && navigator.clipboard.writeText) {
         await navigator.clipboard.writeText(currentUrl);
@@ -59,6 +65,7 @@ export const SocialShareModal: React.FC<SocialShareModalProps> = ({
   };
 
   const handleOpenSocial = (url: string) => {
+    if (!canShare) return;
     onSharePerformed?.();
     window.open(url, '_blank', 'noopener,noreferrer');
   };
@@ -215,88 +222,102 @@ export const SocialShareModal: React.FC<SocialShareModalProps> = ({
           </div>
         </div>
 
-        {/* Native Mobile Sheet Button (if available) */}
-        {hasNativeShare && (
-          <div className="mb-4">
-            <button
-              type="button"
-              id="native-device-share-btn"
-              onClick={handleNativeShareAgain}
-              className="w-full py-2.5 px-4 bg-gradient-to-r from-teal-600 to-indigo-600 hover:from-teal-500 hover:to-indigo-500 text-white font-bold text-xs rounded-xl shadow-lg shadow-teal-600/20 flex items-center justify-center gap-2 transition active:scale-95"
-            >
-              <Smartphone className="w-4 h-4" />
-              <span>Open Device Native Share Sheet</span>
-            </button>
+        {!canShare ? (
+          <div className="p-4 rounded-2xl bg-amber-950/40 border border-amber-500/40 text-amber-200 flex items-start gap-3">
+            <Lock className="w-5 h-5 text-amber-400 shrink-0 mt-0.5" />
+            <div className="space-y-1 text-xs">
+              <p className="font-bold text-amber-100">External Sharing & Link Copying Disabled</p>
+              <p className="text-amber-200/90 leading-relaxed">
+                {restrictedReason || 'Sharing, native share sheet, and link copying are disabled for Followers-only, Only Me, legacy restricted, or Private-profile posts.'}
+              </p>
+            </div>
           </div>
-        )}
-
-        {/* Quick Social Share Grid */}
-        <div className="space-y-2 mb-5">
-          <label className="text-[11px] font-bold text-gray-400 uppercase tracking-wider block">
-            Direct Share
-          </label>
-          <div className="grid grid-cols-4 gap-2.5">
-            {socialPlatforms.map((platform) => {
-              const IconComp = platform.icon;
-              return (
+        ) : (
+          <>
+            {/* Native Mobile Sheet Button (if available) */}
+            {hasNativeShare && (
+              <div className="mb-4">
                 <button
-                  key={platform.id}
                   type="button"
-                  id={`share-btn-${platform.id}`}
-                  onClick={platform.action}
-                  className="flex flex-col items-center gap-1.5 p-2 rounded-2xl bg-gray-950 border border-gray-800/90 hover:border-teal-500/50 hover:bg-gray-850 transition group active:scale-95"
+                  id="native-device-share-btn"
+                  onClick={handleNativeShareAgain}
+                  className="w-full py-2.5 px-4 bg-gradient-to-r from-teal-600 to-indigo-600 hover:from-teal-500 hover:to-indigo-500 text-white font-bold text-xs rounded-xl shadow-lg shadow-teal-600/20 flex items-center justify-center gap-2 transition active:scale-95"
                 >
-                  <div
-                    className={`w-10 h-10 rounded-xl flex items-center justify-center shadow-md transition group-hover:scale-105 ${platform.color}`}
-                  >
-                    <IconComp className="w-5 h-5" />
-                  </div>
-                  <span className="text-[10px] font-medium text-gray-300 group-hover:text-white truncate max-w-full">
-                    {platform.name}
-                  </span>
+                  <Smartphone className="w-4 h-4" />
+                  <span>Open Device Native Share Sheet</span>
                 </button>
-              );
-            })}
-          </div>
-        </div>
+              </div>
+            )}
 
-        {/* Copy Link Section */}
-        <div className="space-y-2">
-          <label className="text-[11px] font-bold text-gray-400 uppercase tracking-wider block">
-            Page Link
-          </label>
-          <div className="flex items-center gap-2 bg-gray-950 border border-gray-800 rounded-xl p-1.5 pl-3">
-            <Link2 className="w-4 h-4 text-gray-500 shrink-0" />
-            <input
-              type="text"
-              readOnly
-              value={currentUrl}
-              className="bg-transparent text-xs text-gray-300 w-full focus:outline-none truncate selection:bg-teal-500/30"
-            />
-            <button
-              type="button"
-              id="copy-share-link-btn"
-              onClick={handleCopyLink}
-              className={`px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 transition shrink-0 shadow-md ${
-                copied
-                  ? 'bg-teal-500 text-black'
-                  : 'bg-purple-600 hover:bg-purple-500 text-white'
-              }`}
-            >
-              {copied ? (
-                <>
-                  <Check className="w-3.5 h-3.5 stroke-[3]" />
-                  <span>Copied!</span>
-                </>
-              ) : (
-                <>
-                  <Copy className="w-3.5 h-3.5" />
-                  <span>Copy Link</span>
-                </>
-              )}
-            </button>
-          </div>
-        </div>
+            {/* Quick Social Share Grid */}
+            <div className="space-y-2 mb-5">
+              <label className="text-[11px] font-bold text-gray-400 uppercase tracking-wider block">
+                Direct Share
+              </label>
+              <div className="grid grid-cols-4 gap-2.5">
+                {socialPlatforms.map((platform) => {
+                  const IconComp = platform.icon;
+                  return (
+                    <button
+                      key={platform.id}
+                      type="button"
+                      id={`share-btn-${platform.id}`}
+                      onClick={platform.action}
+                      className="flex flex-col items-center gap-1.5 p-2 rounded-2xl bg-gray-950 border border-gray-800/90 hover:border-teal-500/50 hover:bg-gray-850 transition group active:scale-95"
+                    >
+                      <div
+                        className={`w-10 h-10 rounded-xl flex items-center justify-center shadow-md transition group-hover:scale-105 ${platform.color}`}
+                      >
+                        <IconComp className="w-5 h-5" />
+                      </div>
+                      <span className="text-[10px] font-medium text-gray-300 group-hover:text-white truncate max-w-full">
+                        {platform.name}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* Copy Link Section */}
+            <div className="space-y-2">
+              <label className="text-[11px] font-bold text-gray-400 uppercase tracking-wider block">
+                Page Link
+              </label>
+              <div className="flex items-center gap-2 bg-gray-950 border border-gray-800 rounded-xl p-1.5 pl-3">
+                <Link2 className="w-4 h-4 text-gray-500 shrink-0" />
+                <input
+                  type="text"
+                  readOnly
+                  value={currentUrl}
+                  className="bg-transparent text-xs text-gray-300 w-full focus:outline-none truncate selection:bg-teal-500/30"
+                />
+                <button
+                  type="button"
+                  id="copy-share-link-btn"
+                  onClick={handleCopyLink}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 transition shrink-0 shadow-md ${
+                    copied
+                      ? 'bg-teal-500 text-black'
+                      : 'bg-purple-600 hover:bg-purple-500 text-white'
+                  }`}
+                >
+                  {copied ? (
+                    <>
+                      <Check className="w-3.5 h-3.5 stroke-[3]" />
+                      <span>Copied!</span>
+                    </>
+                  ) : (
+                    <>
+                      <Copy className="w-3.5 h-3.5" />
+                      <span>Copy Link</span>
+                    </>
+                  )}
+                </button>
+              </div>
+            </div>
+          </>
+        )}
       </div>
     </div>
   );

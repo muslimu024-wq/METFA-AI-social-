@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
-import { Share2, X, Sparkles, Wand2, Check } from 'lucide-react';
-import { CommunityPost, PostingIdentity, UserProfile } from '../types/community';
+import { Share2, X, Sparkles, Wand2, Check, Globe, Users, Lock, ShieldCheck } from 'lucide-react';
+import { CommunityPost, PostAudience, PostingIdentity, UserProfile } from '../types/community';
+import { normalizeDefaultPostAudience } from '../utils/privacyPolicy';
 import { getPages, getGroups } from '../utils/socialStore';
 import { generateSocialCaptionAndHashtags } from '../services/geminiService';
 import { compressImageDataUrl } from '../utils/storageUtils';
@@ -27,7 +28,16 @@ export const ShareToFeedModal: React.FC<ShareToFeedModalProps> = ({
   const [caption, setCaption] = useState(postData?.prompt || '');
   const [tagsInput, setTagsInput] = useState('MetfaAI, DigitalArt, GeminiVision');
   const [selectedIdentity, setSelectedIdentity] = useState<'personal' | string>('personal');
+  const [visibility, setVisibility] = useState<PostAudience>(() =>
+    normalizeDefaultPostAudience(userProfile?.defaultPostAudience)
+  );
   const [isGeneratingCaption, setIsGeneratingCaption] = useState(false);
+
+  useEffect(() => {
+    if (isOpen) {
+      setVisibility(normalizeDefaultPostAudience(userProfile?.defaultPostAudience));
+    }
+  }, [isOpen, userProfile?.defaultPostAudience]);
 
   useEffect(() => {
     if (postData?.prompt) {
@@ -120,7 +130,10 @@ export const ShareToFeedModal: React.FC<ShareToFeedModalProps> = ({
         username: userProfile.username,
         avatar: userProfile.avatar,
         isVerified: userProfile.isVerified,
+        profilePrivacy: userProfile.profilePrivacy || 'public',
       },
+      authorProfilePrivacy: userProfile.profilePrivacy || 'public',
+      visibility,
       postingIdentity,
       pageId,
       pageName,
@@ -193,6 +206,44 @@ export const ShareToFeedModal: React.FC<ShareToFeedModalProps> = ({
               </option>
             ))}
           </select>
+        </div>
+
+        {/* Audience Selector */}
+        <div className="mb-4 bg-gray-950 border border-gray-800 rounded-2xl p-3 space-y-2">
+          <label className="text-[11px] font-bold text-gray-300 uppercase tracking-wider flex items-center gap-1.5">
+            <ShieldCheck className="w-3.5 h-3.5 text-purple-400" />
+            <span>Audience</span>
+          </label>
+          <div className="grid grid-cols-3 gap-1.5">
+            {[
+              { id: 'public' as PostAudience, label: 'Public', icon: Globe },
+              { id: 'followers' as PostAudience, label: 'Followers', icon: Users },
+              { id: 'only_me' as PostAudience, label: 'Only Me', icon: Lock },
+            ].map((opt) => {
+              const IconComp = opt.icon;
+              const active = visibility === opt.id;
+              return (
+                <button
+                  key={opt.id}
+                  type="button"
+                  onClick={() => setVisibility(opt.id)}
+                  className={`px-2 py-1.5 rounded-xl text-[11px] font-bold flex items-center justify-center gap-1 border transition cursor-pointer ${
+                    active
+                      ? 'bg-purple-600 text-white border-purple-500'
+                      : 'bg-gray-900 text-gray-300 border-gray-800 hover:border-gray-700'
+                  }`}
+                >
+                  <IconComp className="w-3.5 h-3.5 shrink-0" />
+                  <span>{opt.label}</span>
+                </button>
+              );
+            })}
+          </div>
+          {userProfile.profilePrivacy === 'private' && visibility === 'public' && (
+            <p className="text-[10px] text-amber-300">
+              Private Profile: only approved followers can see this post while your account is private.
+            </p>
+          )}
         </div>
 
         {/* Caption with AI Generate button */}

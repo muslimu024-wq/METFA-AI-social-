@@ -6,6 +6,7 @@
  */
 
 import { VideoAnalyticsSummary, CreatorInsightsSummary } from '../services/videoAnalyticsEngine';
+import { getClientAuthToken } from '../services/supabaseClient';
 import { trackVideoRetentionBucket, TrafficSourceType } from './contentTracker';
 
 export interface VideoSessionPayload {
@@ -40,26 +41,32 @@ export async function sendVideoWatchSession(payload: VideoSessionPayload): Promi
 
   const body = JSON.stringify(payload);
 
-  // 1. If page is unloading/navigating away, prefer sendBeacon with blob
-  if (typeof navigator !== 'undefined' && typeof navigator.sendBeacon === 'function') {
+  let token: string | null = null;
+  try {
+    token = await getClientAuthToken();
+  } catch {}
+
+  // 1. If unauthenticated, sendBeacon can safely submit anonymous watch session
+  if (!token && typeof navigator !== 'undefined' && typeof navigator.sendBeacon === 'function') {
     try {
       const blob = new Blob([body], { type: 'application/json' });
       const sent = navigator.sendBeacon('/api/analytics/video-session', blob);
       if (sent) {
-        // Also trigger local integration bridge for real-time reactivity
         dispatchLocalBridgeEvent(payload);
         return true;
       }
     } catch {}
   }
 
-  // 2. Standard fetch with keepalive
+  // 2. Standard fetch with keepalive and verified Bearer header when signed in
   try {
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    if (token) {
+      headers.Authorization = `Bearer ${token}`;
+    }
     const res = await fetch('/api/analytics/video-session', {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
+      headers,
       body,
       keepalive: true,
     });
@@ -102,7 +109,10 @@ function dispatchLocalBridgeEvent(payload: VideoSessionPayload) {
  */
 export async function fetchVideoAnalytics(videoId: string): Promise<VideoAnalyticsSummary | null> {
   try {
-    const res = await fetch(`/api/analytics/video/${encodeURIComponent(videoId)}`);
+    const token = await getClientAuthToken().catch(() => null);
+    const headers: Record<string, string> = {};
+    if (token) headers.Authorization = `Bearer ${token}`;
+    const res = await fetch(`/api/analytics/video/${encodeURIComponent(videoId)}`, { headers });
     if (res.ok) {
       const data = await res.json();
       return data.analytics || null;
@@ -118,7 +128,10 @@ export async function fetchVideoAnalytics(videoId: string): Promise<VideoAnalyti
  */
 export async function fetchCreatorInsights(creatorId: string): Promise<CreatorInsightsSummary | null> {
   try {
-    const res = await fetch(`/api/analytics/creator/${encodeURIComponent(creatorId)}`);
+    const token = await getClientAuthToken().catch(() => null);
+    const headers: Record<string, string> = {};
+    if (token) headers.Authorization = `Bearer ${token}`;
+    const res = await fetch(`/api/analytics/creator/${encodeURIComponent(creatorId)}`, { headers });
     if (res.ok) {
       const data = await res.json();
       return data.insights || null;

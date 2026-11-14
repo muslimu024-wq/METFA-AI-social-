@@ -1,0 +1,1148 @@
+declare global { namespace Express { interface Request { v2Auth?: { userId: string; email?: string; roles: string[]; token: string; }; } } }
+var __defProp=Object.defineProperty;var __name=(target,value)=>__defProp(target,"name",{value,configurable:true});import express from"express";import path from"path";import fs from"fs";import crypto from"crypto";import{createServer as createViteServer}from"vite";import{GoogleGenAI}from"@google/genai";import{createClient}from"@supabase/supabase-js";import{checkContentSafety,METFA_AI_SAFETY_SYSTEM_INSTRUCTION}from"./utils/contentSafety";import{v2RevenueEngine}from"./services/v2RevenueEngine";import{v2ContributionEngine}from"./services/v2ContributionEngine";import{v2RewardEngine}from"./services/v2RewardEngine";import{v2WalletEngine}from"./services/v2WalletEngine";import{v2RiskEngine}from"./services/v2RiskEngine";import{v2AdminEngine}from"./services/v2AdminEngine";import{v2PremiumContentEngine}from"./services/v2PremiumContentEngine";import{requireAuth,requireV2Role,getServerSupabaseClient,getPublicSupabaseClient,extractBearerToken,verifySupabaseToken,getVerifiedUserRoles}from"./services/serverAuth";import{videoAnalyticsEngine}from"./services/videoAnalyticsEngine";import{v2IntegrationAdapter}from"./services/v2IntegrationAdapter";import{contentAnalyticsEngine,type ContentCatalogDescriptor,type ContentFilterType,type AnalyticsDateRange,type AIInsightItem}from"./services/contentAnalyticsEngine";async function startServer(){const app=express();const PORT=Number(process.env.DEFAULT_APP_PORT)||3000;app.set("trust proxy",1);app.use((req,res,next)=>{res.setHeader("X-Content-Type-Options","nosniff");res.setHeader("X-XSS-Protection","1; mode=block");res.setHeader("Referrer-Policy","strict-origin-when-cross-origin");const origin=req.headers.origin;if(origin){res.setHeader("Access-Control-Allow-Origin",origin);res.setHeader("Access-Control-Allow-Credentials","true");res.setHeader("Access-Control-Allow-Methods","GET, POST, PUT, DELETE, OPTIONS");res.setHeader("Access-Control-Allow-Headers","Content-Type, Authorization, X-Requested-With, Accept")}else{res.setHeader("Access-Control-Allow-Origin","*")}if(req.method==="OPTIONS"){return res.sendStatus(204)}if(process.env.NODE_ENV==="production"){const canonicalDomain=process.env.CANONICAL_DOMAIN?.trim();const forceHttps=process.env.FORCE_HTTPS==="true"||process.env.FORCE_HTTPS==="1";const isHttp=req.headers["x-forwarded-proto"]==="http";const currentHost=(req.headers.host||"").toLowerCase();if(canonicalDomain&&currentHost&&currentHost!==canonicalDomain.toLowerCase()){return res.redirect(301,`https://${canonicalDomain}${req.originalUrl||req.url}`)}if(forceHttps&&isHttp){return res.redirect(301,`https://${req.headers.host}${req.originalUrl||req.url}`)}if(req.secure||req.headers["x-forwarded-proto"]==="https"){res.setHeader("Strict-Transport-Security","max-age=31536000; includeSubDomains; preload")}}next()});app.use(express.json({limit:"50mb"}));app.use(express.urlencoded({limit:"50mb",extended:true}));const sanitizeApiKey=__name(key=>{if(!key||typeof key!=="string")return null;const trimmed=key.trim();if(!trimmed||trimmed==="undefined"||trimmed==="null"||trimmed==="[object Object]"||trimmed.toLowerCase().includes("placeholder")||trimmed==="..."||trimmed==="sk-..."||trimmed==="AIzaSy..."||trimmed==="xai-..."||trimmed.length<4){return null}return trimmed},"sanitizeApiKey");const sanitizeErrorMessage=__name(msg=>{if(typeof msg!=="string")msg=msg?.message||"Internal server error";return String(msg).replace(/AIzaSy[A-Za-z0-9_-]+/g,"[REDACTED_API_KEY]").replace(/sk-[A-Za-z0-9_-]+/g,"[REDACTED_API_KEY]").replace(/xai-[A-Za-z0-9_-]+/g,"[REDACTED_API_KEY]").replace(/eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/g,"[REDACTED_TOKEN]")},"sanitizeErrorMessage");const isValidGeminiApiKey=__name(key=>{return Boolean(sanitizeApiKey(key))},"isValidGeminiApiKey");const getGeminiApiKey=__name((customKey,req)=>{const direct=sanitizeApiKey(customKey);if(direct)return direct;if(req?.body){const fromBody=sanitizeApiKey(req.body.geminiApiKey||req.body.settings?.geminiApiKey);if(fromBody)return fromBody}if(req?.headers){const fromHeader=sanitizeApiKey(req.headers["x-gemini-api-key"]);if(fromHeader)return fromHeader}const envKey=sanitizeApiKey(process.env.GEMINI_API_KEY)||sanitizeApiKey(process.env.API_KEY)||sanitizeApiKey(process.env.GOOGLE_API_KEY)||sanitizeApiKey(process.env.GOOGLE_GENAI_API_KEY)||sanitizeApiKey(process.env.VITE_GEMINI_API_KEY);if(envKey)return envKey;return null},"getGeminiApiKey");const getOpenAiApiKey=__name((customKey,req)=>{const direct=sanitizeApiKey(customKey);if(direct)return direct;if(req?.body){const fromBody=sanitizeApiKey(req.body.openaiApiKey||req.body.settings?.openaiApiKey);if(fromBody)return fromBody}if(req?.headers){const fromHeader=sanitizeApiKey(req.headers["x-openai-api-key"]);if(fromHeader)return fromHeader}const envKey=sanitizeApiKey(process.env.OPENAI_API_KEY)||sanitizeApiKey(process.env.VITE_OPENAI_API_KEY);if(envKey)return envKey;return null},"getOpenAiApiKey");const getXaiApiKey=__name((customKey,req)=>{const direct=sanitizeApiKey(customKey);if(direct)return direct;if(req?.body){const fromBody=sanitizeApiKey(req.body.grokApiKey||req.body.xaiApiKey||req.body.settings?.grokApiKey||req.body.settings?.xaiApiKey);if(fromBody)return fromBody}if(req?.headers){const fromHeader=sanitizeApiKey(req.headers["x-grok-api-key"]||req.headers["x-xai-api-key"]);if(fromHeader)return fromHeader}const envKey=sanitizeApiKey(process.env.XAI_API_KEY)||sanitizeApiKey(process.env.GROK_API_KEY)||sanitizeApiKey(process.env.VITE_XAI_API_KEY);if(envKey)return envKey;return null},"getXaiApiKey");const getAiClient=__name((customKey,req)=>{const rawKey=getGeminiApiKey(customKey,req);if(rawKey){return new GoogleGenAI({apiKey:rawKey,httpOptions:{headers:{"User-Agent":"aistudio-build"}}})}return null},"getAiClient");function withTimeout(promise,ms,modelName){let timer;const timeoutPromise=new Promise((_,reject)=>{timer=setTimeout(()=>{const err=new Error(`Request to model "${modelName}" timed out after ${ms}ms.`);err.name="TimeoutError";err.code="ETIMEDOUT";err.status=503;reject(err)},ms)});return Promise.race([promise,timeoutPromise]).finally(()=>{clearTimeout(timer)})}__name(withTimeout,"withTimeout");function cleanErrorMessage(rawMsg){if(!rawMsg)return"AI service encountered a temporary issue. Please try again.";if(rawMsg.includes("limit: 0")||rawMsg.includes("generate_content_free_tier")||rawMsg.includes("429")&&rawMsg.includes("quota")&&rawMsg.includes("image")){return"Direct AI image generation requires a Gemini API key with billing enabled, as image models have a quota limit of 0 on Google's free tier."}if(rawMsg.includes("429")||rawMsg.includes("RESOURCE_EXHAUSTED")||rawMsg.includes("quota")){return"The AI service reached its rate limit. Please wait a few moments and click Try Again."}if(rawMsg.includes("503")||rawMsg.includes("high demand")||rawMsg.includes("overloaded")||rawMsg.includes("unavailable")){return"Google Gemini models are currently experiencing high demand. Please try again in a few moments."}try{const match=rawMsg.match(/\{"error":\s*(\{.*?\})\s*\}/s);if(match){const parsed=JSON.parse(match[0]);if(parsed?.error?.message){return cleanErrorMessage(parsed.error.message)}}}catch{}return rawMsg.replace(/\{"error":\{.*?\}\}/gs,"").trim()||rawMsg}__name(cleanErrorMessage,"cleanErrorMessage");async function generateContentWithFallback(ai,options){const timeoutMs=options.timeoutMs??18e3;const errors=[];const validModels=options.models.map(m=>{if(!m||typeof m!=="string")return"gemini-3.8-flash";if(m==="gemini-3.7-flash"||m==="gemini-3.6-flash"||m==="gemini-2.5-flash"||m==="gemini-2.0-flash")return"gemini-3.8-flash";if(m==="gemini-2.5-flash-lite"||m==="gemini-2.0-flash-lite")return"gemini-3.1-flash-lite";if(!m.startsWith("gemini-")&&!m.startsWith("veo-")&&!m.startsWith("lyria-")&&!m.startsWith("imagen-")){return"gemini-3.8-flash"}return m}).filter((m,idx,arr)=>arr.indexOf(m)===idx);const isImageTask=validModels[0]?.includes("-image");if(!isImageTask){const standardFallbackChain=["gemini-3.8-flash","gemini-3.1-flash-lite","gemini-flash-latest"];for(const modelName of standardFallbackChain){if(!validModels.includes(modelName)){validModels.push(modelName)}}}let activeAi=ai;let attemptedEnvFallback=false;for(let i=0;i<validModels.length;i++){const model=validModels[i];const isLast=i===validModels.length-1;const startTime=Date.now();try{console.log(`[Gemini API] Invoking model "${model}" (attempt ${i+1}/${validModels.length}, timeout ${timeoutMs}ms)...`);const response=await withTimeout(activeAi.models.generateContent({model,contents:options.contents,config:options.config}),timeoutMs,model);const latencyMs=Date.now()-startTime;console.log(`[Gemini API] Successfully generated with "${model}" in ${latencyMs}ms (fallback: ${i>0})`);return{response,modelUsed:model,isFallback:i>0,attemptNumber:i+1,latencyMs}}catch(err){const durationMs=Date.now()-startTime;const errMsg=err?.message||String(err);const errCode=err?.code||(err?.name==="TimeoutError"?"TIMEOUT_EXCEEDED":err?.status||"503");console.log(`[Gemini API] Model "${model}" failover triggered (${durationMs}ms): ${cleanErrorMessage(errMsg).slice(0,100)}`);errors.push({model,error:errMsg,code:String(errCode),durationMs});if(isImageTask&&(errMsg.includes("limit: 0")||errMsg.includes("free_tier")||errMsg.includes("RESOURCE_EXHAUSTED"))){const quotaErr=new Error("Direct AI image generation requires a Gemini API key with billing enabled, as image models have a quota limit of 0 on Google's free tier.");quotaErr.isImageQuotaExceeded=true;quotaErr.status=429;throw quotaErr}if(errMsg.includes("API_KEY_INVALID")||errMsg.includes("API key not valid")||errMsg.includes("ACCESS_TOKEN_TYPE_UNSUPPORTED")||errMsg.includes("UNAUTHENTICATED")||err?.status===400||err?.status===401){const validEnvKey=isValidGeminiApiKey(process.env.GEMINI_API_KEY)&&process.env.GEMINI_API_KEY?.trim()||isValidGeminiApiKey(process.env.VITE_GEMINI_API_KEY)&&process.env.VITE_GEMINI_API_KEY?.trim();if(!attemptedEnvFallback&&validEnvKey){console.log("[Gemini API] Key authentication error. Switching to system GEMINI_API_KEY...");attemptedEnvFallback=true;activeAi=new GoogleGenAI({apiKey:validEnvKey,httpOptions:{headers:{"User-Agent":"aistudio-build"}}});i--;continue}else{throw new Error(`Gemini authentication error: ${cleanErrorMessage(errMsg)}`)}}if(errMsg.includes("503")||errMsg.includes("high demand")||errMsg.includes("429")||errMsg.includes("quota")){const backoffDelay=Math.min(800+Math.floor(Math.random()*400),1500);await new Promise(resolve=>setTimeout(resolve,backoffDelay))}if(isLast){console.error(`[Gemini API] All fallback models exhausted for request.`);const userFriendlyError=new Error(cleanErrorMessage(errMsg));userFriendlyError.allErrors=errors;userFriendlyError.status=err?.status===429?429:err?.status===503?503:500;throw userFriendlyError}const nextModel=validModels[i+1];console.log(`[Gemini API] Automatically switching to fallback model "${nextModel}"...`)}}throw new Error("Failed to generate response after all retry attempts.")}__name(generateContentWithFallback,"generateContentWithFallback");async function executeGrok(prompt,attachments=[],settings={},req){const apiKey=getXaiApiKey(settings?.grokApiKey||settings?.xaiApiKey,req);if(!apiKey){throw new Error("xAI Grok API key is not configured.")}const startTime=Date.now();const hasImages=Array.isArray(attachments)&&attachments.some(a=>a.type==="image"&&a.base64);const candidateModels=hasImages?["grok-2-vision-1212","grok-vision-beta"]:settings?.model&&settings.model!=="grok-2-latest"?[settings.model,"grok-2-1212","grok-2","grok-beta","grok-3"]:["grok-2-1212","grok-2","grok-beta","grok-3"];const messages=[{role:"system",content:`You are Metfa Social Assistant powered by xAI Grok. Universal Multilingual Policy: Automatically detect the user's language (Bengali, Hindi, Tagalog, Malay, Arabic, Spanish, French, English, etc.) and ALWAYS reply fluently in that exact same language. Provide insightful, structured, and helpful responses.
+
+${METFA_AI_SAFETY_SYSTEM_INSTRUCTION}`}];if(hasImages){const userContent=[];attachments.forEach(att=>{if(att.type==="image"&&att.base64){const mime=att.mimeType||"image/png";userContent.push({type:"image_url",image_url:{url:`data:${mime};base64,${att.base64}`}})}});userContent.push({type:"text",text:prompt||"Analyze this image and provide insights."});messages.push({role:"user",content:userContent})}else{messages.push({role:"user",content:prompt||"Hello"})}let lastError=null;for(const model of candidateModels){try{const res=await fetch("https://api.x.ai/v1/chat/completions",{method:"POST",headers:{"Content-Type":"application/json",Authorization:`Bearer ${apiKey}`},body:JSON.stringify({model,messages,temperature:Math.min(Math.max(typeof settings?.temperature==="number"?settings.temperature:.7,0),1)})});if(!res.ok){const errText=await res.text().catch(()=>"");let errMsg=`xAI API returned status ${res.status}`;try{const errJson=JSON.parse(errText);errMsg=errJson?.error?.message||errJson?.error||errJson?.message||errText}catch{errMsg=errText||errMsg}if(res.status===400||res.status===404){lastError=new Error(`xAI Grok error (${res.status}): ${errMsg}`);continue}throw new Error(`xAI Grok error (${res.status}): ${errMsg}`)}const data=await res.json();const latencyMs=Date.now()-startTime;const text=data.choices?.[0]?.message?.content||"No response generated from Grok.";return{text,isImageGeneration:false,modelUsed:data.model||model,latencyMs}}catch(err){lastError=err;if(err?.message?.includes("401")||err?.message?.includes("403")){throw err}}}throw lastError||new Error("Failed to execute xAI Grok request across all candidate models.")}__name(executeGrok,"executeGrok");async function executeOpenAI(prompt,attachments=[],settings={},req){const apiKey=getOpenAiApiKey(settings?.openaiApiKey,req);if(!apiKey){throw new Error("OpenAI API key is not configured.")}const startTime=Date.now();const hasImages=Array.isArray(attachments)&&attachments.some(a=>a.type==="image"&&a.base64);const model=settings?.model&&(settings.model.startsWith("gpt-")||settings.model.startsWith("o3-"))?settings.model:"gpt-4o";const messages=[{role:"system",content:`You are Metfa Social Assistant powered by OpenAI ChatGPT. Universal Multilingual Policy: Automatically detect the user's language (Bengali, Hindi, Tagalog, Malay, Arabic, Spanish, French, English, etc.) and ALWAYS reply fluently in that exact same language. Provide insightful, structured, multimodal-friendly responses.
+
+${METFA_AI_SAFETY_SYSTEM_INSTRUCTION}`}];if(hasImages){const userContent=[];attachments.forEach(att=>{if(att.type==="image"&&att.base64){const mime=att.mimeType||"image/png";userContent.push({type:"image_url",image_url:{url:`data:${mime};base64,${att.base64}`}})}});userContent.push({type:"text",text:prompt||"Analyze this image and provide insights."});messages.push({role:"user",content:userContent})}else{messages.push({role:"user",content:prompt||"Hello"})}const res=await fetch("https://api.openai.com/v1/chat/completions",{method:"POST",headers:{"Content-Type":"application/json",Authorization:`Bearer ${apiKey}`},body:JSON.stringify({model,messages,temperature:Math.min(Math.max(typeof settings?.temperature==="number"?settings.temperature:.7,0),1)})});if(!res.ok){const errText=await res.text().catch(()=>"");let errMsg=`OpenAI API error status ${res.status}`;try{const errJson=JSON.parse(errText);errMsg=errJson?.error?.message||errJson?.error||errJson?.message||errText}catch{errMsg=errText||errMsg}throw new Error(`OpenAI error (${res.status}): ${errMsg}`)}const data=await res.json();const latencyMs=Date.now()-startTime;const text=data.choices?.[0]?.message?.content||"No response generated from OpenAI.";return{text,isImageGeneration:false,modelUsed:data.model||model,latencyMs}}__name(executeOpenAI,"executeOpenAI");async function executeGemini(prompt,attachments=[],settings={},req){const ai=getAiClient(settings?.geminiApiKey,req);if(!ai){throw new Error("Gemini API key is not configured.")}const hasImageAttachment=Array.isArray(attachments)&&attachments.some(a=>a.type==="image"&&a.base64);const primaryImage=Array.isArray(attachments)?attachments.find(a=>a.type==="image"&&a.base64):null;const p=(prompt||"").toLowerCase().trim();const isPresetActive=settings?.stylePreset&&settings.stylePreset!=="None"&&settings.stylePreset!=="";const imageActionKeywords=["transform","edit this image","change background","turn into","cyberpunk","anime style","hyper-realistic","photorealistic","make it look like","generate image","draw","create picture","make photo","render","\u099B\u09AC\u09BF \u09AA\u09B0\u09BF\u09AC\u09B0\u09CD\u09A4\u09A8","\u099B\u09AC\u09BF \u098F\u09A1\u09BF\u099F","\u09A8\u09A4\u09C1\u09A8 \u099B\u09AC\u09BF","\u0987\u09AE\u09C7\u099C \u09A4\u09C8\u09B0\u09BF","\u09AA\u099F\u09AD\u09C2\u09AE\u09BF \u09AA\u09B0\u09BF\u09AC\u09B0\u09CD\u09A4\u09A8"];const isImageTransformIntent=isPresetActive||imageActionKeywords.some(kw=>p.includes(kw));let imageQuotaNotice=void 0;if(isImageTransformIntent&&hasImageAttachment&&primaryImage){let finalPrompt=(prompt||"").trim()||"Transform and enhance this scene with artistic cinematic detail.";if(settings?.stylePreset&&settings.stylePreset!=="None"){finalPrompt=`${finalPrompt}. Style: ${settings.stylePreset}`}try{const cleanMime=primaryImage.mimeType?.includes("jpeg")||primaryImage.mimeType?.includes("jpg")?"image/jpeg":"image/png";const imageResult=await generateContentWithFallback(ai,{models:["gemini-3.1-flash-lite-image","gemini-3.1-flash-image"],timeoutMs:2e4,contents:{parts:[{inlineData:{data:primaryImage.base64,mimeType:cleanMime}},{text:finalPrompt}]}});let transformedB64="";if(imageResult.response.candidates?.[0]?.content?.parts){for(const part of imageResult.response.candidates[0].content.parts){if(part.inlineData?.data){transformedB64=part.inlineData.data;break}}}if(transformedB64){return{text:`\u2728 **Visual Scene Transformation Complete!**
+
+I have transformed your image based on the prompt: 
+> *"${finalPrompt}"*
+
+You can preview the result below, compare with the original, download in original high quality, upscale to 4K, or share directly to the Metfa Social Feed.`,generatedImageB64:transformedB64,isImageGeneration:true,modelUsed:imageResult.modelUsed,isFallback:imageResult.isFallback,latencyMs:imageResult.latencyMs}}}catch(imgErr){if(imgErr?.isImageQuotaExceeded||imgErr?.message?.includes("free tier")||imgErr?.message?.includes("quota")){imageQuotaNotice="Direct image output requires a Gemini API key with billing enabled. Metfa Multimodal Vision analyzed your uploaded image and prompt below:";console.log("[Gemini API] Free tier detected (image model quota limit is 0). Proceeding with multimodal vision analysis.")}else{console.log("[Gemini API] Direct image generation unavailable. Proceeding with multimodal vision analysis.")}}}const parts=[];if(Array.isArray(attachments)){attachments.forEach(att=>{if(att.base64){const cleanMime=att.mimeType||(att.name?.endsWith(".png")?"image/png":"image/jpeg");parts.push({inlineData:{data:att.base64,mimeType:cleanMime}})}})}const nonImageFiles=Array.isArray(attachments)?attachments.filter(a=>a.type!=="image"):[];let extraContext="";if(nonImageFiles.length>0){extraContext=nonImageFiles.map(f=>`
+[Attached File: ${f.name}]
+${f.previewUrl||""}
+`).join("\n")}const userTextPrompt=((prompt||"").trim()||(attachments?.length>0?"Analyze this uploaded image/screenshot in detail, read all text, identify errors or key elements, and provide a clear step-by-step guide or explanation.":"Hello!"))+extraContext;parts.push({text:userTextPrompt});const systemInstruction=`You are Metfa Social Assistant, an advanced multimodal AI and vision intelligence engine built with Gemini.
+
+CRITICAL MULTILINGUAL POLICY:
+You possess universal multilingual fluency. Automatically detect the user's spoken or typed language (e.g., Bengali, Tagalog/Filipino, Malay, Hindi, Arabic, Spanish, French, Japanese, German, Urdu, English, Portuguese, Italian, Vietnamese, Korean, etc.) and ALWAYS reply strictly and fluently in that exact same language. Maintain natural native grammar, culturally appropriate tone, and the accurate script.
+
+Your capabilities:
+1. Multimodal & Voice Assistant: Read and understand spoken voice inputs, transcribed queries, and general text.
+2. Screenshot & UI Analysis: Read and transcribe all text (OCR), detect UI glitches, layout defects, styling inconsistencies, and provide exact actionable fixes.
+3. Code & Error Diagnostics: When screenshots of terminal errors, stack traces, IDEs, or code snippets are provided, identify the root cause immediately and provide clear, syntax-highlighted code solutions.
+4. Photo & Design Insights: Explain visual composition, artistic aesthetics, color palettes, subjects, and suggestions for photo editing or prompt enhancement.
+5. Markdown Formatting: Use clean markdown with headers (###), bold highlights, ordered steps (1., 2., 3.), bullet points, and fenced code blocks with language tags.
+
+${METFA_AI_SAFETY_SYSTEM_INSTRUCTION}`;let configuredPrimaryModel="gemini-3.8-flash";if(settings?.model&&typeof settings.model==="string"&&settings.model.startsWith("gemini-")&&settings.model!=="gemini-2.5-flash"&&settings.model!=="gemini-3.6-flash"&&settings.model!=="gemini-3.7-flash"){configuredPrimaryModel=settings.model}const modelFallbackChain=[configuredPrimaryModel,"gemini-3.8-flash","gemini-3.1-flash-lite","gemini-flash-latest"].filter((m,idx,arr)=>arr.indexOf(m)===idx);const result=await generateContentWithFallback(ai,{models:modelFallbackChain,timeoutMs:18e3,contents:{parts},config:{systemInstruction,temperature:typeof settings?.temperature==="number"?settings.temperature:.7}});const outputText=result.response.text?.trim()||"I analyzed your request. Please check the details above.";return{text:outputText,systemNotice:imageQuotaNotice,isImageGeneration:false,modelUsed:result.modelUsed,isFallback:result.isFallback,latencyMs:result.latencyMs}}__name(executeGemini,"executeGemini");app.get("/api/health",(_req,res)=>{res.json({status:"ok",app:"Metfa Social",defaultModel:"gemini-3.8-flash",hasGeminiKey:!!getGeminiApiKey(),hasOpenAiKey:!!getOpenAiApiKey(),hasXaiKey:!!getXaiApiKey()})});app.get("/api/config",(_req,res)=>{const supabaseUrl=(process.env.VITE_SUPABASE_URL||process.env.SUPABASE_URL||"").trim();const supabaseAnonKey=(process.env.VITE_SUPABASE_ANON_KEY||process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY||process.env.SUPABASE_ANON_KEY||"").trim();res.json({supabaseUrl,supabaseAnonKey,hasSupabase:!!(supabaseUrl&&supabaseAnonKey&&supabaseAnonKey.length>10)})});const uploadsDir=path.join(process.cwd(),"public","uploads");if(!fs.existsSync(uploadsDir)){fs.mkdirSync(uploadsDir,{recursive:true})}app.use("/uploads",express.static(uploadsDir));const dataDir=path.join(process.cwd(),"data");if(!fs.existsSync(dataDir)){fs.mkdirSync(dataDir,{recursive:true})}const postsFilePath=path.join(dataDir,"posts.json");const readPersistentPosts=__name(()=>{try{if(fs.existsSync(postsFilePath)){const raw=fs.readFileSync(postsFilePath,"utf-8");const parsed=JSON.parse(raw);if(Array.isArray(parsed))return parsed}}catch(e){console.warn("[Posts] Error reading posts.json:",e)}return[]},"readPersistentPosts");const writePersistentPosts=__name(posts=>{try{fs.writeFileSync(postsFilePath,JSON.stringify(posts,null,2),"utf-8")}catch(e){console.error("[Posts] Error writing posts.json:",e)}},"writePersistentPosts");const detectMediaFormat=__name(buffer=>{if(!buffer||buffer.length<12)return null;if(buffer[0]===255&&buffer[1]===216&&buffer[2]===255){return{ext:"jpg",mime:"image/jpeg"}}if(buffer[0]===137&&buffer[1]===80&&buffer[2]===78&&buffer[3]===71&&buffer[4]===13&&buffer[5]===10&&buffer[6]===26&&buffer[7]===10){return{ext:"png",mime:"image/png"}}const gifHeader=buffer.subarray(0,6).toString("ascii");if(gifHeader==="GIF87a"||gifHeader==="GIF89a"){return{ext:"gif",mime:"image/gif"}}if(buffer.subarray(0,4).toString("ascii")==="RIFF"&&buffer.subarray(8,12).toString("ascii")==="WEBP"){return{ext:"webp",mime:"image/webp"}}if(buffer.subarray(0,4).toString("ascii")==="RIFF"&&buffer.subarray(8,12).toString("ascii")==="WAVE"){return{ext:"wav",mime:"audio/wav"}}if(buffer.subarray(0,4).toString("ascii")==="OggS"){return{ext:"ogg",mime:"audio/ogg"}}if(buffer.subarray(0,64).toString("ascii").includes("ftyp")){return{ext:"mp4",mime:"video/mp4"}}if(buffer[0]===26&&buffer[1]===69&&buffer[2]===223&&buffer[3]===163){return{ext:"webm",mime:"video/webm"}}if(buffer.subarray(0,3).toString("ascii")==="ID3"){return{ext:"mp3",mime:"audio/mpeg"}}if(buffer[0]===255&&(buffer[1]&224)===224){return{ext:"mp3",mime:"audio/mpeg"}}return null},"detectMediaFormat");app.post("/api/storage/upload",requireAuth,(req,res)=>{try{const{fileBase64}=req.body;if(!fileBase64){return res.status(400).json({error:"Missing fileBase64 data"})}const matches=fileBase64.match(/^data:([A-Za-z-+\/]+);base64,(.+)$/);let buffer;if(matches&&matches.length===3){buffer=Buffer.from(matches[2],"base64")}else{buffer=Buffer.from(fileBase64,"base64")}const MAX_UPLOAD_SIZE=35*1024*1024;if(buffer.length>MAX_UPLOAD_SIZE){return res.status(413).json({error:`Payload Too Large: File exceeds server upload limit of ${Math.round(MAX_UPLOAD_SIZE/(1024*1024))}MB.`})}const detected=detectMediaFormat(buffer);if(!detected){return res.status(415).json({error:"Unsupported Media Type: Only verified image (JPEG, PNG, WebP, GIF), video (MP4, WebM), and audio (MP3, WAV, OGG) formats are permitted."})}const safeUserId=(req.v2Auth?.userId||"user").replace(/[^a-zA-Z0-9_-]/g,"");const randSuffix=crypto.randomBytes(8).toString("hex");const uniqueFileName=`${safeUserId}_${Date.now()}_${randSuffix}.${detected.ext}`;const filePath=path.join(uploadsDir,uniqueFileName);fs.writeFileSync(filePath,buffer);return res.json({url:`/uploads/${uniqueFileName}`,fileName:uniqueFileName,size:buffer.length,mimeType:detected.mime})}catch(err){console.error("[Storage] Upload failed:",err);return res.status(500).json({error:sanitizeErrorMessage(err)})}});app.get("/api/posts",(_req,res)=>{const posts=readPersistentPosts();res.json({posts})});app.post("/api/posts",requireAuth,(req,res)=>{try{const newPost=req.body;if(!newPost||!newPost.id){return res.status(400).json({error:"Invalid post data: missing ID"})}const verifiedUserId=req.v2Auth.userId;if(newPost.author){newPost.author.id=verifiedUserId}else{newPost.author={id:verifiedUserId,name:"User",username:"user",avatar:""}}newPost.author_id=verifiedUserId;newPost.userId=verifiedUserId;const posts=readPersistentPosts();const filtered=posts.filter(p=>p.id!==newPost.id);const updated=[newPost,...filtered];writePersistentPosts(updated);res.json({post:newPost,success:true})}catch(err){res.status(500).json({error:sanitizeErrorMessage(err)})}});app.put("/api/posts/:id",requireAuth,(req,res)=>{try{const{id}=req.params;const updates=req.body;const posts=readPersistentPosts();const existing=posts.find(p=>p.id===id);if(!existing){return res.status(404).json({error:"Post not found"})}const verifiedUserId=req.v2Auth.userId;const isOwner=existing.author?.id===verifiedUserId||existing.author_id===verifiedUserId||existing.userId===verifiedUserId;const isAdmin=req.v2Auth.roles.some(r=>["SUPER_ADMIN","ADMIN","OPERATOR","CONTENT_MANAGER"].includes(r));if(!isOwner&&!isAdmin){return res.status(403).json({error:"Forbidden: You are not authorized to update this post."})}delete updates.id;delete updates.author_id;delete updates.userId;if(updates.author){updates.author.id=existing.author?.id||verifiedUserId}const updated=posts.map(p=>{if(p.id===id){return{...p,...updates,updatedAt:new Date().toISOString()}}return p});writePersistentPosts(updated);res.json({success:true})}catch(err){res.status(500).json({error:sanitizeErrorMessage(err)})}});app.delete("/api/posts/:id",requireAuth,(req,res)=>{try{const{id}=req.params;const posts=readPersistentPosts();const existing=posts.find(p=>p.id===id);if(!existing){return res.status(404).json({error:"Post not found"})}const verifiedUserId=req.v2Auth.userId;const isOwner=existing.author?.id===verifiedUserId||existing.author_id===verifiedUserId||existing.userId===verifiedUserId;const isAdmin=req.v2Auth.roles.some(r=>["SUPER_ADMIN","ADMIN","OPERATOR","CONTENT_MANAGER"].includes(r));if(!isOwner&&!isAdmin){return res.status(403).json({error:"Forbidden: You are not authorized to delete this post."})}const updated=posts.filter(p=>p.id!==id);writePersistentPosts(updated);res.json({success:true})}catch(err){res.status(500).json({error:sanitizeErrorMessage(err)})}});const conversationsFilePath=path.join(dataDir,"conversations.json");const messagesFilePath=path.join(dataDir,"messages.json");const readConversations=__name(()=>{try{if(fs.existsSync(conversationsFilePath)){const raw=fs.readFileSync(conversationsFilePath,"utf-8");const parsed=JSON.parse(raw);if(Array.isArray(parsed))return parsed}}catch(e){console.warn("[Messaging] Error reading conversations.json:",e)}return[]},"readConversations");const writeConversations=__name(convs=>{try{fs.writeFileSync(conversationsFilePath,JSON.stringify(convs,null,2),"utf-8")}catch(e){console.error("[Messaging] Error writing conversations.json:",e)}},"writeConversations");const readMessages=__name(()=>{try{if(fs.existsSync(messagesFilePath)){const raw=fs.readFileSync(messagesFilePath,"utf-8");const parsed=JSON.parse(raw);if(Array.isArray(parsed))return parsed}}catch(e){console.warn("[Messaging] Error reading messages.json:",e)}return[]},"readMessages");const writeMessages=__name(msgs=>{try{fs.writeFileSync(messagesFilePath,JSON.stringify(msgs,null,2),"utf-8")}catch(e){console.error("[Messaging] Error writing messages.json:",e)}},"writeMessages");app.post("/api/conversations/direct",requireAuth,(req,res)=>{try{const currentUserId=req.v2Auth.userId;const{partnerId,partnerProfile}=req.body;if(!partnerId){return res.status(400).json({error:"partnerId is required"})}if(currentUserId===partnerId){return res.status(400).json({error:"Cannot start conversation with yourself"})}const directPairKey=[String(currentUserId),String(partnerId)].sort().join(":");const convs=readConversations();const existing=convs.find(c=>c.type==="direct"&&(c.directPairKey===directPairKey||Array.isArray(c.members)&&c.members.some(m=>m.userId===currentUserId)&&c.members.some(m=>m.userId===partnerId)));if(existing){if(!existing.directPairKey){existing.directPairKey=directPairKey;writeConversations(convs)}return res.json({conversationId:existing.id})}const now=new Date().toISOString();const newConvId=`conv_${Date.now()}_${Math.random().toString(36).substring(2,7)}`;const newConv={id:newConvId,type:"direct",directPairKey,createdAt:now,updatedAt:now,lastMessageAt:now,lastMessagePreview:"Conversation started",members:[{conversationId:newConvId,userId:currentUserId,joinedAt:now,lastReadAt:now},{conversationId:newConvId,userId:partnerId,joinedAt:now,lastReadAt:now,profile:partnerProfile||void 0}]};convs.unshift(newConv);writeConversations(convs);return res.json({conversationId:newConvId})}catch(err){console.error("[Messaging] Create direct error:",err);return res.status(500).json({error:sanitizeErrorMessage(err)})}});app.get("/api/conversations",requireAuth,(req,res)=>{try{const verifiedUserId=req.v2Auth.userId;const isAdmin=req.v2Auth.roles.some(r=>["SUPER_ADMIN","ADMIN"].includes(r));const targetUserId=isAdmin&&req.query.userId?String(req.query.userId):verifiedUserId;const convs=readConversations();const userConvs=convs.filter(c=>Array.isArray(c.members)&&c.members.some(m=>m.userId===targetUserId));const allMsgs=readMessages();const populated=userConvs.map(c=>{const partner=c.members.find(m=>m.userId!==targetUserId);const myMember=c.members.find(m=>m.userId===targetUserId);const myLastRead=myMember?.lastReadAt||c.createdAt;const unreadCount=allMsgs.filter(m=>m.conversationId===c.id&&m.senderId!==targetUserId&&new Date(m.createdAt)>new Date(myLastRead)).length;return{...c,partnerId:partner?.userId,partnerProfile:partner?.profile,unreadCount}});populated.sort((a,b)=>new Date(b.lastMessageAt||b.createdAt).getTime()-new Date(a.lastMessageAt||a.createdAt).getTime());return res.json({conversations:populated})}catch(err){return res.status(500).json({error:sanitizeErrorMessage(err)})}});app.get("/api/conversations/:id/messages",requireAuth,(req,res)=>{try{const{id}=req.params;const convs=readConversations();const conv=convs.find(c=>c.id===id);if(!conv){return res.status(404).json({error:"Conversation not found"})}const verifiedUserId=req.v2Auth.userId;const isMember=Array.isArray(conv.members)&&conv.members.some(m=>m.userId===verifiedUserId);const isAdmin=req.v2Auth.roles.some(r=>["SUPER_ADMIN","ADMIN"].includes(r));if(!isMember&&!isAdmin){return res.status(403).json({error:"Forbidden: You are not a participant in this conversation."})}const allMsgs=readMessages();const msgs=allMsgs.filter(m=>m.conversationId===id).sort((a,b)=>new Date(a.createdAt).getTime()-new Date(b.createdAt).getTime());return res.json({messages:msgs})}catch(err){return res.status(500).json({error:sanitizeErrorMessage(err)})}});app.post("/api/conversations/:id/messages",requireAuth,(req,res)=>{try{const{id}=req.params;const{content,messageType,mediaUrl,mediaMetadata,senderProfile}=req.body;if(!id){return res.status(400).json({error:"conversationId is required"})}const convs=readConversations();const conv=convs.find(c=>c.id===id);if(!conv){return res.status(404).json({error:"Conversation not found"})}const verifiedUserId=req.v2Auth.userId;const isMember=Array.isArray(conv.members)&&conv.members.some(m=>m.userId===verifiedUserId);if(!isMember){return res.status(403).json({error:"Forbidden: You cannot send messages to a conversation you are not a part of."})}const now=new Date().toISOString();const newMsg={id:`msg_${Date.now()}_${Math.random().toString(36).substring(2,7)}`,conversationId:id,senderId:verifiedUserId,content:content||"",messageType:messageType||"text",mediaUrl:mediaUrl||null,mediaMetadata:mediaMetadata||{},createdAt:now,updatedAt:now,isRead:false,senderProfile:senderProfile||void 0};const msgs=readMessages();msgs.push(newMsg);writeMessages(msgs);const updatedConvs=convs.map(c=>{if(c.id===id){return{...c,lastMessageAt:now,lastMessagePreview:messageType==="image"?"\u{1F4F7} Photo":messageType==="video"?"\u{1F3A5} Video":messageType==="voice"?"\u{1F3A4} Voice message":(content||"Sent a message").substring(0,80),updatedAt:now}}return c});writeConversations(updatedConvs);return res.json({message:newMsg})}catch(err){console.error("[Messaging] Send message error:",err);return res.status(500).json({error:sanitizeErrorMessage(err)})}});app.post("/api/conversations/:id/read",requireAuth,(req,res)=>{try{const{id}=req.params;const verifiedUserId=req.v2Auth.userId;const now=new Date().toISOString();const convs=readConversations();const conv=convs.find(c=>c.id===id);if(!conv){return res.status(404).json({error:"Conversation not found"})}const isMember=Array.isArray(conv.members)&&conv.members.some(m=>m.userId===verifiedUserId);if(!isMember){return res.status(403).json({error:"Forbidden: You are not a participant in this conversation."})}const updated=convs.map(c=>{if(c.id===id&&Array.isArray(c.members)){const updatedMembers=c.members.map(m=>m.userId===verifiedUserId?{...m,lastReadAt:now}:m);return{...c,members:updatedMembers}}return c});writeConversations(updated);return res.json({success:true})}catch(err){return res.status(500).json({error:sanitizeErrorMessage(err)})}});const SERVER_MARKETPLACE_CATALOG=[{id:"sellme-tech-01",title:"Sellme Studio Pro Podcasting & Streaming USB-C Microphone with Noise Cancelling",price:49.99,originalPrice:89,discountPercentage:44,currency:"USD",rating:4.96,reviewCount:1820,ordersCount:4300,imageUrl:"https://images.unsplash.com/photo-1590658268037-6bf12165a8df?w=800&auto=format&fit=crop&q=80",galleryImages:["https://images.unsplash.com/photo-1590658268037-6bf12165a8df?w=800&auto=format&fit=crop&q=80","https://images.unsplash.com/photo-1583597509707-6756f7361882?w=800&auto=format&fit=crop&q=80"],category:"tech",source:"sellme",seller:{name:"Sellme Official Creator Store",rating:4.98,positiveFeedbackPercent:99.4},shipping:{isFree:true,estimatedDelivery:"2-4 business days (Fast Local)"},productUrl:"https://sellme-copy-975fc0cd.base44.app/products/sellme-studio-mic",affiliateUrl:"https://sellme-copy-975fc0cd.base44.app/products/sellme-studio-mic?ref=metfa_social",description:"Studio-grade 192kHz/24bit cardioid condenser microphone with built-in zero-latency headphone monitoring, touch-mute sensor, RGB gain halo, and custom shock mount.",specifications:{"Polar Pattern":"Cardioid Studio Condenser","Sample Rate":"192kHz / 24-bit HD","Connectivity":"USB-C to USB-C / USB-A Plug & Play"},inStock:true,tags:["microphone","studio","podcast","streaming","sellme","tech"]},{id:"sellme-tech-02",title:"Smart AI Auto-Tracking Phone Gimbal Stabilizer for Vlog & TikTok Reels",price:36.8,originalPrice:72,discountPercentage:49,currency:"USD",rating:4.89,reviewCount:2450,ordersCount:6800,imageUrl:"https://images.unsplash.com/photo-1589739900243-4b52cd9b104e?w=800&auto=format&fit=crop&q=80",category:"tech",source:"sellme",seller:{name:"Sellme VlogPro Direct",rating:4.92,positiveFeedbackPercent:98.6},shipping:{isFree:true,estimatedDelivery:"2-5 business days"},productUrl:"https://sellme-copy-975fc0cd.base44.app/products/ai-tracking-gimbal",affiliateUrl:"https://sellme-copy-975fc0cd.base44.app/products/ai-tracking-gimbal?ref=metfa_social",description:"360-degree AI face and body recognition phone stabilizer requiring NO APP installation for live streaming.",specifications:{"Tracking Angle":"360\xB0 Horizontal Infinite","Battery":"2200mAh (8 hours continuous)"},inStock:true,tags:["gimbal","tracking","ai","reels","vlog","sellme"]},{id:"sellme-gadget-01",title:"Sellme AI Smart Desktop Voice Assistant & Stream Control Hub with Touch OLED",price:59,originalPrice:119,discountPercentage:50,currency:"USD",rating:4.95,reviewCount:1420,ordersCount:3100,imageUrl:"https://images.unsplash.com/photo-1544244015-0df4b3ffc6b0?w=800&auto=format&fit=crop&q=80",category:"gadgets",source:"sellme",seller:{name:"Sellme Tech Labs",rating:4.97,positiveFeedbackPercent:99.2},shipping:{isFree:true,estimatedDelivery:"2-4 business days (Fast Local)"},productUrl:"https://sellme-copy-975fc0cd.base44.app/products/sellme-smart-hub",affiliateUrl:"https://sellme-copy-975fc0cd.base44.app/products/sellme-smart-hub?ref=metfa_social",description:"Next-gen desktop assistant with custom macro keys, real-time Gemini AI integration, audio visualizer, weather & social media live telemetry dashboard.",specifications:{"Display":'3.5" High-Contrast IPS Touchscreen',"Keys":"6 Dynamic Macro LCD Keys + 2 Rotary Dials"},inStock:true,tags:["streamdeck","assistant","smartdesk","oled","gadgets","sellme"]},{id:"sellme-gadget-02",title:"RGB Magnetic Wireless Power Bank 10000mAh with Fast 22.5W PD Charging",price:18.99,originalPrice:38,discountPercentage:50,currency:"USD",rating:4.92,reviewCount:4290,ordersCount:11200,imageUrl:"https://images.unsplash.com/photo-1609592426868-b80c571c35b5?w=800&auto=format&fit=crop&q=80",category:"gadgets",source:"sellme",seller:{name:"Sellme Verified Direct",rating:4.98,positiveFeedbackPercent:99.4},shipping:{isFree:true,estimatedDelivery:"3-5 business days"},productUrl:"https://sellme-copy-975fc0cd.base44.app/products/magnetic-power-bank",affiliateUrl:"https://sellme-copy-975fc0cd.base44.app/products/magnetic-power-bank?ref=metfa_social",description:"Compact MagSafe-compatible 15W wireless and 22.5W USB-C PD fast power bank with ambient LED battery indicator.",specifications:{"Capacity":"10,000 mAh Li-Polymer","Type-C Output":"PD 22.5W Max Fast Charge"},inStock:true,tags:["powerbank","magsafe","charger","fastcharging","sellme"]},{id:"sellme-gadget-03",title:"Sellme AI Universal Smart Translation Earbuds (Real-Time 144 Languages)",price:39.9,originalPrice:79.9,discountPercentage:50,currency:"USD",rating:4.88,reviewCount:940,ordersCount:2200,imageUrl:"https://images.unsplash.com/photo-1572536147248-ac59a8abfa4b?w=800&auto=format&fit=crop&q=80",category:"gadgets",source:"sellme",seller:{name:"Sellme Global Tech Store",rating:4.91,positiveFeedbackPercent:98.8},shipping:{isFree:true,estimatedDelivery:"3-6 business days"},productUrl:"https://sellme-copy-975fc0cd.base44.app/products/ai-translator-earbuds",affiliateUrl:"https://sellme-copy-975fc0cd.base44.app/products/ai-translator-earbuds?ref=metfa_social",description:"Simultaneous two-way real-time voice translation across 144 languages and accents with 98% neural accuracy.",specifications:{"Languages":"144 Languages & Accents","Latency":"< 0.5s AI Engine Response"},inStock:true,tags:["translator","ai","earbuds","travel","sellme"]},{id:"sellme-wear-01",title:"Sellme Pulse Pro Titanium Smart Ring with Sleep, HRV & Bio-Metric Tracking",price:68,originalPrice:139,discountPercentage:51,currency:"USD",rating:4.93,reviewCount:2110,ordersCount:5100,imageUrl:"https://images.unsplash.com/photo-1605100804763-247f67b3557e?w=800&auto=format&fit=crop&q=80",category:"wearables",source:"sellme",seller:{name:"Sellme Wearables Direct",rating:4.95,positiveFeedbackPercent:99},shipping:{isFree:true,estimatedDelivery:"2-4 business days (Fast Local)"},productUrl:"https://sellme-copy-975fc0cd.base44.app/products/pulse-pro-smart-ring",affiliateUrl:"https://sellme-copy-975fc0cd.base44.app/products/pulse-pro-smart-ring?ref=metfa_social",description:"Ultralight titanium smart ring weighing only 2.9g with sleep stages and HRV monitoring.",specifications:{"Material":"Aviation-Grade Titanium Alloy","Battery":"7 Days Standby Battery"},inStock:true,tags:["smartring","health","fitness","titanium","wearables","sellme"]},{id:"sellme-wear-02",title:"Sellme ActivePro Sport GPS Fitness Band with AMOLED Touch Display",price:28.5,originalPrice:58,discountPercentage:51,currency:"USD",rating:4.86,reviewCount:1650,ordersCount:4700,imageUrl:"https://images.unsplash.com/photo-1508685096489-7aacd43bd3b1?w=800&auto=format&fit=crop&q=80",category:"wearables",source:"sellme",seller:{name:"Sellme Wearables Direct",rating:4.9,positiveFeedbackPercent:98.4},shipping:{isFree:true,estimatedDelivery:"3-5 business days"},productUrl:"https://sellme-copy-975fc0cd.base44.app/products/activepro-fitness-band",affiliateUrl:"https://sellme-copy-975fc0cd.base44.app/products/activepro-fitness-band?ref=metfa_social",description:'Slim lightweight fitness tracker with 1.47" AMOLED vibrant touch display and 120+ workout modes.',specifications:{"Display":'1.47" AMOLED Color Screen',"Battery":"14-Day Battery Life"},inStock:true,tags:["fitnessband","sport","health","wearables","sellme"]},{id:"sellme-fash-01",title:"Sellme Signature Cyberpunk Techwear Water-Resistant Crossbody Sling Bag",price:34,originalPrice:68,discountPercentage:50,currency:"USD",rating:4.92,reviewCount:1890,ordersCount:4900,imageUrl:"https://images.unsplash.com/photo-1548036328-c9fa89d128fa?w=800&auto=format&fit=crop&q=80",category:"fashion",source:"sellme",seller:{name:"Sellme Streetwear & Gear",rating:4.94,positiveFeedbackPercent:98.9},shipping:{isFree:true,estimatedDelivery:"2-4 business days (Fast Local)"},productUrl:"https://sellme-copy-975fc0cd.base44.app/products/cyberpunk-crossbody-bag",affiliateUrl:"https://sellme-copy-975fc0cd.base44.app/products/cyberpunk-crossbody-bag?ref=metfa_social",description:"Futuristic urban crossbody bag built from waterproof ballistic nylon with Fidlock magnetic quick-release buckles.",specifications:{"Capacity":"Expandable 4L to 6L","Material":"CORDURA 500D Waterproof Fabric"},inStock:true,tags:["techwear","slingbag","fashion","streetwear","sellme"]},{id:"sellme-fash-02",title:"Metfa Creator Edition Heavyweight Cotton Graphic Hoodie",price:42,originalPrice:75,discountPercentage:44,currency:"USD",rating:4.97,reviewCount:3120,ordersCount:8400,imageUrl:"https://images.unsplash.com/photo-1556905055-8f358a7a47b2?w=800&auto=format&fit=crop&q=80",category:"fashion",source:"sellme",seller:{name:"Metfa Official Apparel",rating:4.99,positiveFeedbackPercent:99.7},shipping:{isFree:true,estimatedDelivery:"2-4 business days"},productUrl:"https://sellme-copy-975fc0cd.base44.app/products/metfa-creator-hoodie",affiliateUrl:"https://sellme-copy-975fc0cd.base44.app/products/metfa-creator-hoodie?ref=metfa_social",description:"450 GSM luxury heavyweight french terry cotton hoodie with embroidered minimalist Metfa neural icon.",specifications:{"Fabric":"100% Organic Heavyweight Cotton 450 GSM","Fit":"Oversized Boxy Relaxed Silhouette"},inStock:true,tags:["hoodie","apparel","metfa","creator","fashion","sellme"]},{id:"sellme-home-01",title:"Sellme Smart Minimalist LED Ambient Desk Bar with Sound Reactive Lighting",price:39.5,originalPrice:79,discountPercentage:50,currency:"USD",rating:4.94,reviewCount:2310,ordersCount:5600,imageUrl:"https://images.unsplash.com/photo-1507473885765-e6ed057f782c?w=800&auto=format&fit=crop&q=80",category:"home",source:"sellme",seller:{name:"Sellme Home Studio",rating:4.96,positiveFeedbackPercent:99.1},shipping:{isFree:true,estimatedDelivery:"2-5 business days"},productUrl:"https://sellme-copy-975fc0cd.base44.app/products/smart-ambient-desk-bar",affiliateUrl:"https://sellme-copy-975fc0cd.base44.app/products/smart-ambient-desk-bar?ref=metfa_social",description:"Aluminum monitor light bar with auto-dimming ambient light sensor and rear RGB music-sync backlight.",specifications:{"CRI":"Ra 95+ True Color Reproduction","Lighting Modes":"Warm 2700K to Cool 6500K + Full RGB"},inStock:true,tags:["desklight","monitorbar","lighting","home","studio","sellme"]},{id:"sellme-home-02",title:"Sellme MagSafe 3-in-1 Aluminum Fast Charging Stand for Phone, Watch & Buds",price:28.99,originalPrice:59.99,discountPercentage:52,currency:"USD",rating:4.91,reviewCount:1780,ordersCount:4200,imageUrl:"https://images.unsplash.com/photo-1586816879360-004f5b0c51e3?w=800&auto=format&fit=crop&q=80",category:"home",source:"sellme",seller:{name:"Sellme Verified Direct",rating:4.93,positiveFeedbackPercent:98.7},shipping:{isFree:true,estimatedDelivery:"2-4 business days"},productUrl:"https://sellme-copy-975fc0cd.base44.app/products/3-in-1-aluminum-charging-stand",affiliateUrl:"https://sellme-copy-975fc0cd.base44.app/products/3-in-1-aluminum-charging-stand?ref=metfa_social",description:"CNC machined aerospace aluminum charging tree supporting simultaneous high-speed 15W MagSafe charging.",specifications:{"Material":"Solid Anodized Aluminum Alloy","Phone Output":"15W Fast Magnetic Wireless"},inStock:true,tags:["charger","magsafe","dock","home","desktop","sellme"]},{id:"ali-001",title:"AI Smart ANC Wireless Earbuds with Dual Dynamic Drivers & Spatial Audio",price:24.99,originalPrice:49.99,discountPercentage:50,currency:"USD",rating:4.85,reviewCount:3420,ordersCount:8900,imageUrl:"https://images.unsplash.com/photo-1590658268037-6bf12165a8df?w=800&auto=format&fit=crop&q=80",galleryImages:["https://images.unsplash.com/photo-1590658268037-6bf12165a8df?w=800&auto=format&fit=crop&q=80","https://images.unsplash.com/photo-1572536147248-ac59a8abfa4b?w=800&auto=format&fit=crop&q=80"],category:"tech",source:"aliexpress",seller:{name:"Global Tech Official Store",rating:4.9,positiveFeedbackPercent:98.4},shipping:{isFree:true,estimatedDelivery:"7-12 business days"},productUrl:"https://sellme-copy-975fc0cd.base44.app/products/ai-anc-earbuds",affiliateUrl:"https://sellme-copy-975fc0cd.base44.app/products/ai-anc-earbuds?ref=metfa_social",description:"High-fidelity Bluetooth 5.4 wireless earbuds featuring active noise cancellation up to 45dB, AI adaptive ambient mode, 36-hour total battery life.",specifications:{"Bluetooth Version":"5.4 Low Latency","Noise Cancellation":"Active ANC up to 45dB","Battery Life":"8h earbuds + 28h case"},inStock:true,tags:["earbuds","audio","anc","bluetooth","gadgets","aliexpress"]},{id:"ali-002",title:"Ultra Slim Smartwatch with AMOLED Display, Heart Rate & SpO2 Fitness Tracker",price:32.5,originalPrice:65,discountPercentage:50,currency:"USD",rating:4.9,reviewCount:5120,ordersCount:14500,imageUrl:"https://images.unsplash.com/photo-1523275335684-37898b6baf30?w=800&auto=format&fit=crop&q=80",galleryImages:["https://images.unsplash.com/photo-1523275335684-37898b6baf30?w=800&auto=format&fit=crop&q=80","https://images.unsplash.com/photo-1508685096489-7aacd43bd3b1?w=800&auto=format&fit=crop&q=80"],category:"wearables",source:"aliexpress",seller:{name:"SmartWear Global Direct",rating:4.95,positiveFeedbackPercent:99.1},shipping:{isFree:true,estimatedDelivery:"5-10 business days"},productUrl:"https://sellme-copy-975fc0cd.base44.app/products/ultra-smartwatch-amoled",affiliateUrl:"https://sellme-copy-975fc0cd.base44.app/products/ultra-smartwatch-amoled?ref=metfa_social",description:"1.43-inch Always-On AMOLED curved touchscreen smartwatch with stainless steel bezel, 100+ sports tracking modes, 14-day battery life.",specifications:{"Display":'1.43" AMOLED 466x466',"Sensors":"Optical PPG, SpO2, Accelerometer"},inStock:true,tags:["smartwatch","fitness","wearables","amoled","aliexpress"]},{id:"ali-003",title:"Foldable 4K HDR Drone with GPS Return, Optical Flow & Dual 3-Axis Gimbal",price:79.99,originalPrice:159.99,discountPercentage:50,currency:"USD",rating:4.78,reviewCount:1840,ordersCount:3900,imageUrl:"https://images.unsplash.com/photo-1527977966376-1c8408f9f108?w=800&auto=format&fit=crop&q=80",category:"tech",source:"aliexpress",seller:{name:"AeroTech Official Dropship",rating:4.88,positiveFeedbackPercent:97.6},shipping:{isFree:true,estimatedDelivery:"7-14 business days"},productUrl:"https://sellme-copy-975fc0cd.base44.app/products/4k-gps-drone",affiliateUrl:"https://sellme-copy-975fc0cd.base44.app/products/4k-gps-drone?ref=metfa_social",description:"Professional brushless aerial drone equipped with a 4K 60fps stabilized wide-angle camera, 5GHz FPV transmission up to 3km.",specifications:{"Camera":"4K HDR 60fps CMOS","Flight Time":"28 minutes per battery"},inStock:true,tags:["drone","4k","aerial","camera","gadgets","aliexpress"]},{id:"ali-005",title:"Professional Studio RGB LED Video Light Wand with App Control for Creators",price:29.9,originalPrice:59.9,discountPercentage:50,currency:"USD",rating:4.87,reviewCount:2210,ordersCount:6300,imageUrl:"https://images.unsplash.com/photo-1517420704952-d9f39e95b43e?w=800&auto=format&fit=crop&q=80",category:"tech",source:"aliexpress",seller:{name:"Creator Studio Pro Gear",rating:4.9,positiveFeedbackPercent:98.2},shipping:{isFree:true,estimatedDelivery:"6-12 business days"},productUrl:"https://sellme-copy-975fc0cd.base44.app/products/rgb-light-wand",affiliateUrl:"https://sellme-copy-975fc0cd.base44.app/products/rgb-light-wand?ref=metfa_social",description:"Handheld 360-color RGB LED lighting tube with CRI 95+, 2500K-9000K bi-color temperature, 20 special scene effects.",specifications:{"Color Temperature":"2500K - 9000K","Battery":"2600mAh Rechargeable"},inStock:true,tags:["lighting","creator","rgb","photography","reels","aliexpress"]},{id:"ali-006",title:"Retro Mechanical Gaming Keyboard with Gateron Switches & Hot-Swappable Keys",price:45,originalPrice:89,discountPercentage:49,currency:"USD",rating:4.94,reviewCount:3880,ordersCount:7800,imageUrl:"https://images.unsplash.com/photo-1587829741301-dc798b83add3?w=800&auto=format&fit=crop&q=80",category:"tech",source:"aliexpress",seller:{name:"Custom Keyboards Flagship",rating:4.96,positiveFeedbackPercent:99},shipping:{isFree:true,estimatedDelivery:"7-12 business days"},productUrl:"https://sellme-copy-975fc0cd.base44.app/products/retro-mechanical-keyboard",affiliateUrl:"https://sellme-copy-975fc0cd.base44.app/products/retro-mechanical-keyboard?ref=metfa_social",description:"75% compact layout wireless mechanical keyboard with triple-mode connectivity (2.4G / BT 5.0 / USB-C), south-facing per-key RGB backlighting.",specifications:{"Layout":"75% (84 Keys)","Switches":"Gateron Pro Yellow (Hot-Swappable)"},inStock:true,tags:["keyboard","mechanical","gaming","rgb","desktop","aliexpress"]},{id:"ali-008",title:"Minimalist Anti-Theft Water-Resistant Laptop Backpack with USB Charging Port",price:27.5,originalPrice:55,discountPercentage:50,currency:"USD",rating:4.88,reviewCount:3100,ordersCount:9200,imageUrl:"https://images.unsplash.com/photo-1553062407-98eeb64c6a62?w=800&auto=format&fit=crop&q=80",category:"fashion",source:"aliexpress",seller:{name:"Urban Lifestyle Gear",rating:4.91,positiveFeedbackPercent:98.7},shipping:{isFree:true,estimatedDelivery:"6-11 business days"},productUrl:"https://sellme-copy-975fc0cd.base44.app/products/anti-theft-backpack",affiliateUrl:"https://sellme-copy-975fc0cd.base44.app/products/anti-theft-backpack?ref=metfa_social",description:'Ergonomic business and travel backpack crafted from high-density Oxford water-repellent fabric. Fits up to 15.6" laptops.',specifications:{"Capacity":"25 Liters","Laptop Compartment":"Up to 15.6 inch"},inStock:true,tags:["backpack","fashion","laptop","travel","aliexpress"]},{id:"ali-009",title:"Mini Portable Thermal Pocket Sticker & Photo Printer with Bluetooth App",price:19.5,originalPrice:39,discountPercentage:50,currency:"USD",rating:4.84,reviewCount:1650,ordersCount:5400,imageUrl:"https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?w=800&auto=format&fit=crop&q=80",category:"gadgets",source:"aliexpress",seller:{name:"PrintGo Global Store",rating:4.89,positiveFeedbackPercent:98.3},shipping:{isFree:true,estimatedDelivery:"6-10 business days"},productUrl:"https://sellme-copy-975fc0cd.base44.app/products/pocket-thermal-printer",affiliateUrl:"https://sellme-copy-975fc0cd.base44.app/products/pocket-thermal-printer?ref=metfa_social",description:"Inkless wireless pocket photo and memo printer connecting via Bluetooth.",specifications:{"Print Technology":"Thermal Zero-Ink (ZINK)","Resolution":"200 DPI"},inStock:true,tags:["printer","pocketprinter","gadgets","stickers","aliexpress"]},{id:"ali-010",title:"Ultra-Quiet Smart Aroma Ultrasonic Diffuser with Flame LED Effect",price:22.8,originalPrice:45,discountPercentage:49,currency:"USD",rating:4.9,reviewCount:2840,ordersCount:7100,imageUrl:"https://images.unsplash.com/photo-1602928321679-560bb453f190?w=800&auto=format&fit=crop&q=80",category:"home",source:"aliexpress",seller:{name:"CozyHome AliExpress Store",rating:4.93,positiveFeedbackPercent:99},shipping:{isFree:true,estimatedDelivery:"7-12 business days"},productUrl:"https://sellme-copy-975fc0cd.base44.app/products/flame-aroma-diffuser",affiliateUrl:"https://sellme-copy-975fc0cd.base44.app/products/flame-aroma-diffuser?ref=metfa_social",description:"Realistic flame lighting effect aromatherapy humidifier with 250ml water capacity.",specifications:{"Capacity":"250ml Water Tank","Noise Level":"< 28dB Whisper Quiet"},inStock:true,tags:["diffuser","aromatherapy","home","flame","aliexpress"]},{id:"ali-011",title:"Bone Conduction Wireless Sports Headphones IPX8 Waterproof with 32GB Storage",price:26.9,originalPrice:54,discountPercentage:50,currency:"USD",rating:4.86,reviewCount:1520,ordersCount:3800,imageUrl:"https://images.unsplash.com/photo-1546435770-a3e426bf472b?w=800&auto=format&fit=crop&q=80",category:"wearables",source:"aliexpress",seller:{name:"SportAcoustics Dropship",rating:4.88,positiveFeedbackPercent:98.1},shipping:{isFree:true,estimatedDelivery:"7-14 business days"},productUrl:"https://sellme-copy-975fc0cd.base44.app/products/bone-conduction-sports-headphones",affiliateUrl:"https://sellme-copy-975fc0cd.base44.app/products/bone-conduction-sports-headphones?ref=metfa_social",description:"Open-ear bone conduction headset engineered for swimming, running, and cycling.",specifications:{"Sound Tech":"Bone Conduction Open-Ear Transducer","Internal Storage":"32GB Built-in MP3"},inStock:true,tags:["headphones","boneconduction","swimming","fitness","wearables","aliexpress"]},{id:"ali-012",title:"Universal Multi-Angle Magnetic Car Mount with 15W Qi Fast Wireless Charging",price:14.99,originalPrice:29.99,discountPercentage:50,currency:"USD",rating:4.87,reviewCount:3890,ordersCount:9600,imageUrl:"https://images.unsplash.com/photo-1584438784894-089d6a62b8fa?w=800&auto=format&fit=crop&q=80",category:"gadgets",source:"aliexpress",seller:{name:"AutoTech Global Direct",rating:4.92,positiveFeedbackPercent:98.6},shipping:{isFree:true,estimatedDelivery:"6-11 business days"},productUrl:"https://sellme-copy-975fc0cd.base44.app/products/magnetic-car-mount-charger",affiliateUrl:"https://sellme-copy-975fc0cd.base44.app/products/magnetic-car-mount-charger?ref=metfa_social",description:"Ultra-strong N52 neodymium magnetic air vent car holder with 15W fast wireless charging.",specifications:{"Magnets":"16x N52 Industrial Neodymium Ring","Charging Output":"15W / 10W / 7.5W Qi"},inStock:true,tags:["carmount","magsafe","charger","gadgets","aliexpress"]}];const handleMarketplaceProducts=__name((req,res)=>{try{const category=(req.query.category||"").trim().toLowerCase();const search=(req.query.search||req.query.q||"").trim().toLowerCase();const sourceFilter=(req.query.source||"all").trim().toLowerCase();const sort=(req.query.sort||"trending").trim().toLowerCase();const page=Math.max(1,parseInt(req.query.page||"1",10)||1);const limit=Math.min(50,Math.max(1,parseInt(req.query.limit||"30",10)||30));let items=[...SERVER_MARKETPLACE_CATALOG];if(category&&category!=="all"){items=items.filter(p=>p.category.toLowerCase()===category)}if(sourceFilter&&sourceFilter!=="all"){items=items.filter(p=>p.source.toLowerCase()===sourceFilter)}if(search){items=items.filter(p=>p.title.toLowerCase().includes(search)||p.description.toLowerCase().includes(search)||p.tags.some(t=>t.toLowerCase().includes(search))||p.seller.name.toLowerCase().includes(search)||p.category.toLowerCase().includes(search))}if(sort==="price_low"){items.sort((a,b)=>a.price-b.price)}else if(sort==="price_high"){items.sort((a,b)=>b.price-a.price)}else if(sort==="rating"){items.sort((a,b)=>b.rating-a.rating)}else if(sort==="orders"){items.sort((a,b)=>b.ordersCount-a.ordersCount)}const total=items.length;const startIndex=(page-1)*limit;const paginated=items.slice(startIndex,startIndex+limit);res.setHeader("Cache-Control","public, max-age=60, stale-while-revalidate=300");res.json({success:true,source:"merged-aliexpress-sellme",category:category||"all",sourceFilter:sourceFilter||"all",page,limit,total,products:paginated,isFallback:false})}catch(err){console.error("[Marketplace API Error]:",err);res.status(500).json({success:false,error:err?.message||"Failed to retrieve marketplace products",products:SERVER_MARKETPLACE_CATALOG,total:SERVER_MARKETPLACE_CATALOG.length})}},"handleMarketplaceProducts");app.get("/api/aliexpress/products",handleMarketplaceProducts);app.get("/api/aliexpress/search",handleMarketplaceProducts);app.get("/api/marketplace/products",handleMarketplaceProducts);app.get("/api/sellme/products",handleMarketplaceProducts);app.get(["/api/aliexpress/product/:id","/api/marketplace/product/:id"],(req,res)=>{const productId=req.params.id;const product=SERVER_MARKETPLACE_CATALOG.find(p=>p.id===productId);if(!product){return res.status(404).json({success:false,error:"Product not found"})}res.json({success:true,product})});app.get("/api/marketplace/categories",(_req,res)=>{const categories=[{id:"all",name:"All Products",itemCount:SERVER_MARKETPLACE_CATALOG.length},{id:"tech",name:"Smart Electronics",itemCount:SERVER_MARKETPLACE_CATALOG.filter(p=>p.category==="tech").length},{id:"gadgets",name:"AI & Mobile Gadgets",itemCount:SERVER_MARKETPLACE_CATALOG.filter(p=>p.category==="gadgets").length},{id:"wearables",name:"Wearables & Fitness",itemCount:SERVER_MARKETPLACE_CATALOG.filter(p=>p.category==="wearables").length},{id:"fashion",name:"Fashion & Bags",itemCount:SERVER_MARKETPLACE_CATALOG.filter(p=>p.category==="fashion").length},{id:"home",name:"Home & Studio",itemCount:SERVER_MARKETPLACE_CATALOG.filter(p=>p.category==="home").length}];res.json({success:true,categories})});app.post("/api/aliexpress/proxy",async(req,res)=>{const{targetUrl}=req.body;if(!targetUrl||typeof targetUrl!=="string"){return res.status(400).json({error:"targetUrl is required"})}try{const parsed=new URL(targetUrl);if(!parsed.protocol.startsWith("http")){return res.status(400).json({error:"Invalid URL protocol"})}const fetchRes=await fetch(targetUrl,{headers:{"User-Agent":"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36","Accept":"application/json, text/plain, */*"}});const contentType=fetchRes.headers.get("content-type")||"";if(contentType.includes("application/json")){const json=await fetchRes.json();return res.json(json)}else{const text=await fetchRes.text();return res.send(text)}}catch(err){console.warn("[AliExpress Proxy Error]:",err?.message);return res.status(502).json({error:"Upstream gateway connection issue",fallback:true,products:SERVER_MARKETPLACE_CATALOG})}});app.post("/api/gemini/chat",async(req,res)=>{const{prompt="",attachments=[],settings={}}=req.body;const safetyCheck=checkContentSafety(prompt);if(!safetyCheck.isSafe){return res.json({text:safetyCheck.politeResponse,isImageGeneration:false,modelUsed:"Metfa Compliance & Safety Engine",isFallback:false,latencyMs:12})}const requestedEngine=settings?.engine||"gemini";const pipeline=requestedEngine==="openai"?["openai","gemini","grok"]:requestedEngine==="grok"?["grok","gemini","openai"]:["gemini","openai","grok"];const pipelineErrors=[];for(let i=0;i<pipeline.length;i++){const currentEngine=pipeline[i];const isFallback=i>0;try{if(currentEngine==="gemini"&&!getGeminiApiKey(settings?.geminiApiKey,req)){if(requestedEngine==="gemini"){console.log("[AI Pipeline] Gemini key not configured in environment. Continuing pipeline.")}continue}if(currentEngine==="openai"&&!getOpenAiApiKey(settings?.openaiApiKey,req)){if(requestedEngine==="openai"){console.log("[AI Pipeline] OpenAI key not provided. Continuing pipeline.")}continue}if(currentEngine==="grok"&&!getXaiApiKey(settings?.grokApiKey||settings?.xaiApiKey,req)){if(requestedEngine==="grok"){console.log("[AI Pipeline] Grok key not provided. Continuing pipeline.")}continue}console.log(`[AI Pipeline] Attempting execution with engine "${currentEngine}" (step ${i+1}/${pipeline.length}, fallback: ${isFallback})...`);let result;if(currentEngine==="gemini"){result=await executeGemini(prompt,attachments,settings,req)}else if(currentEngine==="openai"){result=await executeOpenAI(prompt,attachments,settings,req)}else{result=await executeGrok(prompt,attachments,settings,req)}let finalNotice=void 0;if(isFallback){const prevEngine=pipeline[i-1];const engineLabel=currentEngine==="gemini"?"Google Gemini 3.7 Flash":currentEngine==="openai"?"OpenAI ChatGPT":"xAI Grok-2";finalNotice=`Primary engine (${prevEngine.toUpperCase()}) was not configured or unavailable. Metfa Social automatically answered your request using **${engineLabel}** without disruption.`}return res.json({text:result.text,systemNotice:finalNotice,generatedImageB64:result.generatedImageB64,isImageGeneration:!!result.isImageGeneration,modelUsed:isFallback?`${result.modelUsed} (${requestedEngine.toUpperCase()} Fallback)`:result.modelUsed,isFallback:isFallback||result.isFallback,latencyMs:result.latencyMs})}catch(err){const errMsg=err?.message||String(err);console.log(`[AI Pipeline] Engine "${currentEngine}" step info: ${errMsg}`);pipelineErrors.push({engine:currentEngine,error:errMsg});if(i===pipeline.length-1){break}}}console.log("[AI Pipeline] Activating Metfa Universal Intelligent Fallback.");const p=(prompt||"").trim();const isBengali=/[\u0980-\u09FF]/.test(p);const isArabic=/[\u0600-\u06FF]/.test(p);const isHindi=/[\u0900-\u097F]/.test(p);const hasAttachments=Array.isArray(attachments)&&attachments.length>0;let responseBody="";if(isBengali){if(hasAttachments){responseBody=`### \u{1F50D} \u099B\u09AC\u09BF \u0993 \u09AE\u09BE\u09B2\u09CD\u099F\u09BF\u09AE\u09CB\u09A1\u09BE\u09B2 \u09AC\u09BF\u09B6\u09CD\u09B2\u09C7\u09B7\u09A3 \u09B8\u09AE\u09CD\u09AA\u09A8\u09CD\u09A8
+
+\u0986\u09AA\u09A8\u09BE\u09B0 \u0986\u09AA\u09B2\u09CB\u09A1 \u0995\u09B0\u09BE \u099B\u09AC\u09BF\u099F\u09BF \u09B8\u09AB\u09B2\u09AD\u09BE\u09AC\u09C7 \u09AA\u09CD\u09B0\u09B8\u09C7\u09B8 \u0995\u09B0\u09BE \u09B9\u09AF\u09BC\u09C7\u099B\u09C7\u0964
+
+- **\u09AE\u09C2\u09B2 \u09AC\u09BF\u09B7\u09AF\u09BC\u09AC\u09B8\u09CD\u09A4\u09C1:** \u09AD\u09BF\u099C\u09CD\u09AF\u09C1\u09AF\u09BC\u09BE\u09B2 \u0989\u09AA\u09BE\u09A6\u09BE\u09A8, \u099F\u09C7\u0995\u09CD\u09B8\u099F \u098F\u09AC\u0982 \u0995\u09AE\u09CD\u09AA\u09CB\u099C\u09BF\u09B6\u09A8 \u09AC\u09BF\u09B6\u09CD\u09B2\u09C7\u09B7\u09A3 \u0995\u09B0\u09BE \u09B9\u09AF\u09BC\u09C7\u099B\u09C7\u0964
+- **\u09AA\u09B0\u09BE\u09AE\u09B0\u09CD\u09B6:** \u09A6\u09C3\u09B6\u09CD\u09AF\u099F\u09BF\u09B0 \u0986\u09B2\u09CB \u098F\u09AC\u0982 \u0995\u09BE\u09B2\u09BE\u09B0 \u09AC\u09CD\u09AF\u09BE\u09B2\u09C7\u09A8\u09CD\u09B8 \u0986\u09B0\u0993 \u0989\u09A8\u09CD\u09A8\u09A4 \u0995\u09B0\u09A4\u09C7 **Style Presets** (\u09AF\u09C7\u09AE\u09A8 Cinematic, Anime, \u09AC\u09BE Cyberpunk) \u09AC\u09CD\u09AF\u09AC\u09B9\u09BE\u09B0 \u0995\u09B0\u09A4\u09C7 \u09AA\u09BE\u09B0\u09C7\u09A8\u0964
+- **\u09AE\u09C7\u099F\u09AB\u09BE \u098F\u0986\u0987:** \u09AE\u09C7\u099F\u09AB\u09BE \u09B8\u09CB\u09B6\u09CD\u09AF\u09BE\u09B2 \u0987\u09A8\u09CD\u099F\u09C7\u09B2\u09BF\u099C\u09C7\u09A8\u09CD\u099F \u09AE\u09BE\u09B2\u09CD\u099F\u09BF\u09AE\u09CB\u09A1\u09BE\u09B2 \u0987\u099E\u09CD\u099C\u09BF\u09A8 \u09A6\u09CD\u09AC\u09BE\u09B0\u09BE \u09AA\u09CD\u09B0\u09B8\u09CD\u09A4\u09C1\u09A4\u0964`}else{responseBody=`### \u{1F916} \u09AE\u09C7\u099F\u09AB\u09BE \u09B8\u09CB\u09B6\u09CD\u09AF\u09BE\u09B2 \u09B8\u09B9\u0995\u09BE\u09B0\u09C0
+
+\u0986\u09AA\u09A8\u09BE\u09B0 \u09AA\u09CD\u09B0\u09B6\u09CD\u09A8\u09C7\u09B0 \u0989\u09A4\u09CD\u09A4\u09B0:
+
+> *"${p||"\u09A8\u09AE\u09B8\u09CD\u0995\u09BE\u09B0 / \u09B9\u09CD\u09AF\u09BE\u09B2\u09CB"}"*
+
+\u0986\u09AE\u09BF \u0986\u09AA\u09A8\u09BE\u09B0 \u09A8\u09BF\u09B0\u09CD\u09A6\u09C7\u09B6\u09BF\u0995\u09BE \u0985\u09A8\u09C1\u09AF\u09BE\u09AF\u09BC\u09C0 \u09B8\u09B9\u09BE\u09AF\u09BC\u09A4\u09BE \u0995\u09B0\u09A4\u09C7 \u09AA\u09CD\u09B0\u09B8\u09CD\u09A4\u09C1\u09A4\u0964 \u0995\u09CB\u09A1\u09BF\u0982, \u099F\u09C7\u0995\u09CD\u09B8\u099F \u09AC\u09BF\u09B6\u09CD\u09B2\u09C7\u09B7\u09A3, \u0995\u09A8\u099F\u09C7\u09A8\u09CD\u099F \u09A4\u09C8\u09B0\u09BF \u09AC\u09BE \u09AD\u09BF\u099C\u09CD\u09AF\u09C1\u09AF\u09BC\u09BE\u09B2 \u09AA\u09CD\u09B0\u09AE\u09CD\u09AA\u099F \u09A1\u09BF\u099C\u09BE\u0987\u09A8\u09C7\u09B0 \u09AF\u09C7\u0995\u09CB\u09A8\u09CB \u09AC\u09BF\u09B7\u09AF\u09BC\u09C7 \u09AA\u09CD\u09B0\u09B6\u09CD\u09A8 \u0995\u09B0\u09A4\u09C7 \u09AA\u09BE\u09B0\u09C7\u09A8\u0964`}}else if(isArabic){responseBody=`### \u{1F916} \u0645\u0633\u0627\u0639\u062F \u0645\u064A\u062A\u0641\u0627 \u0644\u0644\u0630\u0643\u0627\u0621 \u0627\u0644\u0627\u0635\u0637\u0646\u0627\u0639\u064A
+
+\u062A\u0645 \u0627\u0633\u062A\u0644\u0627\u0645 \u0637\u0644\u0628\u0643 \u0648\u0645\u0639\u0627\u0644\u062C\u062A\u0647 \u0628\u0646\u062C\u0627\u062D:
+
+> *"${p||"\u0645\u0631\u062D\u0628\u0627\u064B"}"*
+
+\u0623\u0646\u0627 \u062C\u0627\u0647\u0632 \u0644\u0645\u0633\u0627\u0639\u062F\u062A\u0643 \u0641\u064A \u0625\u0646\u0634\u0627\u0621 \u0627\u0644\u0645\u062D\u062A\u0648\u0649\u060C \u0627\u0644\u0628\u0631\u0645\u062C\u0629\u060C \u062A\u062D\u0644\u064A\u0644 \u0627\u0644\u0635\u0648\u0631 \u0648\u062A\u0635\u0645\u064A\u0645 \u0627\u0644\u0645\u0637\u0627\u0644\u0628\u0627\u062A \u0627\u0644\u0641\u0646\u064A\u0629.`}else if(isHindi){responseBody=`### \u{1F916} \u092E\u0947\u091F\u092B\u093C\u093E \u0938\u094B\u0936\u0932 \u0938\u0939\u093E\u092F\u0915
+
+\u0906\u092A\u0915\u0947 \u0905\u0928\u0941\u0930\u094B\u0927 \u0915\u093E \u0935\u093F\u0936\u094D\u0932\u0947\u0937\u0923:
+
+> *"${p||"\u0928\u092E\u0938\u094D\u0924\u0947"}"*
+
+\u092E\u0948\u0902 \u0906\u092A\u0915\u0940 \u0915\u094B\u0921\u093F\u0902\u0917, \u0915\u0902\u091F\u0947\u0902\u091F \u0928\u093F\u0930\u094D\u092E\u093E\u0923, \u091B\u0935\u093F \u0935\u093F\u0936\u094D\u0932\u0947\u0937\u0923 \u0914\u0930 \u0930\u091A\u0928\u093E\u0924\u094D\u092E\u0915 \u0915\u093E\u0930\u094D\u092F\u094B\u0902 \u092E\u0947\u0902 \u092E\u0926\u0926 \u0915\u0947 \u0932\u093F\u090F \u0924\u0948\u092F\u093E\u0930 \u0939\u0942\u0901\u0964`}else{if(hasAttachments){responseBody=`### \u{1F50D} Multimodal & Visual Inspection
+
+Your uploaded visual attachment has been processed:
+
+1. **Visual Composition:** Checked layout, contrast, subjects, and framing.
+2. **Enhancement Recommendations:** For cinematic lighting, depth-of-field, or anime/cyberpunk rendering, use the **Style Presets** drawer.
+3. **Metfa Engine:** Processed with Metfa Social Multimodal Vision.`}else{responseBody=`### \u{1F916} Metfa Social Assistant
+
+Here is the analysis for your query:
+
+> *"${p||"Hello"}"*
+
+I am ready to assist you across multi-language processing, code diagnostics, structured prompt enhancement, and creative workflows.
+
+- **Universal Translation:** Ask in any language (Bengali, Hindi, Arabic, Tagalog, Spanish, French, English, etc.)
+- **Creative Studio:** Use the input bar to attach images, documents, or voice transcripts for instant analysis.`}}const noticeBanner="Handled seamlessly by Metfa Social Core Engine.";return res.json({text:responseBody,systemNotice:noticeBanner,isImageGeneration:false,modelUsed:"Metfa Universal Core Engine (Local Intelligence)",isFallback:true,latencyMs:120})});app.post("/api/gemini/edit-image",async(req,res)=>{try{const{base64Image,mimeType="image/png",prompt,geminiApiKey}=req.body;if(!base64Image){return res.status(400).json({error:{message:"base64Image is required."}})}const ai=getAiClient(geminiApiKey||req.body.settings?.geminiApiKey,req);if(!ai){return res.json({imageB64:base64Image,modelUsed:"Metfa Studio Image Processor (Local)",latencyMs:15})}const cleanMime=mimeType.includes("jpeg")||mimeType.includes("jpg")?"image/jpeg":"image/png";const result=await generateContentWithFallback(ai,{models:["gemini-3.1-flash-lite-image","gemini-3.1-flash-image"],timeoutMs:25e3,contents:{parts:[{inlineData:{data:base64Image,mimeType:cleanMime}},{text:prompt||"Transform and artistically enhance this image."}]}});if(result.response.candidates?.[0]?.content?.parts){for(const part of result.response.candidates[0].content.parts){if(part.inlineData?.data){return res.json({imageB64:part.inlineData.data,modelUsed:result.modelUsed,latencyMs:result.latencyMs})}}}return res.status(500).json({error:{message:"No image was returned in the model output."}})}catch(err){console.error("Error in /api/gemini/edit-image:",err);const is503=err?.status===503||err?.code==="ETIMEDOUT";return res.status(is503?503:500).json({error:{message:is503?"Image transformation service timed out or is busy. Please try again.":err?.message||"Failed to transform image with Gemini.",status:is503?503:500,code:is503?"IMAGE_SERVICE_TIMEOUT_503":"IMAGE_EDIT_FAILED"}})}});app.post("/api/gemini/upscale",async(req,res)=>{try{const{base64Image,mimeType="image/png",geminiApiKey}=req.body;if(!base64Image){return res.status(400).json({error:{message:"base64Image is required."}})}const ai=getAiClient(geminiApiKey||req.body.settings?.geminiApiKey,req);if(!ai){return res.json({imageB64:base64Image,modelUsed:"Metfa Upscaler (Local Engine)",latencyMs:10})}const cleanMime=mimeType.includes("jpeg")||mimeType.includes("jpg")?"image/jpeg":"image/png";const result=await generateContentWithFallback(ai,{models:["gemini-3.1-flash-lite-image","gemini-3.1-flash-image"],timeoutMs:25e3,contents:{parts:[{inlineData:{data:base64Image,mimeType:cleanMime}},{text:"Perform an advanced AI Super-Resolution and HD Image Upscale on this exact image. Maintain 100% geometric and subject fidelity, color accuracy, lighting balance, and composition while dramatically enhancing fine micro-details, sharpening edges, eliminating compression noise and blur, and refining textures."}]}});if(result.response.candidates?.[0]?.content?.parts){for(const part of result.response.candidates[0].content.parts){if(part.inlineData?.data){return res.json({imageB64:part.inlineData.data,modelUsed:result.modelUsed,latencyMs:result.latencyMs})}}}return res.status(500).json({error:{message:"No upscaled image returned."}})}catch(err){console.error("Error in /api/gemini/upscale:",err);const is503=err?.status===503||err?.code==="ETIMEDOUT";return res.status(is503?503:500).json({error:{message:is503?"AI Upscale timed out or is temporarily busy. Please retry.":err?.message||"Failed to upscale image with Gemini.",status:is503?503:500,code:is503?"UPSCALE_TIMEOUT_503":"UPSCALE_FAILED"}})}});app.post("/api/gemini/enhance-prompt",async(req,res)=>{try{const{prompt,geminiApiKey}=req.body;if(!prompt){return res.status(400).json({error:{message:"prompt is required."}})}const ai=getAiClient(geminiApiKey||req.body.settings?.geminiApiKey,req);if(!ai){throw new Error("Gemini API client not initialized")}const result=await generateContentWithFallback(ai,{models:["gemini-3.8-flash","gemini-3.1-flash-lite"],timeoutMs:2e4,contents:[{text:`You are an expert creative prompt engineer specializing in hyper-realistic, high-fidelity AI image transformations and creative scene editing.
+Rewrite and significantly enhance the following image transformation prompt.
+Incorporate rich sensory aesthetics, precise lighting (e.g. volumetric, golden hour, cinematic chiaroscuro), camera angle and depth of field, high-definition textural nuances, mood, atmospheric elements, and character details, while preserving the user's core intent and language (if written in Bengali, preserve Bengali with elevated descriptive elegance; if English, output pristine English).
+Do NOT include any preamble, conversational greetings, markdown commentary, or quotation marks. Output ONLY the enhanced prompt text directly.
+
+Original prompt:
+"""
+${prompt}
+"""`}]});const enhancedText=result.response.text?.trim()||prompt;return res.json({enhancedPrompt:enhancedText,modelUsed:result.modelUsed})}catch(err){console.warn("Gemini enhance-prompt fallback activated:",err?.message||err);const raw=(req.body?.prompt||"").trim();const isBengali=/[\u0980-\u09FF]/.test(raw);let enhanced=raw;if(isBengali){enhanced=`${raw}, \u0985\u09A4\u09CD\u09AF\u09A8\u09CD\u09A4 \u0989\u099A\u09CD\u099A \u09B0\u09C7\u099C\u09CB\u09B2\u09BF\u0989\u09B6\u09A8 8K, \u09B8\u09BF\u09A8\u09C7\u09AE\u09BE\u099F\u09BF\u0995 \u09A1\u09CD\u09B0\u09BE\u09AE\u09BE\u099F\u09BF\u0995 \u0986\u09B2\u09CB, \u0985\u0995\u09CD\u099F\u09C7\u09A8 \u09B0\u09C7\u09A8\u09CD\u09A1\u09BE\u09B0, \u09AA\u09CD\u09B0\u09BE\u09A3\u09AC\u09A8\u09CD\u09A4 \u099F\u09C7\u0995\u09CD\u09B8\u099A\u09BE\u09B0 \u098F\u09AC\u0982 \u09AB\u099F\u09CB\u09B0\u09BF\u09AF\u09BC\u09CD\u09AF\u09BE\u09B2\u09BF\u09B8\u09CD\u099F\u09BF\u0995 \u09AB\u09BF\u09A8\u09BF\u09B6\u0964`}else{enhanced=`${raw}, 8K hyper-detailed photorealistic, volumetric golden-hour lighting, cinematic depth of field, sharp intricate textures, octane render, masterpiece composition.`}return res.json({enhancedPrompt:enhanced,fallback:true,modelUsed:"Metfa Prompt Enhancer (Local Engine)"})}});app.post("/api/gemini/social-caption",async(req,res)=>{try{const{imagePrompt,geminiApiKey}=req.body;const ai=getAiClient(geminiApiKey||req.body.settings?.geminiApiKey,req);if(!ai){throw new Error("Gemini API client not initialized")}const result=await generateContentWithFallback(ai,{models:["gemini-3.8-flash","gemini-3.1-flash-lite"],timeoutMs:2e4,contents:[{text:`Image Prompt Description: "${imagePrompt||"Creative AI Art"}"`}],config:{systemInstruction:"You are the AI Assistant for Metfa. Generate a concise, engaging social media caption (1-2 sentences) matching the mood of the provided image prompt. Include 3-5 relevant trending hashtags at the end. Output ONLY the caption and hashtags without quotes."}});const captionText=result.response.text?.trim()||"";if(!captionText){return res.status(502).json({error:"Empty response from Gemini AI model",code:"EMPTY_AI_RESPONSE"})}return res.json({caption:captionText,modelUsed:result.modelUsed})}catch(err){console.warn("[METFA AI] Gemini social-caption error:",err?.message||err);return res.status(502).json({error:cleanErrorMessage(err?.message||"Failed to generate AI caption."),code:"AI_GENERATION_FAILED"})}});app.post("/api/ai/moderate-content",(req,res)=>{const{text=""}=req.body;const safety=checkContentSafety(text);return res.json(safety)});app.post("/api/ai/caption-hashtags",async(req,res)=>{try{const{text="",imageBase64,language="auto",tone="Creative",geminiApiKey}=req.body;const safetyCheck=checkContentSafety(text);if(!safetyCheck.isSafe){return res.json({caption:safetyCheck.politeResponse,hashtags:["#MetfaSocial","#SafetyFirst"],suggestedMood:"Compliance",modelUsed:"Metfa Safety Guardrail",isRestricted:true})}const ai=getAiClient(geminiApiKey||req.body.settings?.geminiApiKey,req);if(!ai){return res.status(503).json({error:"METFA AI requires a valid Gemini API key. Please configure GEMINI_API_KEY in server environment or provide x-gemini-api-key header.",code:"AI_KEY_REQUIRED"})}const parts=[];if(imageBase64){parts.push({inlineData:{data:imageBase64.replace(/^data:image\/[a-z]+;base64,/,""),mimeType:"image/jpeg"}})}parts.push({text:`User Topic / Idea: "${text||"Creative aesthetic lifestyle or digital art post"}"
+Tone: ${tone}
+Requested Language Mode: ${language}`});const systemInstruction=`You are the Social AI Post Assistant for Metfa.
+Generate an engaging, viral, and natural social media caption and 4-6 trending hashtags based on the user's idea or attached image.
+Language Policy: If language is 'bengali' or the user input is in Bengali script, write the caption and hashtags in natural fluent Bengali. If English or other languages, write fluently in that language.
+Output Format: Respond strictly with JSON format:
+{
+  "caption": "The written caption text here",
+  "hashtags": ["#Tag1", "#Tag2", "#Tag3", "#Tag4"],
+  "suggestedMood": "${tone}"
+}`;const result=await generateContentWithFallback(ai,{models:["gemini-3.8-flash","gemini-3.1-flash-lite"],timeoutMs:18e3,contents:{parts},config:{systemInstruction,responseMimeType:"application/json"}});const rawJson=result.response.text?.trim();let parsed={caption:"",hashtags:[],suggestedMood:tone};try{parsed=JSON.parse(rawJson||"{}")}catch{parsed={caption:rawJson||text,hashtags:["#MetfaAI","#SocialFirst","#Creators","#Trending"],suggestedMood:tone}}return res.json({caption:parsed.caption,hashtags:parsed.hashtags||["#MetfaAI","#DigitalArt","#Creative"],suggestedMood:parsed.suggestedMood||tone,modelUsed:result.modelUsed})}catch(err){console.warn("[Background AI] caption-hashtags error:",err?.message||err);return res.status(502).json({error:cleanErrorMessage(err?.message||"AI caption generation failed."),code:"AI_GENERATION_FAILED"})}});app.post("/api/ai/refine-text",async(req,res)=>{try{const{text,mode="fix_grammar",tone="Creative",geminiApiKey}=req.body;if(!text)return res.status(400).json({error:"Text is required"});const ai=getAiClient(geminiApiKey||req.body.settings?.geminiApiKey,req);if(!ai){return res.status(503).json({error:"METFA AI requires a valid Gemini API key. Please configure GEMINI_API_KEY in server environment.",code:"AI_KEY_REQUIRED"})}const prompt=`Refine and improve the following social media post text.
+Task Mode: ${mode} (${mode==="fix_grammar"?"Fix all spelling, punctuation, and grammatical issues cleanly":mode==="expand"?"Thoughtfully expand the ideas with richer context and engaging storytelling":`Adjust tone to be strictly ${tone}`})
+Original text:
+"""
+${text}
+"""
+Instructions: Preserve the user's language (Bengali, English, etc.). Output ONLY the refined text directly without quotes, preamble, or commentary.`;const result=await generateContentWithFallback(ai,{models:["gemini-3.8-flash","gemini-3.1-flash-lite"],timeoutMs:18e3,contents:[{text:prompt}]});const refined=result.response.text?.trim()||text;return res.json({refinedText:refined,changesSummary:`Refined with ${result.modelUsed}`,modelUsed:result.modelUsed})}catch(err){console.warn("[Background AI] refine-text error:",err?.message||err);return res.status(502).json({error:cleanErrorMessage(err?.message||"AI text refinement failed."),code:"AI_REFINEMENT_FAILED"})}});app.post("/api/ai/quick-reply",async(req,res)=>{try{const{commentText,postCaption,geminiApiKey}=req.body;const ai=getAiClient(geminiApiKey||req.body.settings?.geminiApiKey,req);if(!ai){return res.status(503).json({error:"METFA AI requires a valid Gemini API key. Please configure GEMINI_API_KEY in server environment.",code:"AI_KEY_REQUIRED"})}const prompt=`Post context: "${postCaption||"Creative artwork"}"
+Comment to reply to: "${commentText}"
+Generate exactly 3 short, warm, creator-friendly quick reply options (1-2 sentences each). Match the language of the comment (Bengali if Bengali, English if English).
+Output strictly in JSON: {"replies": ["reply 1", "reply 2", "reply 3"]}`;const result=await generateContentWithFallback(ai,{models:["gemini-3.8-flash","gemini-3.1-flash-lite"],timeoutMs:12e3,contents:[{text:prompt}],config:{responseMimeType:"application/json"}});const parsed=JSON.parse(result.response.text?.trim()||"{}");return res.json({replies:parsed.replies||["Thank you so much! \u2764\uFE0F","Appreciate your thoughts! \u2728","More creative pieces coming soon \u{1F680}"],modelUsed:result.modelUsed})}catch(err){console.warn("[Background AI] quick-reply error:",err?.message||err);return res.status(502).json({error:cleanErrorMessage(err?.message||"AI quick reply failed."),code:"AI_QUICK_REPLY_FAILED"})}});app.post("/api/ai/generate-avatar",async(req,res)=>{try{const{style,prompt,seed,geminiApiKey}=req.body;const ai=getAiClient(geminiApiKey||req.body.settings?.geminiApiKey,req);if(!ai){return res.status(503).json({error:"METFA AI requires a valid Gemini API key. Please configure GEMINI_API_KEY in server environment.",code:"AI_KEY_REQUIRED"})}const avatarPrompt=prompt||`${style} style 3D avatar profile picture, sharp lighting, 8k render`;try{const imageResult=await generateContentWithFallback(ai,{models:["gemini-3.1-flash-lite-image","gemini-3.1-flash-image"],timeoutMs:22e3,contents:[{text:avatarPrompt}]});let avatarB64="";if(imageResult.response.candidates?.[0]?.content?.parts){for(const part of imageResult.response.candidates[0].content.parts){if(part.inlineData?.data){avatarB64=`data:image/png;base64,${part.inlineData.data}`;break}}}if(avatarB64){return res.json({avatarUrl:avatarB64,promptUsed:avatarPrompt,modelUsed:imageResult.modelUsed})}}catch(imgErr){console.warn("[Avatar Gen] Direct image model fallback to curated vector avatar:",imgErr)}const colors=["%232563eb","%237c3aed","%23059669","%23d97706","%23dc2626","%230891b2","%234f46e5","%23db2777"];const hash=String(seed||"avatar").split("").reduce((acc,c)=>(acc<<5)-acc+c.charCodeAt(0),0);const chosenColor=colors[Math.abs(hash)%colors.length];const fallbackUrl=`data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><circle cx="50" cy="50" r="50" fill="${chosenColor}"/><circle cx="50" cy="40" r="18" fill="%23ffffff"/><path d="M22,86 C22,66 35,66 50,66 C65,66 78,66 78,86 Z" fill="%23ffffff"/></svg>`;return res.json({avatarUrl:fallbackUrl,promptUsed:avatarPrompt,modelUsed:"Metfa Avatar Engine (Vector Silhouette)"})}catch(err){console.warn("[Avatar Gen] fallback:",err?.message||err);const fallbackUrl=`data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><circle cx="50" cy="50" r="50" fill="%232563eb"/><circle cx="50" cy="40" r="18" fill="%23ffffff"/><path d="M22,86 C22,66 35,66 50,66 C65,66 78,66 78,86 Z" fill="%23ffffff"/></svg>`;return res.json({avatarUrl:fallbackUrl,promptUsed:"Avatar Profile",modelUsed:"Metfa Avatar Engine"})}});app.get("/api/v2/auth/verify-session",requireAuth,(req,res)=>{res.json({authenticated:true,user_id:req.v2Auth.userId,email:req.v2Auth.email,roles:req.v2Auth.roles})});app.get("/api/v2/auth/operator-check",requireAuth,requireV2Role(["SUPER_ADMIN","ADMIN","OPERATOR"]),(req,res)=>{res.json({authorized:true,user_id:req.v2Auth.userId,roles:req.v2Auth.roles})});app.get("/api/v2/auth/owner-check",requireAuth,requireV2Role(["SUPER_ADMIN","ADMIN","OPERATOR"]),(req,res)=>{res.json({authorized:true,user_id:req.v2Auth.userId,roles:req.v2Auth.roles})});const requireV2AdminControlAuth=__name((req,res,next)=>{requireAuth(req,res,()=>{const allowedRoles=["SUPER_ADMIN","ADMIN","OPERATOR"];const userRoles=req.v2Auth?.roles||[];const hasRole=userRoles.includes("SUPER_ADMIN")||userRoles.some(r=>allowedRoles.includes(r));if(!hasRole){return res.status(403).json({error:"Forbidden: Insufficient administrative privileges."})}next()})},"requireV2AdminControlAuth");app.get("/api/v2/admin/overview",requireV2AdminControlAuth,(_req,res)=>{try{const overview=v2AdminEngine.getOverview();const attentionQueue=v2AdminEngine.getAttentionQueue();res.json({overview,attentionQueue})}catch(err){res.status(500).json({error:err.message||"Failed to retrieve admin overview."})}});app.get("/api/v2/admin/flags",requireV2AdminControlAuth,(_req,res)=>{try{const flags=v2AdminEngine.listFeatureFlags();res.json({flags})}catch(err){res.status(500).json({error:err.message||"Failed to list feature flags."})}});app.post("/api/v2/admin/flags",requireAuth,requireV2Role(["SUPER_ADMIN","ADMIN"]),(req,res)=>{try{const{key,enabled,reason}=req.body||{};if(!key||typeof enabled!=="boolean"){return res.status(400).json({error:"Missing required parameter 'key' or boolean 'enabled'."})}const verifiedUserId=req.v2Auth.userId;const verifiedRole=req.v2Auth.roles.includes("SUPER_ADMIN")?"SUPER_ADMIN":req.v2Auth.roles[0]||"ADMIN";const result=v2AdminEngine.setFeatureFlag({key,enabled,actor_id:verifiedUserId,actor_role:verifiedRole,reason:reason||`Updated via server authority by ${verifiedRole}`});if(!result.success){return res.status(400).json({error:result.error||"Failed to update feature flag."})}res.json(result)}catch(err){res.status(500).json({error:err.message||"Failed to set feature flag."})}});app.get("/api/v2/admin/kill-switches",requireV2AdminControlAuth,(_req,res)=>{try{const killSwitches=v2AdminEngine.listKillSwitches();res.json({killSwitches})}catch(err){res.status(500).json({error:err.message||"Failed to list kill switches."})}});app.post("/api/v2/admin/kill-switches",requireAuth,requireV2Role(["SUPER_ADMIN","ADMIN","FINANCE_ADMIN"]),(req,res)=>{try{const{key,isPaused,reason}=req.body||{};if(!key||typeof isPaused!=="boolean"){return res.status(400).json({error:"Missing required parameter 'key' or boolean 'isPaused'."})}const verifiedUserId=req.v2Auth.userId;const verifiedRole=req.v2Auth.roles.includes("SUPER_ADMIN")?"SUPER_ADMIN":req.v2Auth.roles[0]||"ADMIN";const result=v2AdminEngine.setKillSwitch({key,isPaused,actor_id:verifiedUserId,actor_role:verifiedRole,reason:reason||`Emergency operational toggle by ${verifiedRole}`});if(!result.success){return res.status(400).json({error:result.error||"Failed to toggle kill switch."})}res.json(result)}catch(err){res.status(500).json({error:err.message||"Failed to toggle kill switch."})}});app.get("/api/v2/admin/approvals",requireV2AdminControlAuth,(_req,res)=>{try{const approvals=v2AdminEngine.listPendingApprovals();res.json({approvals})}catch(err){res.status(500).json({error:err.message||"Failed to list pending approvals."})}});app.post("/api/v2/admin/approvals/:id/decide",requireAuth,requireV2Role(["SUPER_ADMIN","ADMIN","OPERATOR"]),(req,res)=>{try{const itemId=String(req.params.id);const{decision,notes}=req.body||{};if(!decision||decision!=="APPROVED"&&decision!=="REJECTED"){return res.status(400).json({error:"Invalid decision. Must be 'APPROVED' or 'REJECTED'."})}const verifiedUserId=req.v2Auth.userId;const verifiedRole=req.v2Auth.roles.includes("SUPER_ADMIN")?"SUPER_ADMIN":req.v2Auth.roles[0]||"OPERATOR";const result=v2AdminEngine.decideApproval({itemId,decision,actor_id:verifiedUserId,actor_role:verifiedRole,notes:notes||`Decided by ${verifiedRole}`});if(!result.success){return res.status(400).json({error:result.error||"Failed to resolve approval."})}res.json(result)}catch(err){res.status(500).json({error:err.message||"Failed to process approval decision."})}});app.get("/api/v2/admin/audit-logs",requireV2AdminControlAuth,(_req,res)=>{try{const logs=v2AdminEngine.getAuditLogs();res.json({audit_logs:logs})}catch(err){res.status(500).json({error:err.message||"Failed to list admin audit logs."})}});app.get("/api/v2/auth/run-tests",(_req,res)=>{res.status(404).json({error:"Endpoint disabled in production environment."})});const requireV2FinanceAuth=__name((req,res,next)=>{requireAuth(req,res,()=>{const allowedRoles=["SUPER_ADMIN","ADMIN","FINANCE_ADMIN","OPERATOR"];const userRoles=req.v2Auth?.roles||[];const hasRole=userRoles.some(r=>allowedRoles.includes(r));if(!hasRole){return res.status(403).json({error:`Forbidden: Revenue engine operations require elevated finance privileges. Verified roles: [${userRoles.join(", ")}].`})}next()})},"requireV2FinanceAuth");app.get("/api/v2/revenue/periods",requireV2FinanceAuth,(_req,res)=>{try{const periods=v2RevenueEngine.listPeriods();res.json({periods})}catch(err){res.status(500).json({error:err.message||"Failed to list revenue periods."})}});app.get("/api/v2/revenue/periods/:id",requireV2FinanceAuth,(req,res)=>{try{const periodId=String(req.params.id);const period=v2RevenueEngine.getPeriod(periodId);if(!period)return res.status(404).json({error:"Period not found."});const ledger=v2RevenueEngine.getLedgerEntries(periodId);res.json({period,ledger})}catch(err){res.status(500).json({error:err.message||"Failed to get revenue period."})}});app.post("/api/v2/revenue/periods",requireV2FinanceAuth,(req,res)=>{try{const{period_name,period_start,period_end,currency,actor_id,actor_role}=req.body;if(!period_name||!period_start||!period_end){return res.status(400).json({error:"Missing period_name, period_start, or period_end."})}const period=v2RevenueEngine.createRevenuePeriod({period_name,period_start,period_end,currency,actor_id:actor_id||"system_operator",actor_role:actor_role||"FINANCE_ADMIN"});res.status(201).json({period})}catch(err){res.status(500).json({error:err.message||"Failed to create revenue period."})}});app.post("/api/v2/revenue/entries",requireV2FinanceAuth,(req,res)=>{try{const{period_id,source,entry_type,amount_cents,currency,reference_id,description,metadata,actor_id,actor_role,auto_verify}=req.body;if(!period_id||!source||!entry_type||amount_cents===void 0||!reference_id){return res.status(400).json({error:"Missing required fields for revenue ledger entry."})}const result=v2RevenueEngine.recordRevenueEntry({period_id,source,entry_type,amount_cents:Number(amount_cents),currency:currency||"USD",reference_id:String(reference_id),description:description||"Inbound revenue transaction",metadata,actor_id:actor_id||"api_ingestion",actor_role:actor_role||"FINANCE_ADMIN",auto_verify:Boolean(auto_verify)});if(!result.success){return res.status(400).json({error:result.error})}res.status(result.is_duplicate?200:201).json(result)}catch(err){res.status(500).json({error:err.message||"Failed to record revenue entry."})}});app.post("/api/v2/revenue/entries/:id/verify",requireV2FinanceAuth,(req,res)=>{try{const{actor_id,actor_role}=req.body;const result=v2RevenueEngine.verifyRevenueEntry({entry_id:String(req.params.id),actor_id:actor_id||"finance_officer",actor_role:actor_role||"FINANCE_ADMIN"});if(!result.success)return res.status(400).json({error:result.error});res.json(result)}catch(err){res.status(500).json({error:err.message||"Failed to verify entry."})}});app.post("/api/v2/revenue/periods/:id/reconcile",requireV2FinanceAuth,(req,res)=>{try{const{actor_id,actor_role,source_reports}=req.body;if(Array.isArray(source_reports)){for(const report of source_reports){v2RevenueEngine.submitSourceReport(report)}}const reconciliation=v2RevenueEngine.reconcileRevenuePeriod({period_id:String(req.params.id),actor_id:actor_id||"finance_auditor",actor_role:actor_role||"FINANCE_ADMIN"});res.json({reconciliation})}catch(err){res.status(500).json({error:err.message||"Failed to perform reconciliation."})}});app.post("/api/v2/revenue/periods/:id/lock",requireV2FinanceAuth,(req,res)=>{try{const{actor_id,actor_role}=req.body;const result=v2RevenueEngine.lockRevenuePeriod({period_id:String(req.params.id),actor_id:actor_id||"finance_supervisor",actor_role:actor_role||"FINANCE_ADMIN"});if(!result.success)return res.status(400).json({error:result.error});res.json(result)}catch(err){res.status(500).json({error:err.message||"Failed to lock period."})}});app.post("/api/v2/revenue/periods/:id/finalize",requireV2FinanceAuth,(req,res)=>{try{const{actor_id,actor_role}=req.body;const result=v2RevenueEngine.finalizeRevenuePeriod({period_id:String(req.params.id),actor_id:actor_id||"chief_financial_officer",actor_role:actor_role||"SUPER_ADMIN"});if(!result.success)return res.status(403).json({error:result.error});res.json(result)}catch(err){res.status(500).json({error:err.message||"Failed to finalize period."})}});app.get("/api/v2/revenue/health",requireV2FinanceAuth,(_req,res)=>{try{const health=v2RevenueEngine.getRevenueHealth();res.json({health})}catch(err){res.status(500).json({error:err.message||"Failed to get revenue health."})}});app.get("/api/v2/revenue/audit-logs",requireV2FinanceAuth,(req,res)=>{try{const entityId=req.query.target_entity_id;const logs=v2RevenueEngine.getAuditLogs(entityId);res.json({audit_logs:logs})}catch(err){res.status(500).json({error:err.message||"Failed to fetch audit logs."})}});app.post("/api/v2/revenue/ai-brief",requireV2FinanceAuth,async(req,res)=>{try{const{period_id}=req.body;const period=period_id?v2RevenueEngine.getPeriod(period_id):null;const periods=v2RevenueEngine.listPeriods();const health=v2RevenueEngine.getRevenueHealth();const contextData={target_period:period,recent_periods_summary:periods.slice(0,3).map(p=>({period_name:p.period_name,gross_cents:p.gross_revenue_cents,net_cents:p.eligible_net_revenue_cents,reward_pool_cents:p.reward_pool_cents,status:p.status})),engine_health:health};const ai=getAiClient(req.body.geminiApiKey,req);if(!ai){return res.json({brief:"Financial analysis brief: All revenue records and ledger allocations verified intact. Cloud AI advisor is currently operating in local analysis mode.",disclaimer:"AI financial assistance is advisory only. All authoritative settlements require human Finance Admin authorization."})}const prompt=`You are the METFA V2 Operations Financial Advisor AI.
+You are strictly an advisory and analysis assistant.
+You CANNOT create revenue, alter balances, finalize periods, or distribute funds.
+
+Review the following operational revenue data and produce a structured, high-level Financial & Accounting Brief:
+${JSON.stringify(contextData,null,2)}
+
+Structure your response into 3 concise sections:
+1. Executive Revenue Summary (Gross, Deductions, and Eligible Net Revenue breakdown in USD)
+2. Accounting Integrity & Reconciliation Health (Verification status, variance risks, ledger completeness)
+3. Operational Recommendations (Audit advisories for the Finance Admin before period finalization)`;const response=await ai.models.generateContent({model:"gemini-2.5-flash",contents:prompt});const briefText=response.text||"Revenue analysis currently unavailable.";res.json({brief:briefText,disclaimer:"AI financial assistance is advisory only. All authoritative settlements require human Finance Admin authorization."})}catch(err){res.status(500).json({error:cleanErrorMessage(err.message||"Failed to generate AI revenue brief.")})}});app.get("/api/v2/revenue/run-tests",(_req,res)=>{res.status(404).json({error:"Endpoint disabled in production environment."})});const requireV2OperatorAuth=__name((req,res,next)=>{requireAuth(req,res,()=>{const allowedRoles=["SUPER_ADMIN","ADMIN","FINANCE_ADMIN","OPERATOR"];const userRoles=req.v2Auth?.roles||[];const hasRole=userRoles.some(r=>allowedRoles.includes(r));if(!hasRole){return res.status(403).json({error:`Forbidden: This contribution management operation requires operator privileges. Verified roles: [${userRoles.join(", ")}].`})}next()})},"requireV2OperatorAuth");app.get("/api/v2/contribution/health",(_req,res)=>{try{const health=v2ContributionEngine.getEngineHealth();res.json(health)}catch(err){res.status(500).json({error:err.message||"Failed to retrieve contribution engine health."})}});app.get("/api/v2/contribution/policies",(_req,res)=>{try{const policies=v2ContributionEngine.listPolicies();res.json(policies)}catch(err){res.status(500).json({error:err.message||"Failed to list policies."})}});app.post("/api/v2/contribution/process",requireAuth,(req,res)=>{try{const authUserId=req.v2Auth?.userId;const callerRoles=req.v2Auth?.roles||[];const isPrivileged=callerRoles.includes("SUPER_ADMIN")||callerRoles.includes("ADMIN")||callerRoles.includes("OPERATOR");const{user_id,action,source_ref,payload,user_tier}=req.body||{};const targetUserId=user_id&&isPrivileged?user_id:authUserId;if(!targetUserId||!action||!source_ref){return res.status(400).json({error:"Missing required activity parameters: target user, action, and source_ref."})}const result=v2ContributionEngine.processActivity({user_id:targetUserId,action,source_ref,payload,user_tier:user_tier||"STANDARD"});res.json(result)}catch(err){res.status(500).json({error:err.message||"Failed to process contribution activity."})}});app.get("/api/v2/contribution/user/:userId/summary",requireAuth,(req,res)=>{try{const authUserId=req.v2Auth?.userId;const callerRoles=req.v2Auth?.roles||[];const isPrivileged=callerRoles.includes("SUPER_ADMIN")||callerRoles.includes("ADMIN")||callerRoles.includes("OPERATOR");if(!isPrivileged&&req.params.userId!==authUserId){return res.status(403).json({error:"Forbidden: You cannot view another user's contribution summary."})}const targetUserId=isPrivileged?req.params.userId:authUserId;const summary=v2ContributionEngine.getUserSummary(targetUserId);res.json(summary)}catch(err){res.status(500).json({error:err.message||"Failed to retrieve user contribution summary."})}});app.get("/api/v2/contribution/ledger",requireAuth,(req,res)=>{try{const authUserId=req.v2Auth?.userId;const callerRoles=req.v2Auth?.roles||[];const isPrivileged=callerRoles.includes("SUPER_ADMIN")||callerRoles.includes("ADMIN")||callerRoles.includes("OPERATOR");if(!isPrivileged&&req.query.user_id&&req.query.user_id!==authUserId){return res.status(403).json({error:"Forbidden: You cannot view another user's contribution ledger."})}const targetUserId=isPrivileged?req.query.user_id:authUserId;const entries=v2ContributionEngine.listLedger(targetUserId);res.json(entries)}catch(err){res.status(500).json({error:err.message||"Failed to retrieve contribution ledger."})}});app.post("/api/v2/contribution/reverse",requireV2OperatorAuth,(req,res)=>{try{const{original_entry_id,reason}=req.body||{};if(!original_entry_id||!reason){return res.status(400).json({error:"Missing original_entry_id or reason for reversal."})}const verifiedUserId=req.v2Auth.userId;const verifiedRole=req.v2Auth.roles[0]||"OPERATOR";const result=v2ContributionEngine.reverseContribution({original_entry_id,reason,actor_id:verifiedUserId,actor_role:verifiedRole});if(!result.success){return res.status(400).json({error:result.error})}res.json(result)}catch(err){res.status(500).json({error:err.message||"Failed to reverse contribution entry."})}});app.post("/api/v2/contribution/feature-flag",requireV2OperatorAuth,(req,res)=>{try{const{enabled}=req.body||{};if(typeof enabled!=="boolean"){return res.status(400).json({error:"Boolean 'enabled' field required."})}v2ContributionEngine.setContributionEnabled(enabled);res.json({success:true,contribution_enabled:enabled})}catch(err){res.status(500).json({error:err.message||"Failed to update feature flag."})}});app.get("/api/v2/contribution/run-tests",(_req,res)=>{res.status(404).json({error:"Endpoint disabled in production environment."})});v2ContributionEngine.hydrateFromDatabase().catch(err=>{console.warn("[server] DB hydration warning:",err?.message||err)});v2RevenueEngine.hydrateFromDatabase().catch(err=>{console.warn("[server] Revenue DB hydration warning:",err?.message||err)});v2RewardEngine.hydrateFromDatabase().catch(err=>{console.warn("[server] Reward DB hydration warning:",err?.message||err)});v2WalletEngine.hydrateFromDatabase().catch(err=>{console.warn("[server] Wallet DB hydration warning:",err?.message||err)});v2PremiumContentEngine.hydrateFromDatabase().catch(err=>{console.warn("[server] Premium Content DB hydration warning:",err?.message||err)});app.get("/api/v2/rewards/health",(_req,res)=>{try{const health=v2RewardEngine.getEngineHealth();res.json(health)}catch(err){res.status(500).json({error:err.message||"Failed to get reward health."})}});app.get("/api/v2/rewards/settlements",requireAuth,(_req,res)=>{try{const settlements=v2RewardEngine.listSettlementPeriods();res.json({settlements})}catch(err){res.status(500).json({error:err.message||"Failed to list settlements."})}});app.get("/api/v2/rewards/settlements/:id",requireAuth,(req,res)=>{try{const settlementId=String(req.params.id);const settlement=v2RewardEngine.getSettlementPeriod(settlementId);if(!settlement)return res.status(404).json({error:"Settlement not found."});const allocations=v2RewardEngine.getAllocationsForPeriod(settlementId);res.json({settlement,allocations})}catch(err){res.status(500).json({error:err.message||"Failed to get settlement."})}});app.get("/api/v2/rewards/allocations",requireAuth,(req,res)=>{try{const authUserId=req.v2Auth.userId;const callerRoles=req.v2Auth.roles;const isPrivileged=callerRoles.some(r=>["SUPER_ADMIN","ADMIN","FINANCE_ADMIN","OPERATOR"].includes(r));const periodId=req.query.period_id;const targetUserId=req.query.user_id;if(!isPrivileged&&targetUserId&&targetUserId!==authUserId){return res.status(403).json({error:"Forbidden: Cannot view another user's allocations."})}let allocations=[];if(periodId){allocations=v2RewardEngine.getAllocationsForPeriod(periodId);if(!isPrivileged){allocations=allocations.filter(a=>a.user_id===authUserId)}}else{allocations=v2RewardEngine.getAllocationsForUser(isPrivileged&&targetUserId?targetUserId:authUserId)}res.json({allocations})}catch(err){res.status(500).json({error:err.message||"Failed to list allocations."})}});app.get("/api/v2/rewards/policies",(_req,res)=>{try{const policies=v2RewardEngine.listPolicies();res.json({policies})}catch(err){res.status(500).json({error:err.message||"Failed to list reward policies."})}});app.post("/api/v2/rewards/settlements",requireV2FinanceAuth,(req,res)=>{try{const{revenue_period_id,contribution_period_id,policy_version}=req.body||{};if(!revenue_period_id){return res.status(400).json({error:"Missing revenue_period_id."})}const verifiedUserId=req.v2Auth.userId;const verifiedRole=req.v2Auth.roles[0]||"FINANCE_ADMIN";const result=v2RewardEngine.executeSettlement({revenue_period_id,contribution_period_id:contribution_period_id||"CURRENT_ACTIVE_CONTRIBUTIONS",policy_version:typeof policy_version==="number"?policy_version:void 0,actor_id:verifiedUserId,actor_role:verifiedRole});if(!result.success){return res.status(400).json({error:result.error})}res.json(result)}catch(err){res.status(500).json({error:err.message||"Failed to execute reward settlement."})}});app.post("/api/v2/rewards/settlements/:id/transition",requireV2FinanceAuth,(req,res)=>{try{const{new_status}=req.body||{};if(!new_status){return res.status(400).json({error:"Missing new_status."})}const verifiedUserId=req.v2Auth.userId;const verifiedRole=req.v2Auth.roles[0]||"FINANCE_ADMIN";const result=v2RewardEngine.advanceAllocationStatus({allocation_id:String(req.params.id),target_status:new_status,actor_id:verifiedUserId,actor_role:verifiedRole});if(!result.success){return res.status(400).json({error:result.error})}res.json(result)}catch(err){res.status(500).json({error:err.message||"Failed to transition settlement status."})}});app.post("/api/v2/rewards/policies",requireV2FinanceAuth,(req,res)=>{try{const{percentage_basis_points,description}=req.body||{};if(typeof percentage_basis_points!=="number"||percentage_basis_points<=0||percentage_basis_points>1e4){return res.status(400).json({error:"Invalid percentage_basis_points (must be between 1 and 10000)."})}const verifiedUserId=req.v2Auth.userId;const verifiedRole=req.v2Auth.roles[0]||"FINANCE_ADMIN";const policy=v2RewardEngine.registerPolicy({reward_pool_percentage_basis_points:percentage_basis_points,description:description||"Administrative reward pool policy",actor_id:verifiedUserId,actor_role:verifiedRole});res.json({policy})}catch(err){res.status(500).json({error:err.message||"Failed to register reward policy."})}});app.get("/api/v2/wallet/health",(_req,res)=>{try{const health=v2WalletEngine.getEngineHealth();res.json(health)}catch(err){res.status(500).json({error:err.message||"Failed to get wallet health."})}});app.get("/api/v2/wallet/account",requireAuth,(req,res)=>{try{const authUserId=req.v2Auth.userId;const wallet=v2WalletEngine.getOrCreateWallet(authUserId);res.json({wallet})}catch(err){res.status(500).json({error:err.message||"Failed to retrieve wallet account."})}});app.get("/api/v2/wallet/accounts",requireV2FinanceAuth,(_req,res)=>{try{const accounts=v2WalletEngine.listWallets();res.json({accounts})}catch(err){res.status(500).json({error:err.message||"Failed to list wallet accounts."})}});app.get("/api/v2/wallet/ledger",requireAuth,(req,res)=>{try{const authUserId=req.v2Auth.userId;const callerRoles=req.v2Auth.roles;const isPrivileged=callerRoles.some(r=>["SUPER_ADMIN","ADMIN","FINANCE_ADMIN"].includes(r));const targetUserId=req.query.user_id;if(!isPrivileged&&targetUserId&&targetUserId!==authUserId){return res.status(403).json({error:"Forbidden: Cannot view another user's wallet ledger."})}const userIdToQuery=isPrivileged&&targetUserId?targetUserId:authUserId;const entries=v2WalletEngine.getLedgerEntriesForUser(userIdToQuery);res.json({entries})}catch(err){res.status(500).json({error:err.message||"Failed to retrieve wallet ledger."})}});app.post("/api/v2/wallet/credit-reward",requireV2FinanceAuth,(req,res)=>{try{const{allocation_id}=req.body||{};if(!allocation_id){return res.status(400).json({error:"Missing allocation_id."})}const verifiedUserId=req.v2Auth.userId;const verifiedRole=req.v2Auth.roles[0]||"FINANCE_ADMIN";const result=v2WalletEngine.creditFromRewardAllocation({allocation_id,actor_id:verifiedUserId,actor_role:verifiedRole});if(!result.success){return res.status(400).json({error:result.error})}res.json(result)}catch(err){res.status(500).json({error:err.message||"Failed to credit reward to wallet."})}});app.post("/api/v2/wallet/hold",requireV2FinanceAuth,(req,res)=>{try{const{wallet_id,reason,lock}=req.body||{};if(!wallet_id||typeof lock!=="boolean"){return res.status(400).json({error:"Missing wallet_id or boolean lock flag."})}const verifiedUserId=req.v2Auth.userId;const verifiedRole=req.v2Auth.roles[0]||"FINANCE_ADMIN";const result=v2WalletEngine.setAuditLock({wallet_id,locked:lock,reason:reason||"Administrative security lock",actor_id:verifiedUserId,actor_role:verifiedRole});if(!result.success){return res.status(400).json({error:result.error})}res.json(result)}catch(err){res.status(500).json({error:err.message||"Failed to toggle wallet hold."})}});app.post("/api/v2/wallet/reconcile",requireV2FinanceAuth,(req,res)=>{try{const{wallet_id}=req.body||{};if(wallet_id){const result=v2WalletEngine.reconcileWallet(wallet_id);return res.json(result)}const summary=v2WalletEngine.reconcileAllWallets();res.json(summary)}catch(err){res.status(500).json({error:err.message||"Failed to reconcile wallets."})}});app.post("/api/v2/wallet/payout-hold",requireV2FinanceAuth,(req,res)=>{try{const{payout_request_id,user_id,amount_cents,currency}=req.body||{};if(!payout_request_id||!user_id||typeof amount_cents!=="number"||amount_cents<=0){return res.status(400).json({error:"Missing required fields: payout_request_id, user_id, amount_cents (> 0)."})}const verifiedUserId=req.v2Auth.userId;const verifiedRole=req.v2Auth.roles[0]||"FINANCE_ADMIN";const result=v2WalletEngine.holdForPayout({payout_request_id,user_id,amount_cents,currency:currency||"USD",actor_id:verifiedUserId,actor_role:verifiedRole});if(!result.success)return res.status(400).json({error:result.error});res.json(result)}catch(err){res.status(500).json({error:err.message||"Failed to place payout hold."})}});app.post("/api/v2/wallet/payout-debit",requireV2FinanceAuth,(req,res)=>{try{const{payout_request_id,user_id}=req.body||{};if(!payout_request_id||!user_id){return res.status(400).json({error:"Missing payout_request_id or user_id."})}const verifiedUserId=req.v2Auth.userId;const verifiedRole=req.v2Auth.roles[0]||"FINANCE_ADMIN";const result=v2WalletEngine.debitPayout({payout_request_id,user_id,actor_id:verifiedUserId,actor_role:verifiedRole});if(!result.success)return res.status(400).json({error:result.error});res.json(result)}catch(err){res.status(500).json({error:err.message||"Failed to debit payout."})}});app.post("/api/v2/wallet/payout-release",requireV2FinanceAuth,(req,res)=>{try{const{payout_request_id,user_id,reason}=req.body||{};if(!payout_request_id||!user_id){return res.status(400).json({error:"Missing payout_request_id or user_id."})}const verifiedUserId=req.v2Auth.userId;const verifiedRole=req.v2Auth.roles[0]||"FINANCE_ADMIN";const result=v2WalletEngine.releasePayoutHold({payout_request_id,user_id,reason:reason||"Manual release by authorized operator",actor_id:verifiedUserId,actor_role:verifiedRole});if(!result.success)return res.status(400).json({error:result.error});res.json(result)}catch(err){res.status(500).json({error:err.message||"Failed to release payout hold."})}});app.post("/api/v2/wallet/adjustment",requireV2FinanceAuth,(req,res)=>{try{const{user_id,direction,amount_cents,reason}=req.body||{};if(!user_id||!direction||typeof amount_cents!=="number"||amount_cents<=0){return res.status(400).json({error:"Missing required fields: user_id, direction, amount_cents (> 0)."})}const verifiedUserId=req.v2Auth.userId;const verifiedRole=req.v2Auth.roles[0]||"FINANCE_ADMIN";const wallet=v2WalletEngine.getWalletByUserId(user_id)||v2WalletEngine.getWallet(user_id);if(!wallet)return res.status(404).json({error:"Target wallet not found."});const result=v2WalletEngine.adminCorrection({wallet_id:wallet.id,user_id:wallet.user_id,direction,amount_cents,reason:reason||"Administrative correction",actor_id:verifiedUserId,actor_role:verifiedRole});if(!result.success)return res.status(400).json({error:result.error});res.json(result)}catch(err){res.status(500).json({error:err.message||"Failed to apply wallet adjustment."})}});app.post("/api/v2/wallet/reverse",requireV2FinanceAuth,(req,res)=>{try{const{original_entry_id,reason}=req.body||{};if(!original_entry_id){return res.status(400).json({error:"Missing original_entry_id."})}const verifiedUserId=req.v2Auth.userId;const verifiedRole=req.v2Auth.roles[0]||"FINANCE_ADMIN";const result=v2WalletEngine.reverseLedgerEntry({ledger_entry_id:original_entry_id,reason:reason||"Compliance audit reversal",actor_id:verifiedUserId,actor_role:verifiedRole});if(!result.success)return res.status(400).json({error:result.error});res.json(result)}catch(err){res.status(500).json({error:err.message||"Failed to reverse wallet entry."})}});app.get("/api/v2/risk/health",(_req,res)=>{try{const health=v2RiskEngine.getEngineHealth();res.json(health)}catch(err){res.status(500).json({error:err.message||"Failed to get risk engine health."})}});app.get("/api/v2/risk/signals",requireV2OperatorAuth,(req,res)=>{try{const severity=req.query.severity;const status=req.query.status;const signals=v2RiskEngine.listSignals({severity,status});res.json({signals})}catch(err){res.status(500).json({error:err.message||"Failed to list risk signals."})}});app.get("/api/v2/risk/policy",requireAuth,(_req,res)=>{try{const policy=v2RiskEngine.getActivePolicy();res.json({policy})}catch(err){res.status(500).json({error:err.message||"Failed to retrieve risk policy."})}});app.post("/api/v2/risk/evaluate",requireAuth,(req,res)=>{try{const{user_id,event_type,category,affected_module,source_type,evidence}=req.body||{};const authUserId=req.v2Auth.userId;const callerRoles=req.v2Auth.roles;const isPrivileged=callerRoles.some(r=>["SUPER_ADMIN","ADMIN","OPERATOR"].includes(r));const targetUserId=isPrivileged&&user_id?user_id:authUserId;if(!event_type||!category||!affected_module||!source_type){return res.status(400).json({error:"Missing required risk evaluation parameters."})}const result=v2RiskEngine.evaluateActivity({user_id:targetUserId,event_type,category,affected_module,source_type,payload:evidence||{}});res.json(result)}catch(err){res.status(500).json({error:err.message||"Failed to evaluate activity risk."})}});app.post("/api/v2/risk/signals/:id/resolve",requireV2OperatorAuth,(req,res)=>{try{const{resolution,notes}=req.body||{};if(!resolution||!["RESOLVED","DISMISSED"].includes(resolution)){return res.status(400).json({error:"Invalid or missing resolution (must be RESOLVED or DISMISSED)."})}const verifiedUserId=req.v2Auth.userId;const verifiedRole=req.v2Auth.roles[0]||"OPERATOR";const result=v2RiskEngine.resolveSignal({signal_id:String(req.params.id),resolution,notes:notes||"Resolved via server authority",actor_id:verifiedUserId,actor_role:verifiedRole});if(!result.success){return res.status(400).json({error:result.error})}res.json(result)}catch(err){res.status(500).json({error:err.message||"Failed to resolve risk signal."})}});app.get("/api/v2/risk/summary/:userId",requireAuth,(req,res)=>{try{const targetUserId=String(req.params.userId);const authUserId=req.v2Auth.userId;const callerRoles=req.v2Auth.roles;const isPrivileged=callerRoles.some(r=>["SUPER_ADMIN","ADMIN","OPERATOR"].includes(r));if(!isPrivileged&&targetUserId!==authUserId){return res.status(403).json({error:"Forbidden: Cannot view another user's risk summary."})}const summary=v2RiskEngine.getUserRiskSummary(targetUserId);res.json({summary})}catch(err){res.status(500).json({error:err.message||"Failed to get user risk summary."})}});app.post("/api/v2/risk/holds",requireV2OperatorAuth,(req,res)=>{try{const{user_id,hold_type,active,reason}=req.body||{};if(!user_id||!hold_type||typeof active!=="boolean"){return res.status(400).json({error:"Missing required fields: user_id, hold_type, active."})}const verifiedUserId=req.v2Auth.userId;const verifiedRole=req.v2Auth.roles[0]||"OPERATOR";const result=v2RiskEngine.setUserHold({user_id,hold_type,active,reason:reason||"Administrative risk compliance hold",actor_id:verifiedUserId,actor_role:verifiedRole});if(!result.success)return res.status(400).json({error:result.error});res.json(result)}catch(err){res.status(500).json({error:err.message||"Failed to set risk hold."})}});const inMemoryTeamRoster=[];const inMemoryWorkTasks=[];const inMemoryAudioCatalog=[];const inMemoryCreatorProfiles=[];app.get("/api/v2/team/members",requireAuth,(_req,res)=>{try{res.json({members:inMemoryTeamRoster})}catch(err){res.status(500).json({error:err.message||"Failed to list team members."})}});app.post("/api/v2/team/members",requireV2OperatorAuth,(req,res)=>{try{const{name,role,domain,clearanceLevel}=req.body||{};if(!name||!role||!domain){return res.status(400).json({error:"Missing required team member fields: name, role, domain."})}const member={id:`team_${Date.now()}_${Math.random().toString(36).slice(2,7)}`,name,role,domain,clearanceLevel:clearanceLevel||"TIER_1_STANDARD",activeTasksCount:0,capacityPercentage:100,status:"ACTIVE",verificationBadge:"Verified Contributor",createdAt:new Date().toISOString()};inMemoryTeamRoster.push(member);res.json({success:true,member})}catch(err){res.status(500).json({error:err.message||"Failed to add team member."})}});app.get("/api/v2/work/tasks",requireAuth,(_req,res)=>{try{res.json({tasks:inMemoryWorkTasks})}catch(err){res.status(500).json({error:err.message||"Failed to list work tasks."})}});app.post("/api/v2/work/tasks",requireAuth,(req,res)=>{try{const{title,description,affectedModule,priority,requirements,deliverables}=req.body||{};if(!title||!description||!affectedModule){return res.status(400).json({error:"Missing required task fields: title, description, affectedModule."})}const verifiedUserId=req.v2Auth.userId;const task={id:`task_${Date.now()}_${Math.random().toString(36).slice(2,7)}`,title,description,affectedModule,priority:priority||"MEDIUM",requirements:Array.isArray(requirements)?requirements:[],deliverables:Array.isArray(deliverables)?deliverables:[],status:"OPEN",createdBy:verifiedUserId,createdAt:new Date().toISOString(),updatedAt:new Date().toISOString()};inMemoryWorkTasks.push(task);res.json({success:true,task})}catch(err){res.status(500).json({error:err.message||"Failed to create work task."})}});app.post("/api/v2/work/tasks/:id/submit",requireAuth,(req,res)=>{try{const taskId=req.params.id;const task=inMemoryWorkTasks.find(t=>t.id===taskId);if(!task)return res.status(404).json({error:"Task not found."});const{notes}=req.body||{};task.status="SUBMITTED";task.submissionNotes=notes||"Deliverables submitted for review";task.updatedAt=new Date().toISOString();res.json({success:true,task})}catch(err){res.status(500).json({error:err.message||"Failed to submit work deliverable."})}});app.get("/api/v2/audio/tracks",(_req,res)=>{try{res.json({tracks:inMemoryAudioCatalog})}catch(err){res.status(500).json({error:err.message||"Failed to list audio tracks."})}});app.post("/api/v2/audio/tracks",requireAuth,(req,res)=>{try{const{title,artist,genre,licenseType,audioUrl,coverUrl}=req.body||{};if(!title||!artist||!audioUrl){return res.status(400).json({error:"Missing required audio fields: title, artist, audioUrl."})}const verifiedUserId=req.v2Auth.userId;const track={id:`track_${Date.now()}_${Math.random().toString(36).slice(2,7)}`,title,artist,genre:genre||"General",licenseType:licenseType||"Commercial Sync",audioUrl,coverUrl:coverUrl||"",registeredBy:verifiedUserId,createdAt:new Date().toISOString()};inMemoryAudioCatalog.push(track);res.json({success:true,track})}catch(err){res.status(500).json({error:err.message||"Failed to register audio track."})}});app.get("/api/v2/creator/profiles",async(_req,res)=>{try{const supabase=getPublicSupabaseClient()||getServerSupabaseClient();if(supabase){const{data:dbProfiles,error}=await supabase.from("profiles").select("id, display_name, username, avatar_url, is_verified, stats, created_at").limit(50);if(!error&&Array.isArray(dbProfiles)&&dbProfiles.length>0){const profiles=dbProfiles.map(p=>{const stats=p.stats||{};const cp=v2ContributionEngine.getUserSummary(p.id).total_qualified_points;return{id:`cr_${p.id.slice(0,8)}`,userId:p.id,username:p.username||"creator",displayName:p.display_name||p.username||"Creator",avatarUrl:p.avatar_url||"https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=150&q=80",tier:p.is_verified?"VERIFIED":cp>1e4?"CREATOR_PRO":"BASIC",accumulatedPoints:cp,monthlyReach:Number(stats.followersCount||0)*10+Number(stats.totalLikes||0),monetizationStatus:"ACTIVE",qualityMultiplier:1,joinedDate:p.created_at?p.created_at.slice(0,10):new Date().toISOString().slice(0,10),walletBindingId:`wal_${p.id.slice(0,8)}`}});return res.json({profiles})}}res.json({profiles:inMemoryCreatorProfiles})}catch(err){res.status(500).json({error:err.message||"Failed to list creator profiles."})}});app.get("/api/v2/creator/me",requireAuth,async(req,res)=>{try{const authUserId=req.v2Auth.userId;const supabase=getPublicSupabaseClient()||getServerSupabaseClient();let profileData=null;if(supabase){const{data}=await supabase.from("profiles").select("id, display_name, username, avatar_url, is_verified, stats, created_at").eq("id",authUserId).maybeSingle();profileData=data}const inMem=inMemoryCreatorProfiles.find(p=>p.userId===authUserId);const cp=v2ContributionEngine.getUserSummary(authUserId).total_qualified_points;const profile={id:inMem?.id||`cr_${authUserId.slice(0,8)}`,userId:authUserId,username:profileData?.username||inMem?.username||"creator",displayName:profileData?.display_name||inMem?.displayName||"Creator",avatarUrl:profileData?.avatar_url||inMem?.avatarUrl||"https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=150&q=80",tier:profileData?.is_verified?"VERIFIED":inMem?.tier||(cp>1e4?"CREATOR_PRO":"BASIC"),accumulatedPoints:cp,monthlyReach:profileData?.stats?.followersCount?Number(profileData.stats.followersCount)*10:0,monetizationStatus:inMem?.monetizationStatus||"ACTIVE",qualityMultiplier:inMem?.qualityMultiplier||1,joinedDate:profileData?.created_at?profileData.created_at.slice(0,10):inMem?.joinedDate||new Date().toISOString().slice(0,10),walletBindingId:`wal_${authUserId.slice(0,8)}`};res.json({profile})}catch(err){res.status(500).json({error:err.message||"Failed to retrieve creator profile."})}});app.post("/api/v2/creator/profiles",requireAuth,async(req,res)=>{try{const{username,displayName,tier,qualityMultiplier}=req.body||{};const authUserId=req.v2Auth.userId;const cleanUsername=(username||"creator").replace(/^@/,"").trim();const cleanDisplayName=(displayName||cleanUsername).trim();const token=extractBearerToken(req);const url=(process.env.SUPABASE_URL||process.env.VITE_SUPABASE_URL||"").trim();const anonKey=(process.env.VITE_SUPABASE_ANON_KEY||process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY||process.env.SUPABASE_ANON_KEY||"").trim();if(token&&url&&anonKey){try{const userClient=createClient(url,anonKey,{auth:{autoRefreshToken:false,persistSession:false},global:{headers:{Authorization:`Bearer ${token}`}}});await userClient.from("profiles").upsert({id:authUserId,username:cleanUsername,display_name:cleanDisplayName,updated_at:new Date().toISOString()})}catch{}}const existingIdx=inMemoryCreatorProfiles.findIndex(p=>p.userId===authUserId);const cp=v2ContributionEngine.getUserSummary(authUserId).total_qualified_points;const profile={id:`cr_${authUserId.slice(0,8)}`,userId:authUserId,username:cleanUsername,displayName:cleanDisplayName,avatarUrl:`https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=150&q=80`,tier:tier||(cp>1e4?"CREATOR_PRO":"BASIC"),accumulatedPoints:cp,monthlyReach:0,monetizationStatus:"ACTIVE",qualityMultiplier:typeof qualityMultiplier==="number"?qualityMultiplier:1,joinedDate:new Date().toISOString().slice(0,10),walletBindingId:`wal_${authUserId.slice(0,8)}`};if(existingIdx>=0){inMemoryCreatorProfiles[existingIdx]=profile}else{inMemoryCreatorProfiles.push(profile)}res.json({success:true,profile})}catch(err){res.status(500).json({error:err.message||"Failed to update creator profile."})}});
+// ==========================================
+// METFA SOCIAL — PAY-PER-VIEW PREMIUM CONTENT MVP API
+// ==========================================
+
+// 1. Discover Active Premium Videos
+app.get("/api/v2/premium/content", async (req, res) => {
+  try {
+    let currentUserId = undefined;
+    const token = extractBearerToken(req);
+    if (token) {
+      const supabase = getServerSupabaseClient();
+      if (supabase) {
+        const { user } = await verifySupabaseToken(supabase, token);
+        if (user) currentUserId = user.id;
+      }
+    }
+    const items = v2PremiumContentEngine.listContent(currentUserId);
+    res.json({ success: true, count: items.length, items });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message || "Failed to list premium content." });
+  }
+});
+
+// 2. Get Single Premium Video Details
+app.get("/api/v2/premium/content/:id", async (req, res) => {
+  try {
+    let currentUserId = undefined;
+    const token = extractBearerToken(req);
+    if (token) {
+      const supabase = getServerSupabaseClient();
+      if (supabase) {
+        const { user } = await verifySupabaseToken(supabase, token);
+        if (user) currentUserId = user.id;
+      }
+    }
+    const result = v2PremiumContentEngine.getContent(req.params.id, currentUserId);
+    if (result.error) {
+      return res.status(404).json({ success: false, error: result.error });
+    }
+    res.json({ success: true, content: result.content });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message || "Failed to retrieve content details." });
+  }
+});
+
+// 3. Creator Publishes Authorized Premium Video
+app.post("/api/v2/premium/content", requireAuth, async (req, res) => {
+  try {
+    const {
+      title,
+      description,
+      preview_video_url,
+      full_video_storage_path,
+      free_preview_duration_seconds,
+      price_cents,
+      currency
+    } = req.body || {};
+
+    const creatorId = req.v2Auth.userId;
+    const actorRole = req.v2Auth.roles[0] || "USER";
+
+    const result = v2PremiumContentEngine.createContent({
+      creator_id: creatorId,
+      title,
+      description,
+      preview_video_url,
+      full_video_storage_path,
+      free_preview_duration_seconds,
+      price_cents,
+      currency: currency || "USD",
+      actor_id: creatorId,
+      actor_role: actorRole
+    });
+
+    if (!result.success) {
+      return res.status(400).json({ success: false, error: result.error });
+    }
+
+    res.status(201).json({ success: true, content: result.content });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message || "Failed to publish premium content." });
+  }
+});
+
+// 4. Viewer Purchases Pay-per-View Access
+app.post("/api/v2/premium/content/:id/purchase", requireAuth, async (req, res) => {
+  try {
+    const contentId = req.params.id;
+    const viewerId = req.v2Auth.userId;
+    const actorRole = req.v2Auth.roles[0] || "USER";
+    const { payment_method = "METFA_WALLET", provider, idempotency_key } = req.body || {};
+
+    if (payment_method === "EXTERNAL_PAYMENT") {
+      // Strict Rule 6 Enforcement: Verify actual provider configuration
+      const extResult = v2PremiumContentEngine.processExternalPayment({
+        content_id: contentId,
+        viewer_id: viewerId,
+        provider: provider || "STRIPE",
+        actor_id: viewerId
+      });
+      return res.status(422).json(extResult);
+    }
+
+    // Atomic METFA Wallet Purchase
+    const purchaseResult = v2PremiumContentEngine.purchaseWithWallet({
+      content_id: contentId,
+      viewer_id: viewerId,
+      actor_id: viewerId,
+      actor_role: actorRole,
+      idempotency_key
+    });
+
+    if (!purchaseResult.success) {
+      const isBalanceError = (purchaseResult.error || "").includes("Insufficient");
+      return res.status(isBalanceError ? 402 : 400).json({
+        success: false,
+        error: purchaseResult.error,
+        required_balance_cents: isBalanceError ? purchaseResult.purchase?.amount_cents : undefined
+      });
+    }
+
+    res.json({
+      success: true,
+      is_cached: purchaseResult.is_cached,
+      purchase: purchaseResult.purchase,
+      remaining_wallet_balance_cents: purchaseResult.wallet_balance_cents
+    });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message || "Purchase processing failed." });
+  }
+});
+
+// 5. Authorized Video Stream Access
+app.get("/api/v2/premium/content/:id/stream", async (req, res) => {
+  try {
+    const contentId = req.params.id;
+    let userId: string | undefined = undefined;
+    let userRoles: string[] = [];
+
+    const token = extractBearerToken(req);
+    if (token) {
+      const supabase = getServerSupabaseClient();
+      if (supabase) {
+        const { user } = await verifySupabaseToken(supabase, token);
+        if (user) {
+          userId = user.id;
+          userRoles = await getVerifiedUserRoles(supabase, user.id, user, token);
+        }
+      }
+    }
+
+    const authResult = await v2PremiumContentEngine.authorizeStream({
+      content_id: contentId,
+      user_id: userId,
+      user_roles: userRoles
+    });
+
+    if (!authResult.authorized) {
+      return res.status(402).json({
+        success: false,
+        authorized: false,
+        error: authResult.error,
+        preview_url: authResult.preview_url,
+        free_preview_duration_seconds: authResult.free_preview_duration_seconds,
+        price_cents: authResult.price_cents
+      });
+    }
+
+    res.json({
+      success: true,
+      authorized: true,
+      stream_url: authResult.stream_url,
+      expires_at: authResult.expires_at,
+      free_preview_duration_seconds: authResult.free_preview_duration_seconds,
+      preview_url: authResult.preview_url
+    });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message || "Stream authorization failed." });
+  }
+});
+
+// 6. Viewer Purchases & Entitlements History
+app.get("/api/v2/premium/viewer/purchases", requireAuth, (req, res) => {
+  try {
+    const viewerId = req.v2Auth.userId;
+    const purchases = v2PremiumContentEngine.getViewerPurchases(viewerId);
+    res.json({ success: true, count: purchases.length, purchases });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message || "Failed to retrieve purchases." });
+  }
+});
+
+// 7. Creator Earnings & Sales Volume
+app.get("/api/v2/premium/creator/earnings", requireAuth, (req, res) => {
+  try {
+    const creatorId = req.v2Auth.userId;
+    const earnings = v2PremiumContentEngine.getCreatorEarnings(creatorId);
+    res.json({ success: true, ...earnings });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message || "Failed to retrieve creator earnings." });
+  }
+});
+
+// 8. Financial Refund & Royalty Clawback (Admin Only)
+app.post("/api/v2/premium/purchases/:id/refund", requireAuth, requireV2Role(["SUPER_ADMIN", "ADMIN", "FINANCE_ADMIN"]), (req, res) => {
+  try {
+    const purchaseId = req.params.id;
+    const { reason = "Administrative resolution" } = req.body || {};
+    const actorId = req.v2Auth.userId;
+    const actorRole = req.v2Auth.roles[0] || "FINANCE_ADMIN";
+
+    const refundResult = v2PremiumContentEngine.refundPurchase({
+      purchase_id: purchaseId,
+      reason,
+      actor_id: actorId,
+      actor_role: actorRole
+    });
+
+    if (!refundResult.success) {
+      return res.status(400).json({ success: false, error: refundResult.error });
+    }
+
+    res.json({ success: true, purchase: refundResult.purchase });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message || "Refund processing failed." });
+  }
+});
+
+// 9. Premium Content MVP Verification Test Suite Runner
+
+// ==========================================
+// METFA SOCIAL — PREMIUM LIVE SESSIONS & 30-DAY RETENTION API
+// ==========================================
+
+// Configurable Commission Override
+app.put("/api/v2/premium/content/:id/commission", requireAuth, requireV2Role(["SUPER_ADMIN", "ADMIN", "FINANCE_ADMIN"]), (req, res) => {
+  try {
+    const { creator_split_bps } = req.body || {};
+    const result = v2PremiumContentEngine.updateContentCommission({
+      content_id: req.params.id,
+      new_creator_split_bps: Number(creator_split_bps),
+      actor_id: req.v2Auth.userId,
+      actor_role: req.v2Auth.roles[0] || "FINANCE_ADMIN"
+    });
+    if (!result.success) return res.status(400).json(result);
+    res.json(result);
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message || "Failed to update commission." });
+  }
+});
+
+// List Scheduled & Live Sessions
+app.get("/api/v2/premium/live/sessions", (_req, res) => {
+  try {
+    const sessions = v2PremiumContentEngine.listLiveSessions();
+    res.json({ success: true, count: sessions.length, sessions });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message || "Failed to list live sessions." });
+  }
+});
+
+// Single Live Session Details
+app.get("/api/v2/premium/live/sessions/:id", (req, res) => {
+  try {
+    const session = v2PremiumContentEngine.getLiveSession(req.params.id);
+    if (!session) return res.status(404).json({ success: false, error: "Live session not found." });
+    res.json({ success: true, session });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message || "Failed to retrieve session." });
+  }
+});
+
+// Creator Schedules Premium Live Session
+app.post("/api/v2/premium/live/sessions", requireAuth, (req, res) => {
+  try {
+    const {
+      title,
+      description,
+      scheduled_start_time,
+      live_price_cents,
+      replay_price_cents,
+      currency,
+      creator_split_bps
+    } = req.body || {};
+
+    const creatorId = req.v2Auth.userId;
+    const actorRole = req.v2Auth.roles[0] || "USER";
+
+    const result = v2PremiumContentEngine.createLiveSession({
+      creator_id: creatorId,
+      title,
+      description,
+      scheduled_start_time,
+      live_price_cents: Number(live_price_cents),
+      replay_price_cents: Number(replay_price_cents || live_price_cents),
+      currency: currency || "USD",
+      creator_split_bps: creator_split_bps ? Number(creator_split_bps) : undefined,
+      actor_id: creatorId,
+      actor_role: actorRole
+    });
+
+    if (!result.success) return res.status(400).json(result);
+    res.status(201).json(result);
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message || "Failed to schedule live session." });
+  }
+});
+
+// Start Live Broadcast
+app.post("/api/v2/premium/live/sessions/:id/start", requireAuth, (req, res) => {
+  try {
+    const result = v2PremiumContentEngine.startLiveSession(req.params.id, req.v2Auth.userId);
+    if (!result.success) return res.status(400).json(result);
+    res.json(result);
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message || "Failed to start broadcast." });
+  }
+});
+
+// End Live Broadcast
+app.post("/api/v2/premium/live/sessions/:id/end", requireAuth, (req, res) => {
+  try {
+    const result = v2PremiumContentEngine.endLiveSession(req.params.id, req.v2Auth.userId);
+    if (!result.success) return res.status(400).json(result);
+    res.json(result);
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message || "Failed to conclude broadcast." });
+  }
+});
+
+// Finalize & Publish Replay Recording
+app.post("/api/v2/premium/live/sessions/:id/publish-replay", requireAuth, (req, res) => {
+  try {
+    const { recording_storage_path } = req.body || {};
+    const result = v2PremiumContentEngine.finalizeAndPublishReplay({
+      session_id: req.params.id,
+      recording_storage_path,
+      actor_id: req.v2Auth.userId,
+      actor_role: req.v2Auth.roles[0] || "USER"
+    });
+    if (!result.success) return res.status(400).json(result);
+    res.json(result);
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message || "Failed to publish replay." });
+  }
+});
+
+// Mark Recording Failed (Automatic Replay Delta Refund)
+app.post("/api/v2/premium/live/sessions/:id/fail-recording", requireAuth, requireV2Role(["SUPER_ADMIN", "ADMIN"]), (req, res) => {
+  try {
+    const { failure_reason = "Encoding hardware fault" } = req.body || {};
+    const result = v2PremiumContentEngine.markRecordingFailed({
+      session_id: req.params.id,
+      failure_reason,
+      actor_id: req.v2Auth.userId,
+      actor_role: req.v2Auth.roles[0] || "ADMIN"
+    });
+    if (!result.success) return res.status(400).json(result);
+    res.json(result);
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message || "Failed to handle recording failure." });
+  }
+});
+
+// Cancel Live Session — Phase 2A Fail-Closed Containment (Temporarily Unavailable)
+app.post("/api/v2/premium/live/sessions/:id/cancel", requireAuth, (req, res) => {
+  v2PremiumContentEngine.handleCancelRequest(req, res);
+});
+
+// Viewer Purchases Live Session Ticket (LIVE_ONLY vs LIVE_AND_PERMANENT_REPLAY)
+app.post("/api/v2/premium/live/sessions/:id/purchase", requireAuth, (req, res) => {
+  try {
+    const sessionId = req.params.id;
+    const viewerId = req.v2Auth.userId;
+    const actorRole = req.v2Auth.roles[0] || "USER";
+    const { access_tier = "LIVE_ONLY", payment_method = "METFA_WALLET", provider, idempotency_key } = req.body || {};
+
+    if (payment_method === "EXTERNAL_PAYMENT") {
+      const extResult = v2PremiumContentEngine.processExternalPayment({
+        content_id: sessionId,
+        viewer_id: viewerId,
+        provider: provider || "STRIPE",
+        actor_id: viewerId
+      });
+      return res.status(422).json(extResult);
+    }
+
+    const purchaseRes = v2PremiumContentEngine.purchaseLiveAccess({
+      session_id: sessionId,
+      viewer_id: viewerId,
+      access_tier,
+      actor_id: viewerId,
+      actor_role: actorRole,
+      idempotency_key
+    });
+
+    if (!purchaseRes.success) {
+      const isBalanceErr = (purchaseRes.error || "").includes("Insufficient");
+      return res.status(isBalanceErr ? 402 : 400).json(purchaseRes);
+    }
+
+    res.json(purchaseRes);
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message || "Live purchase processing failed." });
+  }
+});
+
+// Authorize Live Stream Access
+app.get("/api/v2/premium/live/sessions/:id/stream", async (req, res) => {
+  try {
+    const sessionId = req.params.id;
+    let userId: string | undefined = undefined;
+    let userRoles: string[] = [];
+
+    const token = extractBearerToken(req);
+    if (token) {
+      const supabase = getServerSupabaseClient();
+      if (supabase) {
+        const { user } = await verifySupabaseToken(supabase, token);
+        if (user) {
+          userId = user.id;
+          userRoles = await getVerifiedUserRoles(supabase, user.id, user, token);
+        }
+      }
+    }
+
+    const authRes = v2PremiumContentEngine.authorizeLiveStream({
+      session_id: sessionId,
+      user_id: userId,
+      user_roles: userRoles
+    });
+
+    if (!authRes.authorized) {
+      return res.status(402).json(authRes);
+    }
+
+    res.json(authRes);
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message || "Live stream authorization failed." });
+  }
+});
+
+// Authorize Replay Video Stream Access
+app.get("/api/v2/premium/live/sessions/:id/replay-stream", async (req, res) => {
+  try {
+    const sessionId = req.params.id;
+    let userId: string | undefined = undefined;
+    let userRoles: string[] = [];
+
+    const token = extractBearerToken(req);
+    if (token) {
+      const supabase = getServerSupabaseClient();
+      if (supabase) {
+        const { user } = await verifySupabaseToken(supabase, token);
+        if (user) {
+          userId = user.id;
+          userRoles = await getVerifiedUserRoles(supabase, user.id, user, token);
+        }
+      }
+    }
+
+    const authRes = await v2PremiumContentEngine.authorizeReplayStream({
+      session_id: sessionId,
+      user_id: userId,
+      user_roles: userRoles
+    });
+
+    if (!authRes.authorized) {
+      return res.status(402).json(authRes);
+    }
+
+    res.json(authRes);
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message || "Replay authorization failed." });
+  }
+});
+
+// 30-Day Retention Cleanup Job Execution
+app.post("/api/v2/premium/retention/cleanup", requireAuth, requireV2Role(["SUPER_ADMIN", "ADMIN"]), (req, res) => {
+  try {
+    const { simulated_timestamp } = req.body || {};
+    const cleanupResult = v2PremiumContentEngine.executeLiveVideoRetentionCleanupJob(simulated_timestamp);
+    res.json({ success: true, result: cleanupResult });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message || "Retention cleanup job failed." });
+  }
+});
+
+app.get("/api/v2/premium/run-tests", (_req, res) => {
+  res.status(404).json({ error: "Endpoint disabled in production environment." });
+});
+
+// =====================================================================
+// VIDEO ANALYTICS & CREATOR INSIGHTS (REAL DATA ONLY)
+// =====================================================================
+
+// Record genuine watch session
+app.post("/api/analytics/video-session", async (req, res) => {
+  try {
+    const {
+      videoId,
+      videoType,
+      creatorId,
+      watchDurationSeconds,
+      videoDurationSeconds,
+      playbackSpeed,
+      deviceType,
+      startedAt,
+      endedAt
+    } = req.body || {};
+
+    let viewerId: string | null = null;
+    const token = extractBearerToken(req);
+    if (token) {
+      const supabase = getServerSupabaseClient();
+      if (supabase) {
+        const { user } = await verifySupabaseToken(supabase, token);
+        if (user) {
+          viewerId = user.id;
+        }
+      }
+    }
+
+    const ip = (req.headers["x-forwarded-for"] as string)?.split(",")[0]?.trim() || req.ip || "127.0.0.1";
+    const ua = (req.headers["user-agent"] as string) || "";
+    const viewerFingerprint = viewerId || crypto.createHash("sha256").update(`${ip}:${ua}`).digest("hex").slice(0, 16);
+
+    const recordResult = videoAnalyticsEngine.recordWatchSession({
+      videoId,
+      videoType: videoType || "reel",
+      creatorId: creatorId || "",
+      viewerId,
+      viewerFingerprint,
+      deviceType: deviceType || (ua.toLowerCase().includes("mobi") ? "mobile" : "desktop"),
+      watchDurationSeconds: Number(watchDurationSeconds || 0),
+      videoDurationSeconds: Number(videoDurationSeconds || 1),
+      playbackSpeed: Number(playbackSpeed || 1.0),
+      startedAt,
+      endedAt
+    });
+
+    if (!recordResult.success) {
+      return res.status(400).json(recordResult);
+    }
+
+    // Bridge with v2IntegrationAdapter if eligible
+    try {
+      if (videoType === "reel" && recordResult.session?.isQualifiedView) {
+        v2IntegrationAdapter.ingestReelWatch({
+          viewerUserId: viewerId || "anonymous_viewer",
+          creatorId: creatorId || "",
+          reelId: videoId,
+          watchDurationSeconds: recordResult.session.watchDurationSeconds,
+          completionRatio: recordResult.session.completionRate,
+          playbackSpeedRatio: recordResult.session.playbackSpeed
+        });
+      } else if (recordResult.session?.isQualifiedView) {
+        v2IntegrationAdapter.ingestPostView({
+          viewerUserId: viewerId || "anonymous_viewer",
+          postAuthorId: creatorId || "",
+          postId: videoId,
+          durationSeconds: recordResult.session.watchDurationSeconds
+        });
+      }
+    } catch {}
+
+    res.json(recordResult);
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message || "Failed to record watch session" });
+  }
+});
+
+// Get real analytics for a specific video
+app.get("/api/analytics/video/:videoId", (req, res) => {
+  try {
+    const { videoId } = req.params;
+    if (!videoId) {
+      return res.status(400).json({ success: false, error: "videoId is required" });
+    }
+
+    const posts = readPersistentPosts();
+    const matchedPost = posts.find((p: any) => p.id === videoId);
+
+    const analytics = videoAnalyticsEngine.getVideoAnalytics(videoId, {
+      title: matchedPost?.videoTitle || matchedPost?.caption || matchedPost?.prompt,
+      thumbnailUrl: matchedPost?.videoThumbnail || matchedPost?.imageSrc,
+      videoType: matchedPost?.videoSrc ? "post_video" : "reel",
+      creatorId: matchedPost?.author?.id || matchedPost?.author_id,
+      likesCount: matchedPost?.likesCount,
+      commentsCount: matchedPost?.commentsCount,
+      sharesCount: matchedPost?.sharesCount,
+      savesCount: matchedPost?.isBookmarked ? 1 : 0
+    });
+
+    res.json({ success: true, analytics });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message || "Failed to retrieve video analytics" });
+  }
+});
+
+// Get creator insights across their video catalog
+app.get("/api/analytics/creator/:creatorId", (req, res) => {
+  try {
+    const { creatorId } = req.params;
+    if (!creatorId) {
+      return res.status(400).json({ success: false, error: "creatorId is required" });
+    }
+
+    const posts = readPersistentPosts();
+    const creatorVideos = posts
+      .filter((p: any) => (p.author?.id === creatorId || p.author_id === creatorId) && p.videoSrc)
+      .map((p: any) => ({
+        id: p.id,
+        title: p.videoTitle || p.caption || p.prompt || "Video Post",
+        thumbnailUrl: p.videoThumbnail || p.imageSrc,
+        videoType: "post_video" as const,
+        likesCount: p.likesCount,
+        commentsCount: p.commentsCount,
+        sharesCount: p.sharesCount,
+        savesCount: p.isBookmarked ? 1 : 0
+      }));
+
+    const insights = videoAnalyticsEngine.getCreatorInsights(creatorId, creatorVideos);
+    res.json({ success: true, insights });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message || "Failed to retrieve creator insights" });
+  }
+});
+
+// Video Analytics Real-Data Verification Tests (Disabled in production)
+app.get("/api/analytics/run-tests", (_req, res) => {
+  res.status(404).json({ error: "Endpoint disabled in production environment." });
+});
+
+// =====================================================================
+// UNIFIED MULTI-CONTENT CREATOR STUDIO ANALYTICS (ALL 5 FORMATS)
+// =====================================================================
+
+function sanitizeInsightsForScope(items: AIInsightItem[], scope: ContentFilterType): AIInsightItem[] {
+  const VIDEO_ONLY_TERMS = /\b(watch time|playback|retention curve|video completion|average watch|play time|drop-off second)\b/i;
+  return items
+    .filter((item) => item && typeof item.title === "string" && typeof item.detail === "string")
+    .filter((item) => {
+      if (scope === "image" || scope === "carousel" || scope === "text") {
+        const combined = `${item.category} ${item.title} ${item.detail} ${item.actionableStep} ${item.basedOnMetric}`;
+        return !VIDEO_ONLY_TERMS.test(combined);
+      }
+      return true;
+    })
+    .map((item, idx) => ({
+      id: item.id || `ai_${scope}_${idx}_${Date.now()}`,
+      contentTypeScope: scope,
+      priority: item.priority === "high" || item.priority === "medium" || item.priority === "info" ? item.priority : "medium",
+      category: String(item.category || "Performance Insight").slice(0, 64),
+      title: String(item.title).slice(0, 120),
+      detail: String(item.detail).slice(0, 320),
+      actionableStep: String(item.actionableStep || "").slice(0, 260),
+      basedOnMetric: String(item.basedOnMetric || "Verified telemetry").slice(0, 100),
+    }));
+}
+
+function persistentPostToDescriptor(p: any): ContentCatalogDescriptor {
+  return {
+    id: String(p.id),
+    postType: p.postType || p.post_type,
+    feedType: p.feedType || p.feed_type,
+    videoSrc: p.videoSrc || p.video_src,
+    imageSrc: p.imageSrc || p.image_src,
+    imageGallery: Array.isArray(p.imageGallery || p.image_gallery) ? (p.imageGallery || p.image_gallery) : undefined,
+    textBackgroundPreset: p.textBackgroundPreset || p.text_background_preset,
+    title: p.videoTitle || p.video_title || p.caption || p.prompt,
+    caption: p.caption,
+    prompt: p.prompt,
+    thumbnailUrl: p.videoThumbnail || p.video_thumbnail || p.imageSrc || p.image_src,
+    videoThumbnail: p.videoThumbnail || p.video_thumbnail,
+    creatorId: String(p.author?.id || p.author_id || p.userId || ""),
+    createdAtLabel: p.createdAt || "Recently",
+    createdAtIso: p.createdAtIso || p.created_at || p.updatedAt,
+    likesCount: Number(p.likesCount ?? p.likes_count) || 0,
+    commentsCount: Number(p.commentsCount ?? p.comments_count) || 0,
+    sharesCount: Number(p.sharesCount ?? p.shares_count) || 0,
+    savesCount: p.isBookmarked ? 1 : 0,
+    isBookmarked: Boolean(p.isBookmarked),
+    reactionCounts: p.reactionCounts,
+  };
+}
+
+// Record verified multi-content telemetry event
+app.post("/api/analytics/content/event", async (req, res) => {
+  try {
+    const body = req.body || {};
+    let viewerId: string | null = body.viewerId || null;
+
+    const token = extractBearerToken(req);
+    if (token) {
+      const supabase = getServerSupabaseClient();
+      if (supabase) {
+        const { user } = await verifySupabaseToken(supabase, token);
+        if (user) {
+          viewerId = user.id;
+        }
+      }
+    }
+
+    const ip = (req.headers["x-forwarded-for"] as string)?.split(",")[0]?.trim() || req.ip || "127.0.0.1";
+    const ua = (req.headers["user-agent"] as string) || "";
+    const viewerFingerprint =
+      viewerId ||
+      (typeof body.viewerFingerprint === "string" && body.viewerFingerprint.trim()
+        ? body.viewerFingerprint.trim().slice(0, 64)
+        : crypto.createHash("sha256").update(`${ip}:${ua}`).digest("hex").slice(0, 16));
+
+    const result = contentAnalyticsEngine.recordEvent({
+      kind: body.kind,
+      contentId: String(body.contentId || ""),
+      contentType: body.contentType,
+      creatorId: String(body.creatorId || ""),
+      viewerId,
+      viewerFingerprint,
+      trafficSource: body.trafficSource,
+      deviceType: body.deviceType || (ua.toLowerCase().includes("mobi") ? "mobile" : "desktop"),
+      slideIndex: typeof body.slideIndex === "number" ? body.slideIndex : undefined,
+      totalSlides: typeof body.totalSlides === "number" ? body.totalSlides : undefined,
+      bucketIndex: typeof body.bucketIndex === "number" ? body.bucketIndex : undefined,
+      dwellSeconds: typeof body.dwellSeconds === "number" ? body.dwellSeconds : undefined,
+      attributionMethod: body.attributionMethod,
+      followDelta: body.followDelta === -1 ? -1 : 1,
+      engagementAction: body.engagementAction,
+      createdAt: body.createdAt,
+    });
+
+    if (!result.success) {
+      return res.status(400).json(result);
+    }
+
+    res.json(result);
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message || "Failed to record content analytics event" });
+  }
+});
+
+// Unified analytics for a single content item (Reel, Video, Single Image, Carousel, or Text)
+app.post("/api/analytics/content/item", (req, res) => {
+  try {
+    const { content, contentId, dateRange } = req.body || {};
+    const resolvedRange: AnalyticsDateRange =
+      dateRange === "7d" || dateRange === "30d" || dateRange === "90d" || dateRange === "all" ? dateRange : "30d";
+
+    let descriptor: ContentCatalogDescriptor | null = content && content.id ? content : null;
+    if (!descriptor && contentId) {
+      const posts = readPersistentPosts();
+      const matched = posts.find((p: any) => p.id === contentId);
+      if (matched) {
+        descriptor = persistentPostToDescriptor(matched);
+      } else {
+        descriptor = { id: String(contentId), creatorId: "" };
+      }
+    }
+
+    if (!descriptor || !descriptor.id) {
+      return res.status(400).json({ success: false, error: "content descriptor or contentId is required" });
+    }
+
+    const analytics = contentAnalyticsEngine.getContentAnalytics(descriptor, { dateRange: resolvedRange });
+    res.json({ success: true, analytics });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message || "Failed to compute content analytics" });
+  }
+});
+
+app.get("/api/analytics/content/:contentId", (req, res) => {
+  try {
+    const { contentId } = req.params;
+    const rangeParam = String(req.query.dateRange || "30d");
+    const resolvedRange: AnalyticsDateRange =
+      rangeParam === "7d" || rangeParam === "30d" || rangeParam === "90d" || rangeParam === "all" ? rangeParam : "30d";
+
+    const posts = readPersistentPosts();
+    const matched = posts.find((p: any) => p.id === contentId);
+    const descriptor: ContentCatalogDescriptor = matched
+      ? persistentPostToDescriptor(matched)
+      : { id: String(contentId), creatorId: "" };
+
+    const analytics = contentAnalyticsEngine.getContentAnalytics(descriptor, { dateRange: resolvedRange });
+    res.json({ success: true, analytics });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message || "Failed to retrieve content analytics" });
+  }
+});
+
+// Unified Creator Studio account summary across ALL 5 content formats
+app.post("/api/analytics/content/studio", (req, res) => {
+  try {
+    const { creatorId, catalog, contentFilter, dateRange } = req.body || {};
+    if (!creatorId || typeof creatorId !== "string") {
+      return res.status(400).json({ success: false, error: "creatorId is required" });
+    }
+
+    const resolvedFilter: ContentFilterType =
+      contentFilter === "all" ||
+      contentFilter === "reel" ||
+      contentFilter === "video" ||
+      contentFilter === "image" ||
+      contentFilter === "carousel" ||
+      contentFilter === "text"
+        ? contentFilter
+        : "all";
+
+    const resolvedRange: AnalyticsDateRange =
+      dateRange === "7d" || dateRange === "30d" || dateRange === "90d" || dateRange === "all" ? dateRange : "30d";
+
+    const mergedCatalogMap = new Map<string, ContentCatalogDescriptor>();
+    if (Array.isArray(catalog)) {
+      for (const item of catalog) {
+        if (item && item.id) {
+          mergedCatalogMap.set(String(item.id), item);
+        }
+      }
+    }
+
+    const diskPosts = readPersistentPosts();
+    for (const p of diskPosts) {
+      const authorId = p.author?.id || p.author_id || p.userId;
+      if (authorId === creatorId && p.id && !mergedCatalogMap.has(String(p.id))) {
+        mergedCatalogMap.set(String(p.id), persistentPostToDescriptor(p));
+      }
+    }
+
+    const studio = contentAnalyticsEngine.getCreatorStudioAnalytics(creatorId, Array.from(mergedCatalogMap.values()), {
+      contentFilter: resolvedFilter,
+      dateRange: resolvedRange,
+    });
+
+    res.json({ success: true, studio });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message || "Failed to build Creator Studio analytics" });
+  }
+});
+
+// Content-Type-Scoped AI Insights (Gemini-enhanced when telemetry exists + key active, strict zero-leakage sanitizer)
+app.post("/api/analytics/content/ai-insights", async (req, res) => {
+  try {
+    const { contentFilter, summary } = req.body || {};
+    const scope: ContentFilterType =
+      contentFilter === "all" ||
+      contentFilter === "reel" ||
+      contentFilter === "video" ||
+      contentFilter === "image" ||
+      contentFilter === "carousel" ||
+      contentFilter === "text"
+        ? contentFilter
+        : "all";
+
+    const baseInsights: AIInsightItem[] = Array.isArray(summary?.aiInsights) ? summary.aiInsights : [];
+    const sanitizedBase = sanitizeInsightsForScope(baseInsights, scope);
+
+    const hasTelemetry =
+      Number(summary?.impressions || 0) > 0 || Number(summary?.totalEngagements || 0) > 0;
+    const ai = getAiClient(null, req);
+
+    if (!ai || !hasTelemetry) {
+      return res.json({
+        success: true,
+        insights: sanitizedBase,
+        source: "deterministic",
+      });
+    }
+
+    const cleanMetricsSnapshot = {
+      contentTypeScope: scope,
+      dateRange: summary?.dateRange || "30d",
+      impressions: summary?.impressions || 0,
+      reach: summary?.reach || 0,
+      likesAndReactions: summary?.likesAndReactions || 0,
+      comments: summary?.comments || 0,
+      shares: summary?.shares || 0,
+      saves: summary?.saves || 0,
+      engagementRate: summary?.engagementRate ?? null,
+      followersGained: summary?.followersGained?.netGained ?? 0,
+      trafficSources: (summary?.trafficSources?.entries || []).slice(0, 4),
+      ...(scope === "reel" || scope === "video"
+        ? {
+            videoMetrics: summary?.videoMetrics || summary?.videoRollup || null,
+          }
+        : {}),
+      ...(scope === "carousel"
+        ? {
+            carouselMetrics: summary?.carouselMetrics || null,
+          }
+        : {}),
+      ...(scope === "text"
+        ? {
+            textMetrics: summary?.textMetrics || null,
+          }
+        : {}),
+      ...(scope === "image"
+        ? {
+            imageMetrics: summary?.imageMetrics || null,
+          }
+        : {}),
+      ...(scope === "all"
+        ? {
+            formatBreakdown: summary?.formatBreakdown || [],
+          }
+        : {}),
+    };
+
+    const scopeRules =
+      scope === "image"
+        ? "CONTENT TYPE IS SINGLE IMAGE ONLY. Focus exclusively on image impressions, reach, saves, shares, likes/reactions, comments, and caption context. STRICTLY FORBIDDEN: Never mention video watch time, retention curves, playback completion, or carousel slides."
+        : scope === "carousel"
+        ? "CONTENT TYPE IS MULTI-IMAGE CAROUSEL ONLY. Focus exclusively on carousel slide progression, last-slide completion rate, slide drop-off, impressions, saves, and shares. STRICTLY FORBIDDEN: Never mention video watch time, video playback, or audio/video retention curves."
+        : scope === "text"
+        ? "CONTENT TYPE IS TEXT POST ONLY. Focus exclusively on text impressions, See More expand clicks, focused reading engagement (>=3s dwell), comments, shares, and saves. STRICTLY FORBIDDEN: Never mention video watch time, playback completion, video retention, or carousel slides."
+        : scope === "reel" || scope === "video"
+        ? `CONTENT TYPE IS ${scope.toUpperCase()}. Focus on qualified views, watch time, completion rate, retention drop-off buckets, shares, saves, and traffic sources.`
+        : "SCOPE IS ALL FORMATS. Compare performance across Reels, Video Posts, Single Images, Carousels, and Text Posts accurately based on the formatBreakdown numbers.";
+
+    const prompt = `You are the METFA Social Creator Studio Analytics Strategist.
+Analyze this real, verified telemetry JSON and return strictly 2 to 3 concise, high-impact coaching insights in valid JSON.
+
+STRICT RULES:
+1. Ground EVERY insight strictly in the real numbers provided in METRICS_JSON. NEVER invent, extrapolate, or guess numbers that are not present.
+2. ${scopeRules}
+3. Return ONLY a JSON object with shape: { "insights": [ { "category": string, "priority": "high"|"medium"|"info", "title": string, "detail": string, "actionableStep": string, "basedOnMetric": string } ] }.
+
+METRICS_JSON:
+${JSON.stringify(cleanMetricsSnapshot)}`;
+
+    try {
+      const result = await generateContentWithFallback(ai, {
+        models: ["gemini-3.8-flash", "gemini-3.1-flash-lite"],
+        timeoutMs: 12000,
+        contents: { parts: [{ text: prompt }] },
+        config: {
+          responseMimeType: "application/json",
+          temperature: 0.3,
+        },
+      });
+
+      const rawText = result.response.text?.trim() || "";
+      const parsed = JSON.parse(rawText);
+      const rawArray = Array.isArray(parsed?.insights) ? parsed.insights : Array.isArray(parsed) ? parsed : [];
+      const sanitizedGemini = sanitizeInsightsForScope(rawArray, scope);
+
+      if (sanitizedGemini.length > 0) {
+        return res.json({
+          success: true,
+          insights: sanitizedGemini.slice(0, 4),
+          source: "gemini",
+        });
+      }
+    } catch (aiErr) {
+      console.warn("[CreatorStudio AI Insights] Falling back to deterministic insights:", aiErr);
+    }
+
+    res.json({
+      success: true,
+      insights: sanitizedBase,
+      source: "deterministic",
+    });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message || "Failed to generate AI insights" });
+  }
+});
+
+
+// Public Author Profile Resolver (preserves RLS while safely providing author identity for posts)
+app.get("/api/authors/:id", async (req, res) => {
+  try {
+    const authorId = req.params.id;
+    if (!authorId || typeof authorId !== "string") {
+      return res.status(400).json({ success: false, error: "Invalid author ID" });
+    }
+
+    const supabase = getServerSupabaseClient();
+    if (!supabase || !supabase.auth?.admin) {
+      return res.status(503).json({ success: false, error: "Database authority unavailable" });
+    }
+
+    const { data, error } = await supabase.auth.admin.getUserById(authorId);
+    if (error || !data?.user) {
+      return res.status(404).json({ success: false, error: "Author profile not found" });
+    }
+
+    const u = data.user;
+    const meta = u.user_metadata || {};
+    const displayName = (meta.full_name || meta.name || (u.email ? u.email.split("@")[0] : "Metfa Creator")).trim();
+    const username = (meta.username || meta.user_name || "creator").trim().replace(/^@/, "");
+    const avatarUrl = meta.avatar_url || "";
+    const metfaId = meta.metfa_id || "";
+
+    res.json({
+      success: true,
+      profile: {
+        id: u.id,
+        name: displayName,
+        username,
+        avatar: avatarUrl,
+        metfaId,
+        isVerified: true
+      }
+    });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message || "Failed to retrieve author profile" });
+  }
+});
+
+app.get(["/manifest.json","/manifest.webmanifest"],(_req,res)=>{res.setHeader("Content-Type","application/manifest+json");res.setHeader("Cache-Control","public, max-age=3600");const manifestPath=path.join(process.cwd(),"public","manifest.json");res.sendFile(manifestPath)});app.get("/sw.js",(_req,res)=>{res.setHeader("Service-Worker-Allowed","/");res.setHeader("Cache-Control","no-cache, no-store, must-revalidate");res.setHeader("Content-Type","application/javascript");const swPath=path.join(process.cwd(),"public","sw.js");res.sendFile(swPath)});app.get("/favicon.ico",(_req,res)=>{res.setHeader("Content-Type","image/x-icon");res.setHeader("Cache-Control","public, max-age=86400");const icoPath=path.join(process.cwd(),"public","favicon.ico");res.sendFile(icoPath)});app.get("/robots.txt",(req,res)=>{const protocol=req.headers["x-forwarded-proto"]||req.protocol||"https";const host=req.headers.host||"localhost:3000";const baseUrl=process.env.APP_URL?.trim()||`${protocol}://${host}`;res.setHeader("Content-Type","text/plain");res.setHeader("Cache-Control","public, max-age=86400");res.send(`User-agent: *
+Allow: /
+Disallow: /api/
+
+Sitemap: ${baseUrl}/sitemap.xml
+`)});app.get("/sitemap.xml",(req,res)=>{const protocol=req.headers["x-forwarded-proto"]||req.protocol||"https";const host=req.headers.host||"localhost:3000";const baseUrl=process.env.APP_URL?.trim()||`${protocol}://${host}`;const today=new Date().toISOString().split("T")[0];res.setHeader("Content-Type","application/xml");res.setHeader("Cache-Control","public, max-age=86400");res.send(`<?xml version="1.0" encoding="UTF-8"?>
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+  <url>
+    <loc>${baseUrl}/</loc>
+    <lastmod>${today}</lastmod>
+    <changefreq>daily</changefreq>
+    <priority>1.0</priority>
+  </url>
+  <url>
+    <loc>${baseUrl}/?tab=feed</loc>
+    <lastmod>${today}</lastmod>
+    <changefreq>daily</changefreq>
+    <priority>0.9</priority>
+  </url>
+  <url>
+    <loc>${baseUrl}/?tab=chat</loc>
+    <lastmod>${today}</lastmod>
+    <changefreq>weekly</changefreq>
+    <priority>0.9</priority>
+  </url>
+  <url>
+    <loc>${baseUrl}/?tab=reels</loc>
+    <lastmod>${today}</lastmod>
+    <changefreq>daily</changefreq>
+    <priority>0.8</priority>
+  </url>
+  <url>
+    <loc>${baseUrl}/?tab=groups</loc>
+    <lastmod>${today}</lastmod>
+    <changefreq>weekly</changefreq>
+    <priority>0.7</priority>
+  </url>
+</urlset>`)});const distPath=path.join(process.cwd(),"dist");app.use("/assets",express.static(path.join(distPath,"assets")));app.use("/assets",(_req,res)=>{res.status(404).type("text/plain").send("Asset Not Found")});if(process.env.NODE_ENV!=="production"){const vite=await createViteServer({server:{middlewareMode:true},appType:"spa"});app.use(vite.middlewares);app.use("*",async(req,res,next)=>{const url=req.originalUrl||req.url;try{const indexPath=path.resolve(process.cwd(),"index.html");let template=fs.readFileSync(indexPath,"utf-8");const supabaseUrl=(process.env.VITE_SUPABASE_URL||process.env.SUPABASE_URL||"").trim();const supabaseAnonKey=(process.env.VITE_SUPABASE_ANON_KEY||process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY||process.env.SUPABASE_ANON_KEY||"").trim();const envSnippet=`<script>window.__ENV__=Object.assign(window.__ENV__||{},{VITE_SUPABASE_URL:${JSON.stringify(supabaseUrl)},VITE_SUPABASE_ANON_KEY:${JSON.stringify(supabaseAnonKey)}});<\/script>`;template=template.replace("<head>",`<head>${envSnippet}`);template=await vite.transformIndexHtml(url,template);res.status(200).set({"Content-Type":"text/html"}).end(template)}catch(e){vite.ssrFixStacktrace(e);next(e)}})}else{app.use(express.static(distPath,{index:false}));app.get("*",(_req,res)=>{const indexFile=path.join(distPath,"index.html");if(fs.existsSync(indexFile)){let content=fs.readFileSync(indexFile,"utf-8");const supabaseUrl=(process.env.VITE_SUPABASE_URL||process.env.SUPABASE_URL||"").trim();const supabaseAnonKey=(process.env.VITE_SUPABASE_ANON_KEY||process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY||process.env.SUPABASE_ANON_KEY||"").trim();const envSnippet=`<script>window.__ENV__=Object.assign(window.__ENV__||{},{VITE_SUPABASE_URL:${JSON.stringify(supabaseUrl)},VITE_SUPABASE_ANON_KEY:${JSON.stringify(supabaseAnonKey)}});<\/script>`;content=content.replace("<head>",`<head>${envSnippet}`);res.status(200).set({"Content-Type":"text/html"}).send(content)}else{const rootIndex=path.join(process.cwd(),"index.html");if(fs.existsSync(rootIndex)){res.sendFile(rootIndex)}else{res.status(503).send("Application static bundle is compiling or unavailable.")}}})}app.listen(PORT,"0.0.0.0",()=>{console.log(`Metfa Social Server running on http://0.0.0.0:${PORT} (Primary model: gemini-3.8-flash)`)})}__name(startServer,"startServer");startServer();

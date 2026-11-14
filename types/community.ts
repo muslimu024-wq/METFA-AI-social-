@@ -2,6 +2,10 @@ import { AudioTrack } from './audio';
 
 export * from './audio';
 
+export type ProfilePrivacy = 'public' | 'private';
+export type PostAudience = 'public' | 'followers' | 'only_me';
+export type FollowRequestStatus = 'pending' | 'approved' | 'declined' | 'cancelled';
+
 export interface UserProfile {
   id: string;
   name: string;
@@ -12,6 +16,8 @@ export interface UserProfile {
   website?: string;
   isVerified?: boolean;
   joinDate: string;
+  profilePrivacy?: ProfilePrivacy;
+  defaultPostAudience?: PostAudience;
   stats: {
     postsCount: number;
     followersCount: number;
@@ -70,7 +76,10 @@ export interface CommunityPost {
     username: string;
     avatar: string;
     isVerified?: boolean;
+    profilePrivacy?: ProfilePrivacy;
   };
+  authorProfilePrivacy?: ProfilePrivacy;
+  visibility?: PostAudience | 'private' | null;
   postingIdentity?: PostingIdentity;
   pageId?: string;
   pageName?: string;
@@ -122,7 +131,10 @@ export interface ReelHighlight {
     username: string;
     avatar: string;
     isVerified?: boolean;
+    profilePrivacy?: ProfilePrivacy;
   };
+  authorProfilePrivacy?: ProfilePrivacy;
+  visibility?: PostAudience | 'private' | null;
   videoSrc: string;
   thumbnailSrc?: string;
   duration: number;

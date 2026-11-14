@@ -18,14 +18,22 @@ import {
   Check,
   ShieldCheck,
   TrendingUp,
+  Info,
+  User,
+  Lock,
+  Globe,
+  Users,
 } from 'lucide-react';
 import { ReelHighlight, UserProfile } from '../types/community';
 import { AudioTrack } from '../types/audio';
+import { useAuth } from '../context/AuthContext';
 import { isContentOwner } from '../utils/communityStore';
 import { isReelSaved, toggleSaveReel } from '../utils/bookmarkStore';
+import { canSharePost, formatAudienceMeta } from '../utils/privacyPolicy';
 import { getAudioTracks } from '../utils/audioStore';
 import AudioLicenseInfoModal from './AudioLicenseInfoModal';
 import ContentAnalyticsModal from './ContentAnalyticsModal';
+import PostDetailsModal from './PostDetailsModal';
 import { VideoPlaybackSessionTracker } from '../utils/videoTracker';
 import {
   reelToContentDescriptor,
@@ -45,6 +53,7 @@ export interface ReelCardProps {
   onDeleteReel?: (reelId: string) => void;
   onOpenComments?: (reel: ReelHighlight) => void;
   onShowToast?: (message: string) => void;
+  onViewProfile?: (userId: string) => void;
   compactMode?: boolean;
 }
 
@@ -60,8 +69,10 @@ export const ReelCard: React.FC<ReelCardProps> = ({
   onDeleteReel,
   onOpenComments,
   onShowToast,
+  onViewProfile,
   compactMode = false,
 }) => {
+  const { user: authUser } = useAuth();
   const [isPlaying, setIsPlaying] = useState(false);
   const [isMuted, setIsMuted] = useState(true);
   const [isMenuOpen, setIsMenuOpen] = useState(false);
@@ -70,6 +81,7 @@ export const ReelCard: React.FC<ReelCardProps> = ({
   const [editTitle, setEditTitle] = useState(reel.title);
   const [isLicenseModalOpen, setIsLicenseModalOpen] = useState(false);
   const [isAnalyticsModalOpen, setIsAnalyticsModalOpen] = useState(false);
+  const [isDetailsModalOpen, setIsDetailsModalOpen] = useState(false);
 
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const trackerRef = useRef<VideoPlaybackSessionTracker | null>(null);
@@ -95,7 +107,13 @@ export const ReelCard: React.FC<ReelCardProps> = ({
     };
   }, [reel.id, reel.author.id, userProfile?.id]);
 
-  const isOwner = isContentOwner(reel.author.id, userProfile.id);
+  const isOwner = isContentOwner(reel.author, userProfile, authUser, undefined, reel.id);
+  const resolvedAuthorPrivacy = reel.authorProfilePrivacy || reel.author?.profilePrivacy || 'public';
+  const audienceMeta = formatAudienceMeta(reel.visibility, resolvedAuthorPrivacy);
+  const allowExternalShare = canSharePost({
+    visibility: reel.visibility,
+    authorProfilePrivacy: resolvedAuthorPrivacy,
+  });
   const isSaved = reel.isSaved ?? isReelSaved(reel.id);
   const savesCount = reel.savesCount ?? 0;
 
@@ -194,6 +212,10 @@ export const ReelCard: React.FC<ReelCardProps> = ({
   const handleCopyLink = (e: React.MouseEvent) => {
     e.stopPropagation();
     setIsMenuOpen(false);
+    if (!allowExternalShare) {
+      onShowToast?.('Copy Link is disabled for restricted or Private-profile Reels.');
+      return;
+    }
     const link = `${window.location.origin}/#reel-${reel.id}`;
     navigator.clipboard.writeText(link);
     onShowToast?.('Reel link copied to clipboard!');
@@ -291,10 +313,55 @@ export const ReelCard: React.FC<ReelCardProps> = ({
           {isMenuOpen && (
             <div
               id={`reel-menu-dropdown-${reel.id}`}
-              className="absolute right-0 top-full mt-2 w-48 bg-gray-950/95 border border-gray-800 rounded-2xl shadow-2xl py-1.5 z-40 animate-scaleUp text-xs backdrop-blur-md"
+              className="absolute right-0 top-full mt-2 w-52 bg-gray-950/95 border border-gray-800 rounded-2xl shadow-2xl py-1.5 z-40 animate-scaleUp text-xs backdrop-blur-md"
               onClick={(e) => e.stopPropagation()}
             >
-              {/* 1. Save Reel Option */}
+              {/* 1. View Profile / Username */}
+              {reel.author?.id && (
+                <button
+                  type="button"
+                  id={`view-profile-reel-btn-${reel.id}`}
+                  onClick={() => {
+                    setIsMenuOpen(false);
+                    if (onViewProfile) {
+                      onViewProfile(reel.author.id);
+                    } else if (typeof window !== 'undefined') {
+                      window.dispatchEvent(
+                        new CustomEvent('metfa_view_profile', { detail: { userId: reel.author.id } })
+                      );
+                    }
+                  }}
+                  className="w-full px-3.5 py-2 text-left text-gray-200 hover:text-white hover:bg-gray-900 flex items-center gap-2.5 transition cursor-pointer"
+                >
+                  <User className="w-4 h-4 text-gray-400 shrink-0" />
+                  <div className="min-w-0">
+                    <div className="font-semibold text-white truncate">View Profile</div>
+                    {reel.author?.username && (
+                      <div className="text-[11px] font-mono text-gray-400 truncate">
+                        @{reel.author.username.replace(/^@/, '')}
+                      </div>
+                    )}
+                  </div>
+                </button>
+              )}
+
+              {/* 2. Post Details & Tags */}
+              <button
+                type="button"
+                id={`reel-details-menu-btn-${reel.id}`}
+                onClick={() => {
+                  setIsMenuOpen(false);
+                  setIsDetailsModalOpen(true);
+                }}
+                className="w-full px-3.5 py-2 text-left text-gray-200 hover:text-white hover:bg-gray-900 flex items-center gap-2.5 transition font-medium cursor-pointer"
+              >
+                <Info className="w-4 h-4 text-gray-400 shrink-0" />
+                <span>Post Details &amp; Tags</span>
+              </button>
+
+              <div className="h-px bg-gray-800/80 my-1" />
+
+              {/* 3. Save Reel Option */}
               <button
                 type="button"
                 id={`save-reel-menu-btn-${reel.id}`}
@@ -307,36 +374,37 @@ export const ReelCard: React.FC<ReelCardProps> = ({
                 <span className="font-semibold">{isSaved ? 'Unsave Reel' : 'Save Reel'}</span>
               </button>
 
-              {/* 2. Copy Link */}
-              <button
-                type="button"
-                onClick={handleCopyLink}
-                className="w-full px-3.5 py-2 text-left text-gray-200 hover:text-white hover:bg-gray-900 flex items-center gap-2.5 transition cursor-pointer"
-              >
-                <Copy className="w-4 h-4 text-teal-400" />
-                <span>Copy Link</span>
-              </button>
+              {/* 4. Copy Link (only when audience/privacy permissions allow) */}
+              {allowExternalShare && (
+                <button
+                  type="button"
+                  onClick={handleCopyLink}
+                  className="w-full px-3.5 py-2 text-left text-gray-200 hover:text-white hover:bg-gray-900 flex items-center gap-2.5 transition cursor-pointer"
+                >
+                  <Copy className="w-4 h-4 text-teal-400" />
+                  <span>Copy Link</span>
+                </button>
+              )}
 
-              {/* 3. View Video Analytics */}
-              <button
-                type="button"
-                id={`view-analytics-reel-${reel.id}`}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  setIsMenuOpen(false);
-                  setIsAnalyticsModalOpen(true);
-                }}
-                className="w-full px-3.5 py-2 text-left text-teal-400 hover:text-teal-300 hover:bg-gray-900 flex items-center gap-2.5 transition font-medium cursor-pointer"
-                title="View real video analytics and watch time"
-              >
-                <TrendingUp className="w-4 h-4 text-teal-400" />
-                <span>Video Analytics</span>
-              </button>
-
-              {/* 3. Author actions */}
+              {/* 5. Owner-only Analytics, Edit & Delete; Non-owner Report */}
               {isOwner ? (
                 <>
                   <div className="h-px bg-gray-800/80 my-1" />
+                  <button
+                    type="button"
+                    id={`view-analytics-reel-${reel.id}`}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setIsMenuOpen(false);
+                      setIsAnalyticsModalOpen(true);
+                    }}
+                    className="w-full px-3.5 py-2 text-left text-teal-400 hover:text-teal-300 hover:bg-gray-900 flex items-center gap-2.5 transition font-medium cursor-pointer"
+                    title="View real video analytics and watch time"
+                  >
+                    <TrendingUp className="w-4 h-4 text-teal-400" />
+                    <span>Video Analytics</span>
+                  </button>
+
                   <button
                     type="button"
                     onClick={() => {
@@ -434,30 +502,48 @@ export const ReelCard: React.FC<ReelCardProps> = ({
           <span className="text-[10px] font-bold text-gray-200">{reel.commentsCount}</span>
         </button>
 
-        {/* 3. Share Button */}
-        <button
-          type="button"
-          id={`share-reel-${reel.id}`}
-          onClick={(e) => {
-            e.stopPropagation();
-            trackEngagementAction({
-              contentId: reel.id,
-              contentType: 'reel',
-              creatorId: reel.author?.id || '',
-              viewerId: userProfile?.id,
-              action: 'share',
-              trafficSource: 'reels',
-            });
-            onShare?.(reel);
-          }}
-          className="flex flex-col items-center gap-1 text-white group cursor-pointer"
-          title="Share reel"
-        >
-          <div className="p-2.5 rounded-full bg-black/60 backdrop-blur-md group-hover:bg-black/80 transition group-hover:scale-110 active:scale-95">
-            <Share2 className="w-5 h-5 text-gray-200" />
-          </div>
-          <span className="text-[10px] font-bold text-gray-200">{reel.sharesCount}</span>
-        </button>
+        {/* 3. Share Button (gated by audience/privacy rules) */}
+        {allowExternalShare ? (
+          <button
+            type="button"
+            id={`share-reel-${reel.id}`}
+            onClick={(e) => {
+              e.stopPropagation();
+              trackEngagementAction({
+                contentId: reel.id,
+                contentType: 'reel',
+                creatorId: reel.author?.id || '',
+                viewerId: userProfile?.id,
+                action: 'share',
+                trafficSource: 'reels',
+              });
+              onShare?.(reel);
+            }}
+            className="flex flex-col items-center gap-1 text-white group cursor-pointer"
+            title="Share reel"
+          >
+            <div className="p-2.5 rounded-full bg-black/60 backdrop-blur-md group-hover:bg-black/80 transition group-hover:scale-110 active:scale-95">
+              <Share2 className="w-5 h-5 text-gray-200" />
+            </div>
+            <span className="text-[10px] font-bold text-gray-200">{reel.sharesCount}</span>
+          </button>
+        ) : (
+          <button
+            type="button"
+            id={`share-reel-${reel.id}`}
+            onClick={(e) => {
+              e.stopPropagation();
+              onShowToast?.('Sharing is disabled for Followers-only, Only Me, or Private-profile Reels.');
+            }}
+            className="flex flex-col items-center gap-1 text-white/45 cursor-not-allowed"
+            title="External sharing disabled by Reel audience or profile privacy"
+          >
+            <div className="p-2.5 rounded-full bg-black/40 backdrop-blur-md">
+              <Lock className="w-4 h-4" />
+            </div>
+            <span className="text-[10px] font-bold text-gray-300">{reel.sharesCount}</span>
+          </button>
+        )}
 
         {/* 4. Save / Bookmark Button directly below Share button */}
         <button
@@ -518,21 +604,36 @@ export const ReelCard: React.FC<ReelCardProps> = ({
           </form>
         ) : (
           <>
-            {/* Author Info */}
+            {/* Author Info (Clean display name + compact time & audience metadata) */}
             <div className="flex items-center gap-2.5">
               <img
                 src={reel.author.avatar}
                 alt={reel.author.name}
                 loading="lazy"
                 decoding="async"
-                className="w-9 h-9 rounded-full object-cover border-2 border-purple-500 shadow-md"
+                className="w-9 h-9 rounded-full object-cover border border-white/30 shadow-md shrink-0"
               />
               <div className="min-w-0 pr-16">
-                <div className="flex items-center gap-1">
-                  <h4 className="text-xs font-bold text-white truncate">{reel.author.name}</h4>
-                  {reel.author.isVerified && <ShieldCheck className="w-3.5 h-3.5 text-teal-400 shrink-0" />}
+                <h4 className="text-xs font-bold text-white truncate">{reel.author.name}</h4>
+                <div
+                  className="flex items-center gap-1.5 text-[11px] text-gray-300"
+                  title={audienceMeta.description}
+                >
+                  <span>{reel.createdAt || 'Recently'}</span>
+                  <span aria-hidden="true">·</span>
+                  <span className="inline-flex items-center gap-1">
+                    {audienceMeta.iconKey === 'globe' ? (
+                      <Globe className="w-3 h-3 text-gray-300" />
+                    ) : audienceMeta.iconKey === 'users' ? (
+                      <Users className="w-3 h-3 text-gray-300" />
+                    ) : audienceMeta.iconKey === 'shield' ? (
+                      <ShieldCheck className="w-3 h-3 text-amber-300" />
+                    ) : (
+                      <Lock className="w-3 h-3 text-gray-300" />
+                    )}
+                    <span>{audienceMeta.shortLabel}</span>
+                  </span>
                 </div>
-                <p className="text-[10px] text-teal-300 font-mono">@{reel.author.username}</p>
               </div>
             </div>
 
@@ -588,12 +689,35 @@ export const ReelCard: React.FC<ReelCardProps> = ({
         />
       )}
 
-      {/* Unified Content Analytics Modal */}
-      {isAnalyticsModalOpen && (
+      {/* Unified Content Analytics Modal (Owner Only) */}
+      {isOwner && isAnalyticsModalOpen && (
         <ContentAnalyticsModal
           isOpen={isAnalyticsModalOpen}
           onClose={() => setIsAnalyticsModalOpen(false)}
           content={reelToContentDescriptor(reel)}
+        />
+      )}
+
+      {/* Reel & Creator Details Modal */}
+      {isDetailsModalOpen && (
+        <PostDetailsModal
+          isOpen={isDetailsModalOpen}
+          onClose={() => setIsDetailsModalOpen(false)}
+          onViewProfile={onViewProfile}
+          details={{
+            id: reel.id,
+            contentTypeLabel: 'Reel Video',
+            authorId: reel.author?.id,
+            authorName: reel.author?.name || 'Creator',
+            authorUsername: reel.author?.username,
+            authorAvatar: reel.author?.avatar || '',
+            createdAt: reel.createdAt || 'Recently',
+            visibility: reel.visibility,
+            authorProfilePrivacy: resolvedAuthorPrivacy,
+            tags: (reel as ReelHighlight & { tags?: string[] }).tags,
+            musicLabel: reel.musicTrack || null,
+            caption: reel.caption || reel.title,
+          }}
         />
       )}
     </div>

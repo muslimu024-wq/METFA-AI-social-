@@ -6,7 +6,6 @@ import {
   Share2,
   Sparkles,
   Bookmark,
-  MoreVertical,
   Edit3,
   Trash2,
   Copy,
@@ -22,24 +21,38 @@ import {
   Pause,
   Music,
   ShieldCheck,
-  UserPlus,
   Film,
-  Maximize2,
-  Minimize2,
   Wand2,
-  Repeat,
   TrendingUp,
+  Lock,
+  Info,
+  User,
 } from 'lucide-react';
-import { CommunityPost, UserProfile } from '../types/community';
+import { CommunityPost, FollowRelationStatus, ProfilePrivacy, UserProfile } from '../types/community';
 import { AudioTrack } from '../types/audio';
 import { isContentOwner } from '../utils/communityStore';
-import { isUserFollowed, syncFollowCache } from '../utils/followStore';
-import { followUser, unfollowUser, isValidProfileUuid } from '../services/followService';
+import {
+  isUserFollowed,
+  syncFollowCache,
+  isFollowRequestPending,
+  syncPendingFollowRequestCache,
+} from '../utils/followStore';
+import {
+  followUser,
+  unfollowUser,
+  cancelFollowRequest,
+  fetchFollowStatus,
+  isValidProfileUuid,
+} from '../services/followService';
 import { isPostSaved, toggleSavePost } from '../utils/bookmarkStore';
+import { useAuth } from '../context/AuthContext';
+import { canSharePost, formatAudienceMeta } from '../utils/privacyPolicy';
 import { formatDuration } from '../utils/audioStore';
 import { AiRecipeBox } from './AiRecipeBox';
 import AudioLicenseInfoModal from './AudioLicenseInfoModal';
 import ContentAnalyticsModal from './ContentAnalyticsModal';
+import PostHeader from './PostHeader';
+import PostDetailsModal from './PostDetailsModal';
 import { MediaCarousel } from './MediaCarousel';
 import { VideoPlaybackSessionTracker } from '../utils/videoTracker';
 import {
@@ -99,8 +112,11 @@ export interface PostCardProps {
   onShowToast?: (message: string) => void;
   priority?: boolean;
   isAuthorFollowed?: boolean;
+  followStatus?: FollowRelationStatus;
+  authorProfilePrivacy?: ProfilePrivacy;
   onToggleAuthorFollow?: (author: { id?: string; name?: string; username?: string; avatar?: string }) => void;
   onOpenReel?: (reelId: string, payload?: { videoSrc?: string; title?: string; currentTime?: number }) => void;
+  onViewProfile?: (userId: string) => void;
 }
 
 export const PostCard: React.FC<PostCardProps> = ({
@@ -123,9 +139,13 @@ export const PostCard: React.FC<PostCardProps> = ({
   onShowToast,
   priority = false,
   isAuthorFollowed,
+  followStatus: followStatusProp,
+  authorProfilePrivacy: authorProfilePrivacyProp,
   onToggleAuthorFollow,
   onOpenReel,
+  onViewProfile,
 }) => {
+  const { user: authUser } = useAuth();
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const [showComments, setShowComments] = useState(false);
   const [showAiRecipe, setShowAiRecipe] = useState(false);
@@ -133,6 +153,7 @@ export const PostCard: React.FC<PostCardProps> = ({
   const [showReactionPicker, setShowReactionPicker] = useState(false);
   const [isFeedVideoMuted, setIsFeedVideoMuted] = useState(true);
   const [isAnalyticsModalOpen, setIsAnalyticsModalOpen] = useState(false);
+  const [isDetailsModalOpen, setIsDetailsModalOpen] = useState(false);
   const feedVideoRef = useRef<HTMLVideoElement | null>(null);
   const touchStartPosRef = useRef<{ x: number; y: number } | null>(null);
   const isTouchScrollingRef = useRef(false);
@@ -234,23 +255,66 @@ export const PostCard: React.FC<PostCardProps> = ({
     };
   }, []);
 
-  const isOwner = isContentOwner(post.author, userProfile, undefined, post.postingIdentity, post.id);
-  const [isFollowed, setIsFollowed] = useState<boolean>(
-    isAuthorFollowed !== undefined
-      ? isAuthorFollowed
-      : isUserFollowed(post.author?.id) || isUserFollowed(post.author?.username)
-  );
+  const isOwner = isContentOwner(post.author, userProfile, authUser, post.postingIdentity, post.id);
+  const resolvedAuthorPrivacy =
+    authorProfilePrivacyProp || post.authorProfilePrivacy || post.author?.profilePrivacy || 'public';
+  const audienceMeta = formatAudienceMeta(post.visibility, resolvedAuthorPrivacy);
+  const allowExternalShare = canSharePost({
+    visibility: post.visibility,
+    authorProfilePrivacy: resolvedAuthorPrivacy,
+  });
+
+  const deriveInitialFollowStatus = (): FollowRelationStatus => {
+    if (followStatusProp) return followStatusProp;
+    if (isAuthorFollowed) return 'following';
+    if (isFollowRequestPending(post.author?.id)) return 'pending';
+    if (isUserFollowed(post.author?.id) || isUserFollowed(post.author?.username)) return 'following';
+    return 'none';
+  };
+
+  const [followStatus, setFollowStatus] = useState<FollowRelationStatus>(deriveInitialFollowStatus);
+  const isFollowed = followStatus === 'following';
   const [isFollowLoading, setIsFollowLoading] = useState(false);
 
   useEffect(() => {
-    if (isAuthorFollowed !== undefined) {
-      setIsFollowed(isAuthorFollowed);
+    if (followStatusProp) {
+      setFollowStatus(followStatusProp);
+    } else if (isAuthorFollowed !== undefined) {
+      setFollowStatus(
+        isAuthorFollowed
+          ? 'following'
+          : isFollowRequestPending(post.author?.id)
+          ? 'pending'
+          : 'none'
+      );
     }
-  }, [isAuthorFollowed]);
+  }, [followStatusProp, isAuthorFollowed, post.author?.id]);
+
+  useEffect(() => {
+    if (
+      followStatusProp === undefined &&
+      isAuthorFollowed === undefined &&
+      !isOwner &&
+      authUser?.id &&
+      post.author?.id &&
+      isValidProfileUuid(post.author.id)
+    ) {
+      let active = true;
+      fetchFollowStatus(post.author.id).then((res) => {
+        if (!active || res.error) return;
+        setFollowStatus(res.status);
+        syncFollowCache(post.author, res.status === 'following');
+        syncPendingFollowRequestCache(post.author.id, res.status === 'pending');
+      });
+      return () => {
+        active = false;
+      };
+    }
+  }, [followStatusProp, isAuthorFollowed, isOwner, authUser?.id, post.author?.id]);
 
   const handleToggleFollow = async (e: React.MouseEvent) => {
     e.stopPropagation();
-    if (isFollowLoading) return;
+    if (isFollowLoading || isOwner) return;
 
     if (onToggleAuthorFollow) {
       onToggleAuthorFollow(post.author);
@@ -262,15 +326,21 @@ export const PostCard: React.FC<PostCardProps> = ({
 
     if (targetAuthorId && isValidProfileUuid(targetAuthorId)) {
       setIsFollowLoading(true);
-      if (!isFollowed) {
-        const { success, error } = await followUser(targetAuthorId);
+      if (followStatus === 'none') {
+        const res = await followUser(targetAuthorId);
         setIsFollowLoading(false);
-        if (success) {
-          setIsFollowed(true);
+        if (res.success && res.requestStatus === 'pending') {
+          setFollowStatus('pending');
+          syncFollowCache(post.author, false);
+          syncPendingFollowRequestCache(targetAuthorId, true);
+          onShowToast?.(`Follow request sent to ${authorName}`);
+        } else if (res.success && res.isFollowing) {
+          setFollowStatus('following');
           syncFollowCache(post.author, true);
+          syncPendingFollowRequestCache(targetAuthorId, false);
           trackFollowAttribution({
             creatorId: targetAuthorId,
-            viewerId: userProfile?.id,
+            viewerId: authUser?.id || userProfile?.id,
             contentId: post.id,
             contentType: resolvedContentType,
             attributionMethod: 'direct_content_follow',
@@ -279,17 +349,28 @@ export const PostCard: React.FC<PostCardProps> = ({
           });
           onShowToast?.(`You are now following ${authorName}`);
         } else {
-          onShowToast?.(error || 'Failed to follow user.');
+          onShowToast?.(res.error || 'Failed to follow user.');
+        }
+      } else if (followStatus === 'pending') {
+        const res = await cancelFollowRequest(targetAuthorId);
+        setIsFollowLoading(false);
+        if (res.success) {
+          setFollowStatus('none');
+          syncPendingFollowRequestCache(targetAuthorId, false);
+          onShowToast?.(`Follow request cancelled for ${authorName}`);
+        } else {
+          onShowToast?.(res.error || 'Failed to cancel follow request.');
         }
       } else {
         const { success, error } = await unfollowUser(targetAuthorId);
         setIsFollowLoading(false);
         if (success) {
-          setIsFollowed(false);
+          setFollowStatus('none');
           syncFollowCache(post.author, false);
+          syncPendingFollowRequestCache(targetAuthorId, false);
           trackFollowAttribution({
             creatorId: targetAuthorId,
-            viewerId: userProfile?.id,
+            viewerId: authUser?.id || userProfile?.id,
             contentId: post.id,
             contentType: resolvedContentType,
             attributionMethod: 'direct_content_follow',
@@ -304,12 +385,12 @@ export const PostCard: React.FC<PostCardProps> = ({
     } else {
       // Non-UUID local fallback
       const next = !isFollowed;
-      setIsFollowed(next);
+      setFollowStatus(next ? 'following' : 'none');
       syncFollowCache(post.author, next);
       if (targetAuthorId) {
         trackFollowAttribution({
           creatorId: targetAuthorId,
-          viewerId: userProfile?.id,
+          viewerId: authUser?.id || userProfile?.id,
           contentId: post.id,
           contentType: resolvedContentType,
           attributionMethod: 'direct_content_follow',
@@ -368,6 +449,10 @@ export const PostCard: React.FC<PostCardProps> = ({
 
   const handleCopyLink = () => {
     setIsMenuOpen(false);
+    if (!allowExternalShare) {
+      onShowToast?.('Copy Link is disabled for Followers-only, Only Me, or Private-profile posts.');
+      return;
+    }
     const postUrl = `${window.location.origin}/#post-${post.id}`;
     navigator.clipboard.writeText(postUrl);
     onShowToast?.('Post link copied to clipboard!');
@@ -691,60 +776,93 @@ export const PostCard: React.FC<PostCardProps> = ({
           isHighlighted ? 'ring-2 ring-purple-500 shadow-purple-500/20' : ''
         }`}
       >
-      {/* 1. Header: Author & Options Menu (...) */}
-      <div className="p-4 flex items-center justify-between border-b border-slate-100">
-        <div className="flex items-center gap-3 min-w-0">
-          <img
-            src={post.postingIdentity?.avatar || post.author.avatar}
-            alt={post.postingIdentity?.name || post.author.name}
-            loading={priority ? undefined : 'lazy'}
-            decoding="async"
-            className="w-10 h-10 rounded-2xl object-cover border border-slate-200 shadow-xs shrink-0"
-          />
-          <div className="min-w-0">
-            <div className="flex items-center gap-1.5 flex-wrap">
-              <h4 className="text-sm font-bold text-slate-900 truncate leading-tight">
-                {post.postingIdentity?.name || post.author.name}
-              </h4>
-              {post.postingIdentity?.badge && (
-                <span className="text-[9px] px-1.5 py-0.5 rounded bg-purple-50 text-purple-700 border border-purple-200 font-semibold shrink-0">
-                  {post.postingIdentity.badge}
-                </span>
-              )}
-
-              {/* Follow / Unfollow Button for Non-owners */}
-              {!isOwner && (
+      {/* 1. Clean Feed Post Header */}
+      <PostHeader
+        postId={post.id}
+        authorId={post.postingIdentity?.id || post.author.id}
+        displayName={post.postingIdentity?.name || post.author.name}
+        avatarSrc={post.postingIdentity?.avatar || post.author.avatar}
+        createdAt={post.createdAt}
+        visibility={post.visibility}
+        authorProfilePrivacy={resolvedAuthorPrivacy}
+        audienceMeta={audienceMeta}
+        isOwner={isOwner}
+        followStatus={followStatus}
+        isFollowLoading={isFollowLoading}
+        isMenuOpen={isMenuOpen}
+        priority={priority}
+        followButtonId={`postcard-follow-btn-${post.id}`}
+        menuButtonId={`post-menu-btn-${post.id}`}
+        menuDataAttr="data-post-menu"
+        onToggleFollow={handleToggleFollow}
+        onToggleMenu={(e) => {
+          e.stopPropagation();
+          setIsMenuOpen((prev) => !prev);
+        }}
+        onViewProfile={onViewProfile}
+        onSetAudience={
+          isOwner && onStartEdit
+            ? (e) => {
+                e.stopPropagation();
+                onStartEdit(post);
+              }
+            : undefined
+        }
+        renderMenuDropdown={() => {
+          const cleanUsername = (post.postingIdentity?.username || post.author.username || '').replace(/^@/, '');
+          return (
+            <div
+              id={`post-menu-dropdown-${post.id}`}
+              className="absolute right-0 top-full mt-1.5 w-56 bg-white border border-slate-200 rounded-2xl shadow-xl py-1.5 z-40 animate-scaleUp text-xs backdrop-blur-md"
+              onClick={(e) => e.stopPropagation()}
+            >
+              {/* 1. View Profile / Username */}
+              {post.author?.id && (
                 <button
                   type="button"
-                  id={`postcard-follow-btn-${post.id}`}
-                  onClick={handleToggleFollow}
-                  className={`text-[10px] px-2 py-0.5 rounded-full font-bold transition flex items-center gap-1 cursor-pointer shrink-0 ml-1 ${
-                    isFollowed
-                      ? 'bg-slate-100 hover:bg-rose-50 text-slate-700 hover:text-rose-600 border border-slate-200 hover:border-rose-200'
-                      : 'bg-purple-600 hover:bg-purple-700 text-white shadow-xs'
-                  }`}
-                  title={isFollowed ? 'Following (Click to Unfollow)' : 'Follow Creator'}
+                  id={`view-profile-menu-btn-${post.id}`}
+                  onClick={() => {
+                    setIsMenuOpen(false);
+                    if (onViewProfile) {
+                      onViewProfile(post.author.id);
+                    } else if (typeof window !== 'undefined') {
+                      window.dispatchEvent(
+                        new CustomEvent('metfa_view_profile', { detail: { userId: post.author.id } })
+                      );
+                    }
+                  }}
+                  className="w-full px-3.5 py-2 text-left text-slate-700 hover:text-slate-900 hover:bg-slate-50 flex items-center gap-2.5 transition cursor-pointer"
                 >
-                  {isFollowed ? (
-                    <>
-                      <Check className="w-2.5 h-2.5 text-emerald-600" />
-                      <span>Following</span>
-                    </>
-                  ) : (
-                    <>
-                      <UserPlus className="w-2.5 h-2.5" />
-                      <span>Follow</span>
-                    </>
-                  )}
+                  <User className="w-4 h-4 text-slate-500 shrink-0" />
+                  <div className="min-w-0">
+                    <div className="font-semibold text-slate-800 truncate">View Profile</div>
+                    {cleanUsername && (
+                      <div className="text-[11px] font-mono text-slate-500 truncate">@{cleanUsername}</div>
+                    )}
+                  </div>
                 </button>
               )}
 
-              {/* Direct Message Button for Non-owners */}
-              {!isOwner && (
+              {/* 2. Post Details & Tags */}
+              <button
+                type="button"
+                id={`post-details-menu-btn-${post.id}`}
+                onClick={() => {
+                  setIsMenuOpen(false);
+                  setIsDetailsModalOpen(true);
+                }}
+                className="w-full px-3.5 py-2 text-left text-slate-700 hover:text-slate-900 hover:bg-slate-50 flex items-center gap-2.5 transition font-medium cursor-pointer"
+              >
+                <Info className="w-4 h-4 text-slate-500 shrink-0" />
+                <span>Post Details &amp; Tags</span>
+              </button>
+
+              {!isOwner && onOpenChat && (
                 <button
                   type="button"
                   id={`postcard-message-btn-${post.id}`}
                   onClick={() => {
+                    setIsMenuOpen(false);
                     const profileObj: UserProfile = {
                       id: post.author.id,
                       name: post.author.name,
@@ -761,77 +879,32 @@ export const PostCard: React.FC<PostCardProps> = ({
                         reelsCount: 0,
                       },
                     };
-                    if (onOpenChat) {
-                      onOpenChat(post.author.id, profileObj);
-                    } else {
-                      window.dispatchEvent(
-                        new CustomEvent('metfa_open_chat', {
-                          detail: { partnerId: post.author.id, partnerProfile: profileObj },
-                        })
-                      );
-                    }
+                    onOpenChat(post.author.id, profileObj);
                   }}
-                  className="text-[10px] px-2 py-0.5 rounded-full font-bold bg-teal-50 hover:bg-teal-100 text-teal-700 border border-teal-200 transition flex items-center gap-1 cursor-pointer shrink-0 ml-1 shadow-2xs active:scale-95"
-                  title={`Direct Message @${post.author.username}`}
+                  className="w-full px-3.5 py-2 text-left text-slate-700 hover:text-teal-700 hover:bg-teal-50 flex items-center gap-2.5 transition font-medium cursor-pointer"
                 >
-                  <MessageSquare className="w-2.5 h-2.5 text-teal-600" />
-                  <span>Message</span>
+                  <MessageSquare className="w-4 h-4 text-teal-600 shrink-0" />
+                  <span>Message Creator</span>
                 </button>
               )}
-            </div>
-            <div className="flex items-center gap-2 text-xs text-slate-500 font-mono mt-0.5">
-              <span className="text-teal-700 font-medium">@{post.postingIdentity?.username || post.author.username}</span>
-              <span>•</span>
-              <span>{post.createdAt}</span>
-            </div>
-          </div>
-        </div>
 
-        <div className="flex items-center gap-2 shrink-0">
-          {post.stylePreset && (
-            <span className="text-[10px] font-semibold px-2.5 py-1 bg-purple-50 border border-purple-200 text-purple-700 rounded-full hidden sm:inline-block">
-              {post.stylePreset}
-            </span>
-          )}
+              <div className="h-px bg-slate-100 my-1" />
 
-          {/* Top-Right Context Dropdown Menu (...) */}
-          <div className="relative" data-post-menu={post.id}>
-            <button
-              type="button"
-              id={`post-menu-btn-${post.id}`}
-              onClick={(e) => {
-                e.stopPropagation();
-                setIsMenuOpen((prev) => !prev);
-              }}
-              className={`p-1.5 rounded-xl transition cursor-pointer ${
-                isMenuOpen ? 'bg-purple-100 text-purple-700' : 'text-slate-500 hover:text-slate-900 hover:bg-slate-100'
-              }`}
-              title="Post options"
-              aria-label="Post options"
-            >
-              <MoreVertical className="w-4 h-4" />
-            </button>
-
-            {isMenuOpen && (
-              <div
-                id={`post-menu-dropdown-${post.id}`}
-                className="absolute right-0 top-full mt-1.5 w-48 bg-white border border-slate-200 rounded-2xl shadow-xl py-1.5 z-40 animate-scaleUp text-xs backdrop-blur-md"
-                onClick={(e) => e.stopPropagation()}
+              {/* 3. Save Post / Unsave Post */}
+              <button
+                type="button"
+                id={`save-post-menu-btn-${post.id}`}
+                onClick={handleSaveToggle}
+                className="w-full px-3.5 py-2 text-left text-slate-700 hover:text-purple-700 hover:bg-purple-50 flex items-center gap-2.5 transition font-medium cursor-pointer"
               >
-                {/* 1. Save Post / Unsave Post at the very top */}
-                <button
-                  type="button"
-                  id={`save-post-menu-btn-${post.id}`}
-                  onClick={handleSaveToggle}
-                  className="w-full px-3.5 py-2 text-left text-slate-700 hover:text-purple-700 hover:bg-purple-50 flex items-center gap-2.5 transition font-medium cursor-pointer"
-                >
-                  <Bookmark
-                    className={`w-4 h-4 ${isSaved ? 'text-amber-500 fill-amber-500' : 'text-amber-500'}`}
-                  />
-                  <span className="font-semibold">{isSaved ? 'Unsave Post' : 'Save Post'}</span>
-                </button>
+                <Bookmark
+                  className={`w-4 h-4 ${isSaved ? 'text-amber-500 fill-amber-500' : 'text-amber-500'}`}
+                />
+                <span className="font-semibold">{isSaved ? 'Unsave Post' : 'Save Post'}</span>
+              </button>
 
-                {/* 2. Copy Link */}
+              {/* 4. Copy Link (only when audience/privacy permissions allow) */}
+              {allowExternalShare && (
                 <button
                   type="button"
                   id={`copy-link-menu-btn-${post.id}`}
@@ -841,29 +914,30 @@ export const PostCard: React.FC<PostCardProps> = ({
                   <Copy className="w-4 h-4 text-teal-600" />
                   <span>Copy Link</span>
                 </button>
+              )}
 
-                {/* 3. AI Recipe */}
-                <button
-                  type="button"
-                  id={`ai-recipe-menu-btn-${post.id}`}
-                  onClick={() => {
-                    setIsMenuOpen(false);
-                    setShowAiRecipe((prev) => !prev);
-                  }}
-                  className="w-full px-3.5 py-2 text-left text-purple-700 hover:text-purple-900 hover:bg-purple-50 flex items-center gap-2.5 transition font-medium cursor-pointer"
-                  title="View AI Prompt Recipe & Parameters"
-                >
-                  <Sparkles className="w-4 h-4 text-purple-600 shrink-0" />
-                  <span>AI Recipe</span>
-                </button>
+              {/* 5. AI Recipe & Remix & Copyright */}
+              <button
+                type="button"
+                id={`ai-recipe-menu-btn-${post.id}`}
+                onClick={() => {
+                  setIsMenuOpen(false);
+                  setShowAiRecipe((prev) => !prev);
+                }}
+                className="w-full px-3.5 py-2 text-left text-purple-700 hover:text-purple-900 hover:bg-purple-50 flex items-center gap-2.5 transition font-medium cursor-pointer"
+                title="View AI Prompt Recipe & Parameters"
+              >
+                <Sparkles className="w-4 h-4 text-purple-600 shrink-0" />
+                <span>{showAiRecipe ? 'Hide AI Recipe' : 'AI Recipe'}</span>
+              </button>
 
-                {/* 4. Remix in Studio */}
+              {onRemixPrompt && (
                 <button
                   type="button"
                   id={`remix-menu-btn-${post.id}`}
                   onClick={() => {
                     setIsMenuOpen(false);
-                    onRemixPrompt?.(post.prompt || post.caption || '', post.stylePreset);
+                    onRemixPrompt(post.prompt || post.caption || '', post.stylePreset);
                   }}
                   className="w-full px-3.5 py-2 text-left text-teal-700 hover:text-teal-900 hover:bg-teal-50 flex items-center gap-2.5 transition font-medium cursor-pointer"
                   title="Remix prompt directly in AI Studio"
@@ -871,95 +945,94 @@ export const PostCard: React.FC<PostCardProps> = ({
                   <Wand2 className="w-4 h-4 text-teal-600 shrink-0" />
                   <span>Remix in Studio</span>
                 </button>
+              )}
 
-                {/* 5. Copyright & Rights */}
-                <button
-                  type="button"
-                  id={`copyright-menu-btn-${post.id}`}
-                  onClick={() => {
-                    setIsMenuOpen(false);
-                    if (post.audioTrack) {
-                      setIsLicenseModalOpen(true);
-                    } else {
-                      onShowToast?.('Original Content Copyright • Protected under METFA Creator Rights');
-                    }
-                  }}
-                  className="w-full px-3.5 py-2 text-left text-slate-700 hover:text-slate-900 hover:bg-slate-50 flex items-center gap-2.5 transition font-medium cursor-pointer"
-                  title="View copyright & licensing details"
-                >
-                  <ShieldCheck className="w-4 h-4 text-teal-600 shrink-0" />
-                  <span>{post.audioTrack?.license_type ? `License: ${post.audioTrack.license_type}` : 'Copyright & Rights'}</span>
-                </button>
+              <button
+                type="button"
+                id={`copyright-menu-btn-${post.id}`}
+                onClick={() => {
+                  setIsMenuOpen(false);
+                  if (post.audioTrack) {
+                    setIsLicenseModalOpen(true);
+                  } else {
+                    onShowToast?.('Original Content Copyright • Protected under METFA Creator Rights');
+                  }
+                }}
+                className="w-full px-3.5 py-2 text-left text-slate-700 hover:text-slate-900 hover:bg-slate-50 flex items-center gap-2.5 transition font-medium cursor-pointer"
+                title="View copyright & licensing details"
+              >
+                <ShieldCheck className="w-4 h-4 text-teal-600 shrink-0" />
+                <span>{post.audioTrack?.license_type ? `License: ${post.audioTrack.license_type}` : 'Copyright & Rights'}</span>
+              </button>
 
-                {/* Author Only Actions: Analytics, Edit Post & Delete Post */}
-                {isOwner ? (
-                  <>
-                    <div className="h-px bg-slate-100 my-1" />
-                    <button
-                      type="button"
-                      id={`analytics-post-menu-btn-${post.id}`}
-                      onClick={() => {
-                        setIsMenuOpen(false);
-                        setIsAnalyticsModalOpen(true);
-                      }}
-                      className="w-full px-3.5 py-2 text-left text-teal-700 hover:text-teal-900 hover:bg-teal-50 flex items-center gap-2.5 transition font-medium cursor-pointer"
-                    >
-                      <TrendingUp className="w-4 h-4 text-teal-600" />
-                      <span>Insights & Analytics</span>
-                    </button>
+              {/* Author Only Actions vs Viewer Report */}
+              {isOwner ? (
+                <>
+                  <div className="h-px bg-slate-100 my-1" />
+                  <button
+                    type="button"
+                    id={`analytics-post-menu-btn-${post.id}`}
+                    onClick={() => {
+                      setIsMenuOpen(false);
+                      setIsAnalyticsModalOpen(true);
+                    }}
+                    className="w-full px-3.5 py-2 text-left text-teal-700 hover:text-teal-900 hover:bg-teal-50 flex items-center gap-2.5 transition font-medium cursor-pointer"
+                  >
+                    <TrendingUp className="w-4 h-4 text-teal-600" />
+                    <span>Insights &amp; Analytics</span>
+                  </button>
 
-                    <button
-                      type="button"
-                      id={`edit-post-menu-btn-${post.id}`}
-                      onClick={() => {
-                        setIsMenuOpen(false);
-                        if (onStartEdit) {
-                          onStartEdit(post);
-                        } else {
-                          setIsInlineEditing(true);
-                          setEditCaption(post.caption || post.prompt);
-                        }
-                      }}
-                      className="w-full px-3.5 py-2 text-left text-purple-700 hover:text-purple-900 hover:bg-purple-50 flex items-center gap-2.5 transition font-medium cursor-pointer"
-                    >
-                      <Edit3 className="w-4 h-4 text-purple-600" />
-                      <span>Edit Post</span>
-                    </button>
+                  <button
+                    type="button"
+                    id={`edit-post-menu-btn-${post.id}`}
+                    onClick={() => {
+                      setIsMenuOpen(false);
+                      if (onStartEdit) {
+                        onStartEdit(post);
+                      } else {
+                        setIsInlineEditing(true);
+                        setEditCaption(post.caption || post.prompt);
+                      }
+                    }}
+                    className="w-full px-3.5 py-2 text-left text-purple-700 hover:text-purple-900 hover:bg-purple-50 flex items-center gap-2.5 transition font-medium cursor-pointer"
+                  >
+                    <Edit3 className="w-4 h-4 text-purple-600" />
+                    <span>Edit Post</span>
+                  </button>
 
-                    <button
-                      type="button"
-                      id={`delete-post-menu-btn-${post.id}`}
-                      onClick={() => {
-                        setIsMenuOpen(false);
-                        onDeletePost?.(post.id);
-                      }}
-                      className="w-full px-3.5 py-2 text-left text-rose-600 hover:text-rose-700 hover:bg-rose-50 flex items-center gap-2.5 transition font-medium cursor-pointer"
-                    >
-                      <Trash2 className="w-4 h-4" />
-                      <span>Delete Post</span>
-                    </button>
-                  </>
-                ) : (
-                  <>
-                    <div className="h-px bg-slate-100 my-1" />
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setIsMenuOpen(false);
-                        onShowToast?.('Post reported to community moderators');
-                      }}
-                      className="w-full px-3.5 py-2 text-left text-slate-600 hover:text-slate-900 hover:bg-slate-50 flex items-center gap-2.5 transition cursor-pointer"
-                    >
-                      <Flag className="w-4 h-4 text-slate-400" />
-                      <span>Report Post</span>
-                    </button>
-                  </>
-                )}
-              </div>
-            )}
-          </div>
-        </div>
-      </div>
+                  <button
+                    type="button"
+                    id={`delete-post-menu-btn-${post.id}`}
+                    onClick={() => {
+                      setIsMenuOpen(false);
+                      onDeletePost?.(post.id);
+                    }}
+                    className="w-full px-3.5 py-2 text-left text-rose-600 hover:text-rose-700 hover:bg-rose-50 flex items-center gap-2.5 transition font-medium cursor-pointer"
+                  >
+                    <Trash2 className="w-4 h-4" />
+                    <span>Delete Post</span>
+                  </button>
+                </>
+              ) : (
+                <>
+                  <div className="h-px bg-slate-100 my-1" />
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setIsMenuOpen(false);
+                      onShowToast?.('Post reported to community moderators');
+                    }}
+                    className="w-full px-3.5 py-2 text-left text-slate-600 hover:text-slate-900 hover:bg-slate-50 flex items-center gap-2.5 transition cursor-pointer"
+                  >
+                    <Flag className="w-4 h-4 text-slate-400" />
+                    <span>Report Post</span>
+                  </button>
+                </>
+              )}
+            </div>
+          );
+        }}
+      />
 
       {/* 2. Fullscreen Post Editor Modal */}
       {isInlineEditing && (
@@ -1031,41 +1104,154 @@ export const PostCard: React.FC<PostCardProps> = ({
         </div>
       )}
 
-      {/* Post Media / Text Body */}
+      {/* 2b. Caption & Creator Hashtags ABOVE Media (Facebook-inspired hierarchy) */}
+      {!isInlineEditing &&
+        !isPureTextPost &&
+        (post.videoTitle || post.caption || post.audioTrack || (post.tags && post.tags.length > 0)) && (
+          <div className="px-4 pb-3 space-y-2">
+            {post.videoTitle && (
+              <div className="flex items-center gap-2">
+                <Film className="w-3.5 h-3.5 text-purple-600 shrink-0" />
+                <h4 className="text-[15px] font-bold text-slate-900 leading-snug">
+                  {post.videoTitle}
+                </h4>
+              </div>
+            )}
+
+            {post.caption && (
+              <PostContent
+                text={post.caption}
+                charLimit={180}
+                onExpandToggle={(isExpanded) => {
+                  if (isExpanded) {
+                    trackTextExpand({
+                      contentId: post.id,
+                      creatorId: post.author?.id || '',
+                      viewerId: userProfile?.id,
+                      trafficSource: postTrafficSource,
+                    });
+                  }
+                }}
+                textClassName="text-[14px] text-slate-800 leading-relaxed font-normal"
+                buttonClassName="text-purple-600 hover:text-purple-800 font-semibold text-sm mt-1"
+              />
+            )}
+
+            {post.tags && post.tags.length > 0 && (
+              <div className="flex items-center gap-x-2 gap-y-0.5 flex-wrap text-xs text-teal-700 font-medium">
+                {post.tags.map((tag, i) => (
+                  <span key={i}>#{tag.replace(/^#/, '')}</span>
+                ))}
+              </div>
+            )}
+
+            {post.audioTrack && (
+              <div className="p-2.5 rounded-2xl bg-purple-50 border border-purple-200 flex items-center justify-between gap-3">
+                <div className="flex items-center gap-2.5 min-w-0">
+                  <div className="relative group shrink-0">
+                    <img
+                      src={post.audioTrack.cover_url}
+                      alt={post.audioTrack.title}
+                      loading="lazy"
+                      decoding="async"
+                      className="w-9 h-9 rounded-xl object-cover border border-purple-200"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (!trackAudioRef.current) {
+                          const audio = new Audio(post.audioTrack!.audio_url);
+                          trackAudioRef.current = audio;
+                          audio.onended = () => setIsPlayingTrack(false);
+                          audio.onerror = () => setIsPlayingTrack(false);
+                        }
+                        if (isPlayingTrack) {
+                          trackAudioRef.current.pause();
+                          setIsPlayingTrack(false);
+                        } else {
+                          trackAudioRef.current.play().catch(() => setIsPlayingTrack(false));
+                          setIsPlayingTrack(true);
+                        }
+                      }}
+                      className="absolute inset-0 bg-black/40 hover:bg-black/60 rounded-xl flex items-center justify-center text-white transition cursor-pointer"
+                    >
+                      {isPlayingTrack ? (
+                        <Pause className="w-3.5 h-3.5 text-teal-300" />
+                      ) : (
+                        <Play className="w-3.5 h-3.5 text-purple-200 fill-purple-200 ml-0.5" />
+                      )}
+                    </button>
+                  </div>
+
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-1.5">
+                      <Music className="w-3 h-3 text-purple-600 shrink-0" />
+                      <h4 className="text-xs font-bold text-slate-900 truncate">{post.audioTrack.title}</h4>
+                    </div>
+                    <p className="text-[11px] text-purple-700 truncate font-mono">
+                      {post.audioTrack.artist} · {formatDuration(post.audioTrack.duration)}
+                    </p>
+                  </div>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => setIsLicenseModalOpen(true)}
+                  className="px-2 py-1 rounded-lg bg-teal-50 border border-teal-200 text-teal-800 hover:bg-teal-100 text-[10px] font-bold flex items-center gap-1 shrink-0 transition cursor-pointer"
+                  title="View verified licensing certificate"
+                >
+                  <ShieldCheck className="w-3 h-3 text-teal-600" />
+                  <span>{post.audioTrack.license_type}</span>
+                </button>
+              </div>
+            )}
+          </div>
+        )}
+
+      {/* 3. Post Media / Pure Text Body */}
       {isPureTextPost ? (
-        <div
-          className={`p-6 sm:p-8 flex items-center justify-center text-center ${
-            hasGradient ? GRADIENT_PRESETS[post.textBackgroundPreset!] : 'bg-slate-50 text-slate-900 text-left'
-          }`}
-        >
-          <PostContent
-            text={post.caption || post.prompt}
-            charLimit={hasGradient ? 220 : 180}
-            className="w-full"
-            onExpandToggle={(isExpanded) => {
-              if (isExpanded) {
-                trackTextExpand({
-                  contentId: post.id,
-                  creatorId: post.author?.id || '',
-                  viewerId: userProfile?.id,
-                  trafficSource: postTrafficSource,
-                });
+        <div className="space-y-2">
+          <div
+            className={`p-6 sm:p-8 flex items-center justify-center text-center ${
+              hasGradient ? GRADIENT_PRESETS[post.textBackgroundPreset!] : 'bg-slate-50 text-slate-900 text-left'
+            }`}
+          >
+            <PostContent
+              text={post.caption || post.prompt}
+              charLimit={hasGradient ? 220 : 180}
+              className="w-full"
+              onExpandToggle={(isExpanded) => {
+                if (isExpanded) {
+                  trackTextExpand({
+                    contentId: post.id,
+                    creatorId: post.author?.id || '',
+                    viewerId: userProfile?.id,
+                    trafficSource: postTrafficSource,
+                  });
+                }
+              }}
+              textClassName={
+                hasGradient
+                  ? 'text-lg sm:text-xl font-black text-white leading-relaxed text-center drop-shadow-sm'
+                  : 'text-sm sm:text-base text-slate-900 leading-relaxed font-normal text-left'
               }
-            }}
-            textClassName={
-              hasGradient
-                ? 'text-lg sm:text-xl font-black text-white leading-relaxed text-center drop-shadow-sm'
-                : 'text-sm sm:text-base text-slate-900 leading-relaxed font-normal text-left'
-            }
-            buttonClassName={
-              hasGradient
-                ? 'text-white hover:underline font-bold text-xs mt-2'
-                : 'text-blue-600 hover:text-blue-800 font-semibold text-sm mt-1'
-            }
-          />
+              buttonClassName={
+                hasGradient
+                  ? 'text-white hover:underline font-bold text-xs mt-2'
+                  : 'text-purple-600 hover:text-purple-800 font-semibold text-sm mt-1'
+              }
+            />
+          </div>
+          {post.tags && post.tags.length > 0 && (
+            <div className="px-4 pb-2 flex items-center gap-x-2 gap-y-0.5 flex-wrap text-xs text-teal-700 font-medium">
+              {post.tags.map((tag, i) => (
+                <span key={i}>#{tag.replace(/^#/, '')}</span>
+              ))}
+            </div>
+          )}
         </div>
       ) : (
-        <div className="relative group bg-slate-100 max-h-[520px] overflow-hidden flex items-center justify-center">
+        <div className="relative group bg-slate-950 max-h-[520px] overflow-hidden flex items-center justify-center">
           {post.videoSrc ? (
             <div className="relative w-full overflow-hidden flex flex-col items-center justify-center bg-black group/videoplayer">
               {Boolean(post.videoSrc) && (
@@ -1216,112 +1402,6 @@ export const PostCard: React.FC<PostCardProps> = ({
         </div>
       )}
 
-      {/* 3. Caption & AI Prompt Recipe Card (Default Closed / Opt-in) */}
-      {!isInlineEditing && (
-        <div className="p-4 space-y-3">
-          {post.videoTitle && (
-            <div className="flex items-center gap-2">
-              <span className="p-1 rounded-lg bg-purple-100 text-purple-700">
-                <Film className="w-3.5 h-3.5" />
-              </span>
-              <h4 className="text-base font-bold text-slate-900 leading-snug">
-                {post.videoTitle}
-              </h4>
-            </div>
-          )}
-
-          {!isPureTextPost && post.caption && (
-            <PostContent
-              text={post.caption}
-              charLimit={160}
-              onExpandToggle={(isExpanded) => {
-                if (isExpanded) {
-                  trackTextExpand({
-                    contentId: post.id,
-                    creatorId: post.author?.id || '',
-                    viewerId: userProfile?.id,
-                    trafficSource: postTrafficSource,
-                  });
-                }
-              }}
-              textClassName="text-sm text-slate-800 leading-relaxed font-normal"
-              buttonClassName="text-blue-600 hover:text-blue-800 font-semibold text-sm mt-1"
-            />
-          )}
-
-          {post.audioTrack && (
-            <div className="p-2.5 rounded-2xl bg-purple-50 border border-purple-200 flex items-center justify-between gap-3">
-              <div className="flex items-center gap-2.5 min-w-0">
-                <div className="relative group shrink-0">
-                  <img
-                    src={post.audioTrack.cover_url}
-                    alt={post.audioTrack.title}
-                    loading="lazy"
-                    decoding="async"
-                    className="w-10 h-10 rounded-xl object-cover border border-purple-200"
-                  />
-                  <button
-                    type="button"
-                    onClick={() => {
-                      if (!trackAudioRef.current) {
-                        const audio = new Audio(post.audioTrack!.audio_url);
-                        trackAudioRef.current = audio;
-                        audio.onended = () => setIsPlayingTrack(false);
-                        audio.onerror = () => setIsPlayingTrack(false);
-                      }
-                      if (isPlayingTrack) {
-                        trackAudioRef.current.pause();
-                        setIsPlayingTrack(false);
-                      } else {
-                        trackAudioRef.current.play().catch(() => setIsPlayingTrack(false));
-                        setIsPlayingTrack(true);
-                      }
-                    }}
-                    className="absolute inset-0 bg-black/40 hover:bg-black/60 rounded-xl flex items-center justify-center text-white transition cursor-pointer"
-                  >
-                    {isPlayingTrack ? (
-                      <Pause className="w-4 h-4 text-teal-300" />
-                    ) : (
-                      <Play className="w-4 h-4 text-purple-200 fill-purple-200 ml-0.5" />
-                    )}
-                  </button>
-                </div>
-
-                <div className="min-w-0">
-                  <div className="flex items-center gap-1.5">
-                    <Music className="w-3 h-3 text-purple-600 shrink-0" />
-                    <h4 className="text-xs font-bold text-slate-900 truncate">{post.audioTrack.title}</h4>
-                  </div>
-                  <p className="text-[10px] text-purple-700 truncate font-mono">
-                    {post.audioTrack.artist} • {formatDuration(post.audioTrack.duration)}
-                  </p>
-                </div>
-              </div>
-
-              <button
-                type="button"
-                onClick={() => setIsLicenseModalOpen(true)}
-                className="px-2 py-1 rounded-lg bg-teal-50 border border-teal-200 text-teal-800 hover:bg-teal-100 text-[10px] font-bold flex items-center gap-1 shrink-0 transition"
-                title="View verified licensing certificate"
-              >
-                <ShieldCheck className="w-3 h-3 text-teal-600" />
-                <span>{post.audioTrack.license_type}</span>
-              </button>
-            </div>
-          )}
-
-          {post.tags && post.tags.length > 0 && (
-            <div className="flex items-center gap-1.5 flex-wrap pt-1">
-              {post.tags.map((tag, i) => (
-                <span key={i} className="text-[11px] text-teal-700 font-medium">
-                  #{tag}
-                </span>
-              ))}
-            </div>
-          )}
-        </div>
-      )}
-
       {/* 4. Action Bar (Clean, mobile-friendly primary engagement actions: Like, Comment, Share) */}
       <div className="px-4 py-2 border-t border-slate-100 flex items-center justify-between w-full text-xs text-slate-600">
         <div className="flex items-center gap-3 sm:gap-6">
@@ -1386,27 +1466,40 @@ export const PostCard: React.FC<PostCardProps> = ({
         </div>
 
         <div className="flex items-center gap-2">
-          {/* 3. Share + count */}
-          <button
-            type="button"
-            id={`share-post-${post.id}`}
-            onClick={() => {
-              trackEngagementAction({
-                contentId: post.id,
-                contentType: resolvedContentType,
-                creatorId: post.author?.id || '',
-                viewerId: userProfile?.id,
-                action: 'share',
-                trafficSource: postTrafficSource,
-              });
-              if (onSharePost) onSharePost(post);
-            }}
-            className="px-2.5 py-1.5 rounded-lg hover:bg-slate-100 text-slate-700 flex items-center gap-1.5 text-xs font-semibold transition cursor-pointer shrink-0"
-            title="Share Post"
-          >
-            <Share2 className="w-4 h-4" />
-            <span>{post.sharesCount || 0}</span>
-          </button>
+          {/* 3. Share + count (Disabled cleanly on non-public / private-profile posts) */}
+          {allowExternalShare ? (
+            <button
+              type="button"
+              id={`share-post-${post.id}`}
+              onClick={() => {
+                trackEngagementAction({
+                  contentId: post.id,
+                  contentType: resolvedContentType,
+                  creatorId: post.author?.id || '',
+                  viewerId: authUser?.id || userProfile?.id,
+                  action: 'share',
+                  trafficSource: postTrafficSource,
+                });
+                if (onSharePost) onSharePost(post);
+              }}
+              className="px-2.5 py-1.5 rounded-lg hover:bg-slate-100 text-slate-700 flex items-center gap-1.5 text-xs font-semibold transition cursor-pointer shrink-0"
+              title="Share Post"
+            >
+              <Share2 className="w-4 h-4" />
+              <span>{post.sharesCount || 0}</span>
+            </button>
+          ) : (
+            <button
+              type="button"
+              id={`share-post-${post.id}`}
+              onClick={() => onShowToast?.('Sharing is disabled for Followers-only, Only Me, or Private-profile posts.')}
+              className="px-2.5 py-1.5 rounded-lg text-slate-400 flex items-center gap-1.5 text-xs font-semibold cursor-not-allowed shrink-0"
+              title="External sharing disabled by post audience or profile privacy"
+            >
+              <Lock className="w-3.5 h-3.5" />
+              <span>{post.sharesCount || 0}</span>
+            </button>
+          )}
         </div>
       </div>
 
@@ -1459,7 +1552,7 @@ export const PostCard: React.FC<PostCardProps> = ({
                       </div>
                     </div>
 
-                    {isContentOwner(vc.author.id, userProfile.id) && onDeleteVoiceComment && (
+                    {isContentOwner(vc.author.id, userProfile, authUser) && onDeleteVoiceComment && (
                       <button
                         type="button"
                         onClick={() => onDeleteVoiceComment(post.id, vc.id)}
@@ -1497,7 +1590,7 @@ export const PostCard: React.FC<PostCardProps> = ({
                     </div>
                   </div>
 
-                  {isContentOwner(c.author.id, userProfile.id) && (
+                  {isContentOwner(c.author.id, userProfile, authUser) && (
                     <button
                       type="button"
                       onClick={() => handleDeleteCommentInternal(c.id)}
@@ -1602,6 +1695,38 @@ export const PostCard: React.FC<PostCardProps> = ({
           content={postToContentDescriptor(post)}
         />
       )}
+
+      {/* Post & Creator Details Modal (Surfaces @username, stylePreset, tags safely) */}
+      <PostDetailsModal
+        isOpen={isDetailsModalOpen}
+        onClose={() => setIsDetailsModalOpen(false)}
+        onViewProfile={onViewProfile}
+        details={{
+          id: post.id,
+          contentTypeLabel:
+            resolvedContentType === 'reel'
+              ? 'Reel'
+              : resolvedContentType === 'video'
+              ? 'Video Post'
+              : resolvedContentType === 'carousel'
+              ? 'Carousel Post'
+              : resolvedContentType === 'image'
+              ? 'Photo Post'
+              : 'Text Post',
+          authorId: post.postingIdentity?.id || post.author.id,
+          authorName: post.postingIdentity?.name || post.author.name,
+          authorUsername: post.postingIdentity?.username || post.author.username,
+          authorAvatar: post.postingIdentity?.avatar || post.author.avatar,
+          identityBadge: post.postingIdentity?.badge || null,
+          createdAt: post.createdAt,
+          visibility: post.visibility,
+          authorProfilePrivacy: resolvedAuthorPrivacy,
+          stylePreset: post.stylePreset || null,
+          tags: post.tags || null,
+          musicLabel: post.audioTrack ? `${post.audioTrack.title} · ${post.audioTrack.artist}` : null,
+          caption: post.caption || post.prompt || null,
+        }}
+      />
     </article>
     </ContentTelemetryObserver>
   );

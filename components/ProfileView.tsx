@@ -35,12 +35,24 @@ import {
   Loader2,
   UserPlus,
   UserCheck,
+  Lock,
+  Clock,
+  AlertCircle,
+  UserX,
 } from 'lucide-react';
-import { UserProfile, CommunityPost, ReelHighlight } from '../types/community';
+import {
+  FollowRequestRecord,
+  FollowRelationStatus,
+  PostAudience,
+  ProfilePrivacy,
+  UserProfile,
+  CommunityPost,
+  ReelHighlight,
+} from '../types/community';
 import { DailyCreditsData } from '../utils/creditManager';
 import { getPages, getGroups } from '../utils/socialStore';
 import { useAuth } from '../context/AuthContext';
-import { supabase } from '../services/supabaseClient';
+import { isSupabaseConfigured, supabase } from '../services/supabaseClient';
 import { fileToBase64, saveMediaItem } from '../utils/mediaStorage';
 import { generateCustomAIAvatar } from '../services/aiAssistantService';
 import { compressImageDataUrl } from '../utils/storageUtils';
@@ -48,13 +60,35 @@ import { fetchSupabaseProfile } from '../services/authService';
 import {
   followUser,
   unfollowUser,
+  cancelFollowRequest,
   fetchFollowStatus,
+  fetchFollowedUserIds,
+  fetchIncomingFollowRequests,
+  respondToFollowRequest,
+  fetchProfilesPrivacyBatch,
+  reconcileProfileFollowCounts,
   isValidProfileUuid,
 } from '../services/followService';
-import { syncFollowCache, isUserFollowed } from '../utils/followStore';
+import {
+  syncFollowCache,
+  syncPendingFollowRequestCache,
+  isUserFollowed,
+  isFollowRequestPending,
+} from '../utils/followStore';
+import { isContentOwner } from '../utils/communityStore';
+import {
+  canViewerAccessPost,
+  canViewPrivateProfileContent,
+  formatAudienceMeta,
+  normalizeDefaultPostAudience,
+  normalizeProfilePrivacy,
+} from '../utils/privacyPolicy';
+import { addNotification } from '../utils/notificationStore';
 import {
   getSavedPostsList,
   getSavedReelsList,
+  filterVisibleSavedPosts,
+  filterVisibleSavedReels,
   toggleSavePost,
   toggleSaveReel,
 } from '../utils/bookmarkStore';
@@ -119,9 +153,18 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
 
   // Real-time Supabase profile fetch for viewed profile user when targeting another member
   const [fetchedProfile, setFetchedProfile] = useState<UserProfile | null>(null);
+  const [ownReconciledCounts, setOwnReconciledCounts] = useState<{
+    followersCount: number;
+    followingCount: number;
+  } | null>(null);
   const [isStartingChat, setIsStartingChat] = useState(false);
-  const [isFollowingProfile, setIsFollowingProfile] = useState<boolean>(false);
+  const [followStatus, setFollowStatus] = useState<FollowRelationStatus>('none');
+  const isFollowingProfile = followStatus === 'following';
   const [isFollowLoading, setIsFollowLoading] = useState<boolean>(false);
+  const [incomingRequests, setIncomingRequests] = useState<FollowRequestRecord[]>([]);
+  const [respondingRequestId, setRespondingRequestId] = useState<string | null>(null);
+  const [followedSet, setFollowedSet] = useState<Set<string>>(new Set());
+  const [profilesPrivacyMap, setProfilesPrivacyMap] = useState<Map<string, ProfilePrivacy>>(new Map());
 
   useEffect(() => {
     let isMounted = true;
@@ -132,30 +175,104 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
         }
       });
 
-      // Authoritative follow status query from Supabase
       if (isValidProfileUuid(viewedProfileUserId)) {
-        fetchFollowStatus(viewedProfileUserId).then(({ isFollowing }) => {
+        reconcileProfileFollowCounts(viewedProfileUserId).then((counts) => {
+          if (isMounted && !counts.error) {
+            setFetchedProfile((prev) =>
+              prev
+                ? {
+                    ...prev,
+                    stats: {
+                      ...prev.stats,
+                      followersCount: counts.followersCount,
+                      followingCount: counts.followingCount,
+                    },
+                  }
+                : prev
+            );
+          }
+        });
+        fetchFollowStatus(viewedProfileUserId).then(({ status }) => {
           if (isMounted) {
-            setIsFollowingProfile(isFollowing);
+            setFollowStatus(status);
           }
         });
       } else {
-        setIsFollowingProfile(isUserFollowed(viewedProfileUserId));
+        setFollowStatus(
+          isUserFollowed(viewedProfileUserId)
+            ? 'following'
+            : isFollowRequestPending(viewedProfileUserId)
+            ? 'pending'
+            : 'none'
+        );
       }
     } else {
       setFetchedProfile(null);
-      setIsFollowingProfile(false);
+      setFollowStatus('none');
+      if (authUser?.id && isValidProfileUuid(authUser.id)) {
+        reconcileProfileFollowCounts(authUser.id).then((counts) => {
+          if (isMounted && !counts.error) {
+            setOwnReconciledCounts({
+              followersCount: counts.followersCount,
+              followingCount: counts.followingCount,
+            });
+          }
+        });
+        fetchIncomingFollowRequests().then(({ requests, error }) => {
+          if (isMounted && !error) {
+            setIncomingRequests(requests);
+          }
+        });
+      } else {
+        setIncomingRequests([]);
+      }
     }
     return () => {
       isMounted = false;
     };
-  }, [isOwnProfile, viewedProfileUserId]);
+  }, [isOwnProfile, viewedProfileUserId, authUser?.id]);
+
+  // Load viewer's followedSet and saved authors' privacy map for Saved Tab visibility enforcement
+  useEffect(() => {
+    let active = true;
+    if (authUser?.id && isValidProfileUuid(authUser.id)) {
+      fetchFollowedUserIds().then(({ followedIds, error }) => {
+        if (active && !error) setFollowedSet(followedIds);
+      });
+    } else {
+      setFollowedSet(new Set());
+    }
+    const authorIds = Array.from(
+      new Set([
+        ...(allPosts || []).map((p) => p.author?.id),
+        ...(allReels || []).map((r) => r.author?.id),
+      ].filter((id): id is string => Boolean(id && isValidProfileUuid(id))))
+    );
+    if (authorIds.length > 0) {
+      fetchProfilesPrivacyBatch(authorIds).then(({ privacyMap, error }) => {
+        if (active && !error) setProfilesPrivacyMap(privacyMap);
+      });
+    }
+    return () => {
+      active = false;
+    };
+  }, [authUser?.id, allPosts, allReels]);
 
   const displayProfile: UserProfile = isOwnProfile
-    ? userProfile
+    ? ownReconciledCounts
+      ? {
+          ...userProfile,
+          stats: {
+            ...userProfile.stats,
+            followersCount: ownReconciledCounts.followersCount,
+            followingCount: ownReconciledCounts.followingCount,
+          },
+        }
+      : userProfile
     : (fetchedProfile || {
         ...userProfile,
         id: viewedProfileUserId || userProfile.id,
+        profilePrivacy: 'public',
         stats: {
           postsCount: userPosts.length,
           followersCount: 0,
@@ -165,6 +282,62 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
         },
       });
 
+  const viewerId = authUser?.id || (userProfile.id !== 'guest' ? userProfile.id : null);
+  const canViewTargetProfileContent = isOwnProfile
+    ? true
+    : canViewPrivateProfileContent({
+        targetUserId: displayProfile.id,
+        profilePrivacy: displayProfile.profilePrivacy || 'public',
+        viewerId,
+        viewerFollowsTarget: isFollowingProfile,
+      });
+
+  const visibleUserPosts = React.useMemo(() => {
+    if (isOwnProfile) return userPosts;
+    if (!canViewTargetProfileContent) return [];
+    return userPosts.filter((p) =>
+      canViewerAccessPost({
+        visibility: p.visibility,
+        authorId: p.author?.id,
+        authorProfilePrivacy: displayProfile.profilePrivacy || p.authorProfilePrivacy || p.author?.profilePrivacy || 'public',
+        viewerId,
+        viewerFollowsAuthor: isFollowingProfile,
+        viewerIsOwner: isContentOwner(p.author, userProfile, authUser, p.postingIdentity, p.id),
+      })
+    );
+  }, [isOwnProfile, canViewTargetProfileContent, userPosts, displayProfile.profilePrivacy, viewerId, isFollowingProfile, authUser?.id, userProfile?.id]);
+
+  const visibleUserReels = React.useMemo(() => {
+    if (isOwnProfile) return userReels;
+    if (!canViewTargetProfileContent) return [];
+    return userReels.filter((r) =>
+      canViewerAccessPost({
+        visibility: r.visibility,
+        authorId: r.author?.id,
+        authorProfilePrivacy: displayProfile.profilePrivacy || r.authorProfilePrivacy || r.author?.profilePrivacy || 'public',
+        viewerId,
+        viewerFollowsAuthor: isFollowingProfile,
+        viewerIsOwner: isContentOwner(r.author, userProfile, authUser, undefined, r.id),
+      })
+    );
+  }, [isOwnProfile, canViewTargetProfileContent, userReels, displayProfile.profilePrivacy, viewerId, isFollowingProfile, authUser?.id, userProfile?.id]);
+
+  const computeVisibleSavedPosts = () =>
+    filterVisibleSavedPosts(allPosts, {
+      viewerId,
+      followedUserIds: followedSet,
+      profilesPrivacyMap,
+      isOwnerCheck: (p) => isContentOwner(p.author, userProfile, authUser, p.postingIdentity, p.id),
+    });
+
+  const computeVisibleSavedReels = () =>
+    filterVisibleSavedReels(allReels, {
+      viewerId,
+      followedUserIds: followedSet,
+      profilesPrivacyMap,
+      isOwnerCheck: (r) => isContentOwner(r.author, userProfile, authUser, undefined, r.id),
+    });
+
   const [isEditing, setIsEditing] = useState(false);
   const [isSwitcherOpen, setIsSwitcherOpen] = useState(false);
   const [name, setName] = useState(userProfile.name);
@@ -172,10 +345,16 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
   const [bio, setBio] = useState(userProfile.bio);
   const [location, setLocation] = useState(userProfile.location || '');
   const [website, setWebsite] = useState(userProfile.website || '');
+  const [profilePrivacy, setProfilePrivacy] = useState<ProfilePrivacy>(() =>
+    normalizeProfilePrivacy(userProfile.profilePrivacy)
+  );
+  const [defaultPostAudience, setDefaultPostAudience] = useState<PostAudience>(() =>
+    normalizeDefaultPostAudience(userProfile.defaultPostAudience)
+  );
   const [activeTab, setActiveTab] = useState<'creations' | 'reels' | 'analytics' | 'saved'>('creations');
   const [savedFilter, setSavedFilter] = useState<'all' | 'posts' | 'reels'>('all');
-  const [savedPosts, setSavedPosts] = useState<CommunityPost[]>(() => getSavedPostsList(allPosts));
-  const [savedReels, setSavedReels] = useState<ReelHighlight[]>(() => getSavedReelsList(allReels));
+  const [savedPosts, setSavedPosts] = useState<CommunityPost[]>(() => computeVisibleSavedPosts());
+  const [savedReels, setSavedReels] = useState<ReelHighlight[]>(() => computeVisibleSavedReels());
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [inspectingAnalyticsItem, setInspectingAnalyticsItem] = useState<ContentCatalogDescriptor | null>(null);
 
@@ -206,14 +385,14 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
     setTimeout(() => setToastMessage(null), 3000);
   };
 
-  // Sync saved posts & reels when storage changes or props update
+  // Sync saved posts & reels when storage, follow set, or props update (filtered for privacy)
   useEffect(() => {
-    setSavedPosts(getSavedPostsList(allPosts));
-    setSavedReels(getSavedReelsList(allReels));
+    setSavedPosts(computeVisibleSavedPosts());
+    setSavedReels(computeVisibleSavedReels());
 
     const handleSavedUpdated = () => {
-      setSavedPosts(getSavedPostsList(allPosts));
-      setSavedReels(getSavedReelsList(allReels));
+      setSavedPosts(computeVisibleSavedPosts());
+      setSavedReels(computeVisibleSavedReels());
     };
 
     window.addEventListener('metfa_saved_items_updated', handleSavedUpdated);
@@ -225,14 +404,14 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
       window.removeEventListener('metfa_posts_updated', handleSavedUpdated);
       window.removeEventListener('metfa_reels_updated', handleSavedUpdated);
     };
-  }, [allPosts, allReels]);
+  }, [allPosts, allReels, followedSet, profilesPrivacyMap, viewerId]);
 
   const handleUnsavePost = (postId: string) => {
     const res = toggleSavePost(postId);
     if (onUpdatePosts) {
       onUpdatePosts(res.updatedPosts);
     }
-    setSavedPosts(getSavedPostsList(res.updatedPosts));
+    setSavedPosts(computeVisibleSavedPosts());
     showToast('Post removed from saved bookmarks');
   };
 
@@ -241,7 +420,7 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
     if (onUpdateReels) {
       onUpdateReels(res.updatedReels);
     }
-    setSavedReels(getSavedReelsList(res.updatedReels));
+    setSavedReels(computeVisibleSavedReels());
     showToast('Reel removed from saved bookmarks');
   };
 
@@ -261,6 +440,8 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
     setBio(userProfile.bio);
     setLocation(userProfile.location || '');
     setWebsite(userProfile.website || '');
+    setProfilePrivacy(normalizeProfilePrivacy(userProfile.profilePrivacy));
+    setDefaultPostAudience(normalizeDefaultPostAudience(userProfile.defaultPostAudience));
   }, [userProfile]);
 
   // Close Account Switcher when clicking outside
@@ -287,10 +468,42 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
       bio: bio.trim(),
       location: location.trim(),
       website: website.trim(),
+      profilePrivacy,
+      defaultPostAudience,
     };
     updateProfile(updated);
     onUpdateProfile(updated);
     setIsEditing(false);
+    showToast('Profile & privacy settings updated');
+  };
+
+  const handleRespondFollowRequest = async (req: FollowRequestRecord, decision: 'approve' | 'decline') => {
+    if (!isOwnProfile || respondingRequestId === req.id) return;
+    setRespondingRequestId(req.id);
+    const res = await respondToFollowRequest(req.id, decision);
+    setRespondingRequestId(null);
+    if (!res.success) {
+      showToast(res.error || 'Could not update follow request.');
+      return;
+    }
+    setIncomingRequests((prev) => prev.filter((r) => r.id !== req.id));
+    if (decision === 'approve' && authUser?.id && isValidProfileUuid(authUser.id)) {
+      reconcileProfileFollowCounts(authUser.id).then((counts) => {
+        if (!counts.error) {
+          setOwnReconciledCounts({
+            followersCount: counts.followersCount,
+            followingCount: counts.followingCount,
+          });
+        }
+      });
+      addNotification({
+        type: 'follow_approved',
+        title: 'Follow Request Approved',
+        message: `@${req.requesterProfile?.username || 'creator'} can now follow your profile.`,
+        linkTab: 'profile',
+      });
+    }
+    showToast(decision === 'approve' ? 'Follow request approved' : 'Follow request declined');
   };
 
   const handleSelectIdentity = (type: 'personal' | 'page' | 'group', item?: any) => {
@@ -517,6 +730,25 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
                   )}
                 </span>
               )}
+              <span
+                className={`text-[10px] px-2.5 py-0.5 rounded-full font-semibold flex items-center gap-1 border ${
+                  (displayProfile.profilePrivacy || 'public') === 'private'
+                    ? 'bg-amber-50 border-amber-200 text-amber-800'
+                    : 'bg-slate-50 border-slate-200 text-slate-600'
+                }`}
+              >
+                {(displayProfile.profilePrivacy || 'public') === 'private' ? (
+                  <>
+                    <Lock className="w-3 h-3 text-amber-600" />
+                    <span>Private Account</span>
+                  </>
+                ) : (
+                  <>
+                    <Globe className="w-3 h-3 text-teal-600" />
+                    <span>Public Profile</span>
+                  </>
+                )}
+              </span>
             </div>
             <div className="flex items-center gap-2 mt-1">
               <span className="text-xs sm:text-sm text-teal-700 font-mono font-bold">
@@ -616,6 +848,86 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
                     />
                   </div>
                 </div>
+
+                {/* Profile Privacy & Default Post Audience Settings */}
+                <div className="bg-white border border-slate-200 rounded-2xl p-3.5 space-y-3">
+                  <div>
+                    <label className="text-xs font-bold text-slate-800 block mb-1.5">Profile Privacy</label>
+                    <div className="grid grid-cols-2 gap-2">
+                      {[
+                        {
+                          id: 'public' as ProfilePrivacy,
+                          label: 'Public Profile',
+                          sub: 'Anyone can follow & view public posts',
+                          icon: Globe,
+                        },
+                        {
+                          id: 'private' as ProfilePrivacy,
+                          label: 'Private Profile',
+                          sub: 'Follow requests require your approval',
+                          icon: Lock,
+                        },
+                      ].map((opt) => {
+                        const IconComp = opt.icon;
+                        const active = profilePrivacy === opt.id;
+                        return (
+                          <button
+                            key={opt.id}
+                            type="button"
+                            onClick={() => setProfilePrivacy(opt.id)}
+                            className={`p-2.5 rounded-xl border text-left transition cursor-pointer ${
+                              active
+                                ? 'bg-purple-50 border-purple-400 text-purple-950 shadow-2xs'
+                                : 'bg-slate-50 border-slate-200 text-slate-700 hover:border-purple-300'
+                            }`}
+                          >
+                            <div className="flex items-center gap-1.5 text-xs font-bold">
+                              <IconComp className={`w-3.5 h-3.5 ${active ? 'text-purple-600' : 'text-slate-500'}`} />
+                              <span>{opt.label}</span>
+                            </div>
+                            <p className="text-[10px] text-slate-500 mt-0.5">{opt.sub}</p>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="text-xs font-bold text-slate-800 block mb-1.5">Default Post Audience</label>
+                    <div className="grid grid-cols-3 gap-1.5">
+                      {[
+                        { id: 'public' as PostAudience, label: 'Public', icon: Globe },
+                        { id: 'followers' as PostAudience, label: 'Followers', icon: Users },
+                        { id: 'only_me' as PostAudience, label: 'Only Me', icon: Lock },
+                      ].map((opt) => {
+                        const IconComp = opt.icon;
+                        const active = defaultPostAudience === opt.id;
+                        return (
+                          <button
+                            key={opt.id}
+                            type="button"
+                            onClick={() => setDefaultPostAudience(opt.id)}
+                            className={`px-2.5 py-2 rounded-xl border text-xs font-bold flex items-center justify-center gap-1.5 transition cursor-pointer ${
+                              active
+                                ? 'bg-purple-600 text-white border-purple-600'
+                                : 'bg-slate-50 text-slate-700 border-slate-200 hover:border-purple-300'
+                            }`}
+                          >
+                            <IconComp className="w-3.5 h-3.5" />
+                            <span>{opt.label}</span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  <div className="p-2.5 bg-amber-50 border border-amber-200 rounded-xl flex items-start gap-2 text-[11px] text-amber-800">
+                    <AlertCircle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+                    <span>
+                      Changing Profile Privacy applies going forward and does NOT overwrite or retroactively alter the audience of your existing posts.
+                    </span>
+                  </div>
+                </div>
               </div>
             )}
           </div>
@@ -657,7 +969,7 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
               )
             )}
 
-            {/* Follow / Following Button - ONLY when viewing another user's profile (!isOwnProfile) */}
+            {/* Follow / Requested / Following Button - ONLY when viewing another user's profile (!isOwnProfile) */}
             {!isOwnProfile && (
               <button
                 type="button"
@@ -670,19 +982,38 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
                     return;
                   }
 
-                  if (targetUserId === authUser?.id) return;
+                  if (targetUserId === authUser?.id || targetUserId === userProfile.id) return;
 
                   if (isValidProfileUuid(targetUserId)) {
                     setIsFollowLoading(true);
-                    if (!isFollowingProfile) {
-                      const { success, error } = await followUser(targetUserId);
+                    if (followStatus === 'pending') {
+                      const res = await cancelFollowRequest(targetUserId);
                       setIsFollowLoading(false);
-                      if (success) {
-                        setIsFollowingProfile(true);
+                      if (res.success) {
+                        setFollowStatus('none');
+                        syncPendingFollowRequestCache(targetUserId, false);
+                        showToast(`Follow request cancelled for ${displayProfile.name}`);
+                      } else {
+                        showToast(res.error || 'Failed to cancel follow request.');
+                      }
+                    } else if (followStatus === 'none') {
+                      const res = await followUser(targetUserId);
+                      setIsFollowLoading(false);
+                      if (res.success && res.requestStatus === 'pending') {
+                        setFollowStatus('pending');
+                        syncFollowCache(
+                          { id: targetUserId, name: displayProfile.name, username: displayProfile.username, avatar: displayProfile.avatar },
+                          false
+                        );
+                        syncPendingFollowRequestCache(targetUserId, true);
+                        showToast(`Follow request sent to ${displayProfile.name}`);
+                      } else if (res.success && res.isFollowing) {
+                        setFollowStatus('following');
                         syncFollowCache(
                           { id: targetUserId, name: displayProfile.name, username: displayProfile.username, avatar: displayProfile.avatar },
                           true
                         );
+                        syncPendingFollowRequestCache(targetUserId, false);
                         trackFollowAttribution({
                           creatorId: targetUserId,
                           viewerId: authUser?.id || userProfile.id,
@@ -690,23 +1021,36 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
                           followDelta: 1,
                           trafficSource: 'profile',
                         });
-                        // Refresh profile stats to reflect updated counters from database trigger
-                        fetchSupabaseProfile(targetUserId).then((prof) => {
-                          if (prof) setFetchedProfile(prof);
+                        reconcileProfileFollowCounts(targetUserId).then((counts) => {
+                          if (!counts.error) {
+                            setFetchedProfile((prev) =>
+                              prev
+                                ? {
+                                    ...prev,
+                                    stats: {
+                                      ...prev.stats,
+                                      followersCount: counts.followersCount,
+                                      followingCount: counts.followingCount,
+                                    },
+                                  }
+                                : prev
+                            );
+                          }
                         });
                         showToast(`You are now following ${displayProfile.name}`);
                       } else {
-                        showToast(error || 'Failed to follow user.');
+                        showToast(res.error || 'Failed to follow user.');
                       }
                     } else {
                       const { success, error } = await unfollowUser(targetUserId);
                       setIsFollowLoading(false);
                       if (success) {
-                        setIsFollowingProfile(false);
+                        setFollowStatus('none');
                         syncFollowCache(
                           { id: targetUserId, name: displayProfile.name, username: displayProfile.username, avatar: displayProfile.avatar },
                           false
                         );
+                        syncPendingFollowRequestCache(targetUserId, false);
                         trackFollowAttribution({
                           creatorId: targetUserId,
                           viewerId: authUser?.id || userProfile.id,
@@ -714,19 +1058,30 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
                           followDelta: -1,
                           trafficSource: 'profile',
                         });
-                        // Refresh profile stats to reflect updated counters from database trigger
-                        fetchSupabaseProfile(targetUserId).then((prof) => {
-                          if (prof) setFetchedProfile(prof);
+                        reconcileProfileFollowCounts(targetUserId).then((counts) => {
+                          if (!counts.error) {
+                            setFetchedProfile((prev) =>
+                              prev
+                                ? {
+                                    ...prev,
+                                    stats: {
+                                      ...prev.stats,
+                                      followersCount: counts.followersCount,
+                                      followingCount: counts.followingCount,
+                                    },
+                                  }
+                                : prev
+                            );
+                          }
                         });
                         showToast(`Unfollowed ${displayProfile.name}`);
                       } else {
                         showToast(error || 'Failed to unfollow user.');
                       }
                     }
-                  } else {
-                    // Non-UUID local fallback
+                  } else if (!isSupabaseConfigured()) {
                     const next = !isFollowingProfile;
-                    setIsFollowingProfile(next);
+                    setFollowStatus(next ? 'following' : 'none');
                     syncFollowCache(
                       { id: targetUserId, name: displayProfile.name, username: displayProfile.username, avatar: displayProfile.avatar },
                       next
@@ -744,24 +1099,36 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
                 className={`px-4 py-2 text-xs font-bold rounded-xl flex items-center gap-1.5 shadow-xs transition active:scale-95 cursor-pointer ${
                   isFollowLoading ? 'opacity-70 cursor-wait' : ''
                 } ${
-                  isFollowingProfile
+                  followStatus === 'following'
                     ? 'bg-slate-100 hover:bg-rose-50 text-slate-800 hover:text-rose-600 border border-slate-200 hover:border-rose-200'
+                    : followStatus === 'pending'
+                    ? 'bg-amber-50 hover:bg-rose-50 text-amber-800 hover:text-rose-600 border border-amber-200 hover:border-rose-200'
                     : 'bg-purple-600 hover:bg-purple-700 text-white'
                 }`}
-                title={isFollowingProfile ? 'Following (Click to Unfollow)' : `Follow ${displayProfile.name}`}
+                title={
+                  followStatus === 'following'
+                    ? 'Following (Click to Unfollow)'
+                    : followStatus === 'pending'
+                    ? 'Follow request pending (Click to cancel)'
+                    : `Follow ${displayProfile.name}`
+                }
               >
                 {isFollowLoading ? (
                   <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                ) : isFollowingProfile ? (
+                ) : followStatus === 'following' ? (
                   <UserCheck className="w-3.5 h-3.5 text-emerald-600" />
+                ) : followStatus === 'pending' ? (
+                  <Clock className="w-3.5 h-3.5 text-amber-600" />
                 ) : (
                   <UserPlus className="w-3.5 h-3.5" />
                 )}
                 <span>
                   {isFollowLoading
                     ? 'Updating...'
-                    : isFollowingProfile
+                    : followStatus === 'following'
                     ? 'Following'
+                    : followStatus === 'pending'
+                    ? 'Requested'
                     : 'Follow'}
                 </span>
               </button>
@@ -1106,13 +1473,22 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
           {/* Stats Strip */}
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mt-6 pt-5 border-t border-slate-100 text-center">
             <div className="p-3 bg-slate-50 rounded-2xl border border-slate-200 flex flex-col items-center justify-center">
-              <span className="text-xl sm:text-2xl font-black text-slate-900">{userPosts.length}</span>
+              <span className="text-xl sm:text-2xl font-black text-slate-900">
+                {canViewTargetProfileContent ? visibleUserPosts.length : '—'}
+              </span>
               <span className="text-[11px] text-slate-500 uppercase font-semibold mt-0.5">Posts</span>
             </div>
 
             <div className="p-3 bg-slate-50 rounded-2xl border border-slate-200 flex flex-col items-center justify-center">
               <span className="text-xl sm:text-2xl font-black text-slate-900">
-                {displayProfile.stats?.followersCount ?? 0}
+                {canViewFollowList({
+                  targetUserId: displayProfile.id,
+                  profilePrivacy: displayProfile.profilePrivacy,
+                  viewerId,
+                  viewerFollowsTarget: isFollowingProfile,
+                })
+                  ? (displayProfile.stats?.followersCount ?? 0)
+                  : (displayProfile.stats?.followersCount ?? 0)}
               </span>
               <span className="text-[11px] text-slate-500 uppercase font-semibold mt-0.5">Followers</span>
             </div>
@@ -1125,10 +1501,73 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
             </div>
 
             <div className="p-3 bg-slate-50 rounded-2xl border border-slate-200 flex flex-col items-center justify-center">
-              <span className="text-xl sm:text-2xl font-black text-slate-900">{userReels.length}</span>
+              <span className="text-xl sm:text-2xl font-black text-slate-900">
+                {canViewTargetProfileContent ? visibleUserReels.length : '—'}
+              </span>
               <span className="text-[11px] text-slate-500 uppercase font-semibold mt-0.5">Reels</span>
             </div>
           </div>
+
+          {/* Incoming Follow Requests Panel (Own Profile Only) */}
+          {isOwnProfile && incomingRequests.length > 0 && (
+            <div className="mt-5 p-4 bg-purple-50/70 border border-purple-200 rounded-2xl space-y-3 animate-fadeIn">
+              <div className="flex items-center justify-between gap-2">
+                <div className="flex items-center gap-2">
+                  <UserPlus className="w-4 h-4 text-purple-600" />
+                  <h4 className="text-xs font-bold text-slate-900">
+                    Follow Requests ({incomingRequests.length})
+                  </h4>
+                </div>
+                <span className="text-[10px] font-semibold text-purple-700">
+                  Pending approval
+                </span>
+              </div>
+              <div className="space-y-2">
+                {incomingRequests.map((req) => (
+                  <div
+                    key={req.id}
+                    className="flex items-center justify-between gap-3 bg-white border border-purple-100 rounded-xl p-2.5 shadow-2xs"
+                  >
+                    <div className="flex items-center gap-2.5 min-w-0">
+                      <img
+                        src={req.requesterProfile?.avatar || userProfile.avatar}
+                        alt={req.requesterProfile?.name || 'Requester'}
+                        className="w-9 h-9 rounded-xl object-cover border border-slate-200 shrink-0"
+                      />
+                      <div className="min-w-0">
+                        <p className="text-xs font-bold text-slate-900 truncate">
+                          {req.requesterProfile?.name || 'METFA Creator'}
+                        </p>
+                        <p className="text-[10px] text-teal-700 font-mono truncate">
+                          @{req.requesterProfile?.username || 'creator'}
+                        </p>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-1.5 shrink-0">
+                      <button
+                        type="button"
+                        disabled={respondingRequestId === req.id}
+                        onClick={() => handleRespondFollowRequest(req, 'approve')}
+                        className="px-3 py-1.5 bg-purple-600 hover:bg-purple-700 disabled:opacity-50 text-white text-[11px] font-bold rounded-lg transition cursor-pointer flex items-center gap-1"
+                      >
+                        <Check className="w-3 h-3" />
+                        <span>Approve</span>
+                      </button>
+                      <button
+                        type="button"
+                        disabled={respondingRequestId === req.id}
+                        onClick={() => handleRespondFollowRequest(req, 'decline')}
+                        className="px-2.5 py-1.5 bg-slate-100 hover:bg-rose-50 disabled:opacity-50 text-slate-700 hover:text-rose-600 border border-slate-200 text-[11px] font-bold rounded-lg transition cursor-pointer flex items-center gap-1"
+                      >
+                        <UserX className="w-3 h-3" />
+                        <span>Decline</span>
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
       </div>
 
@@ -1147,7 +1586,7 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
               }`}
             >
               <Compass className="w-3.5 h-3.5" />
-              <span>Posts & Artworks ({userPosts.length})</span>
+              <span>Posts & Artworks ({canViewTargetProfileContent ? visibleUserPosts.length : 0})</span>
             </button>
 
             <button
@@ -1161,7 +1600,7 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
               }`}
             >
               <Film className="w-3.5 h-3.5" />
-              <span>Reels ({userReels.length})</span>
+              <span>Reels ({canViewTargetProfileContent ? visibleUserReels.length : 0})</span>
             </button>
 
             {isOwnProfile && (
@@ -1198,11 +1637,24 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
           </div>
         </div>
 
+        {/* Private Account Gate when viewing another user's private profile without approved follow */}
+        {!isOwnProfile && !canViewTargetProfileContent && (activeTab === 'creations' || activeTab === 'reels') && (
+          <div className="py-14 text-center bg-white rounded-3xl border border-slate-200 p-8 space-y-3 shadow-xs animate-fadeIn">
+            <div className="w-14 h-14 rounded-2xl bg-amber-50 border border-amber-200 text-amber-600 flex items-center justify-center mx-auto">
+              <Lock className="w-7 h-7" />
+            </div>
+            <h4 className="text-base font-black text-slate-900">This Account is Private</h4>
+            <p className="text-xs text-slate-500 max-w-sm mx-auto leading-relaxed">
+              Follow @{displayProfile.username} to see their posts, reels, and artworks once your follow request is approved.
+            </p>
+          </div>
+        )}
+
         {/* Tab Content */}
-        {activeTab === 'creations' && (
+        {activeTab === 'creations' && canViewTargetProfileContent && (
           <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
-            {userPosts.length > 0 ? (
-              userPosts.map((post) => (
+            {visibleUserPosts.length > 0 ? (
+              visibleUserPosts.map((post) => (
                 <div
                   key={post.id}
                   onClick={() => {
@@ -1249,10 +1701,10 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
           </div>
         )}
 
-        {activeTab === 'reels' && (
+        {activeTab === 'reels' && canViewTargetProfileContent && (
           <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3">
-            {userReels.length > 0 ? (
-              userReels.map((reel) => (
+            {visibleUserReels.length > 0 ? (
+              visibleUserReels.map((reel) => (
                 <div
                   key={reel.id}
                   onClick={() => {
@@ -1377,7 +1829,13 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
                             />
                             <div className="min-w-0">
                               <p className="text-xs font-bold text-slate-900 truncate">{post.author.name}</p>
-                              <p className="text-[10px] text-teal-700 truncate font-mono">@{post.author.username}</p>
+                              <div className="flex items-center gap-1 text-[10px] text-slate-500">
+                                <span className="truncate">{post.createdAt || 'Recently'}</span>
+                                <span aria-hidden="true">·</span>
+                                <span className="truncate">
+                                  {formatAudienceMeta(post.visibility, post.authorProfilePrivacy || post.author?.profilePrivacy).shortLabel}
+                                </span>
+                              </div>
                             </div>
                           </div>
 
@@ -1385,7 +1843,7 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
                             type="button"
                             id={`unsave-post-btn-${post.id}`}
                             onClick={() => handleUnsavePost(post.id)}
-                            className="p-1.5 bg-amber-50 hover:bg-amber-100 border border-amber-300 text-amber-800 rounded-xl text-xs flex items-center gap-1 transition cursor-pointer"
+                            className="p-1.5 bg-amber-50 hover:bg-amber-100 border border-amber-300 text-amber-800 rounded-xl text-xs flex items-center gap-1 transition cursor-pointer shrink-0"
                             title="Remove from bookmarks"
                           >
                             <Bookmark className="w-3.5 h-3.5 fill-current text-amber-500" />
@@ -1393,26 +1851,29 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
                           </button>
                         </div>
 
-                        {/* Media / Canvas Preview */}
+                        {/* Caption below header, above media */}
                         {post.imageSrc ? (
-                          <div className="w-full h-36 rounded-xl overflow-hidden bg-slate-100 border border-slate-200 relative">
-                            <img
-                              src={post.imageSrc}
-                              alt={post.prompt}
-                              loading="lazy"
-                              decoding="async"
-                              className="w-full h-full object-cover"
-                            />
-                          </div>
+                          <>
+                            {(post.caption || post.prompt) && (
+                              <p className="text-xs text-slate-800 line-clamp-2 leading-relaxed">
+                                {post.caption || post.prompt}
+                              </p>
+                            )}
+                            <div className="w-full h-36 rounded-xl overflow-hidden bg-slate-100 border border-slate-200 relative">
+                              <img
+                                src={post.imageSrc}
+                                alt={post.prompt}
+                                loading="lazy"
+                                decoding="async"
+                                className="w-full h-full object-cover"
+                              />
+                            </div>
+                          </>
                         ) : (
                           <div className="w-full p-3 rounded-xl bg-purple-50 border border-purple-200 text-xs text-slate-800 line-clamp-3">
                             {post.caption || post.prompt}
                           </div>
                         )}
-
-                        <p className="text-xs text-slate-800 line-clamp-2 leading-relaxed">
-                          {post.caption || post.prompt}
-                        </p>
                       </div>
 
                       {/* Footer Stats */}
@@ -1475,7 +1936,7 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
 
                       <div className="relative z-10 p-2.5 bg-gradient-to-t from-black/90 via-black/40 to-transparent">
                         <h4 className="text-xs font-bold text-white line-clamp-1">{reel.title}</h4>
-                        <p className="text-[10px] text-slate-200 line-clamp-1">@{reel.author.username}</p>
+                        <p className="text-[10px] text-slate-200 line-clamp-1">{reel.author.name}</p>
                       </div>
                     </div>
                   ))}

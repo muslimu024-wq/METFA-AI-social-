@@ -111,6 +111,7 @@ export const SeekForward5Icon: React.FC<{ className?: string }> = ({ className =
 );
 
 export const AUTO_HIDE_DELAY_MS = 1000;
+export const TIMELINE_AUTO_HIDE_DELAY_MS = 1800;
 export const HOLD_SPEED_DELAY_MS = 300;
 export const HOLD_MOVE_TOLERANCE_PX = 12;
 export const SINGLE_TAP_DISAMBIGUATION_MS = 220;
@@ -154,14 +155,20 @@ export const AdvancedVideoControls: React.FC<AdvancedVideoControlsProps> = ({
   const [isSpeed2x, setIsSpeed2x] = useState<boolean>(false);
 
   // Center playback controls start hidden so Reels opens cleanly without accidental popups.
-  // They appear strictly on an intentional single tap and auto-hide after 1000ms.
+  // They appear strictly on an intentional tap and auto-hide independently after AUTO_HIDE_DELAY_MS (1000ms).
   const [areControlsVisible, setAreControlsVisible] = useState<boolean>(false);
   const areControlsVisibleRef = useRef<boolean>(false);
   const inactivityTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const tapRevealTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastTapTimestampRef = useRef<number>(0);
 
-  // Bottom expandable timeline state (used in Feed; Reels keeps timeline accessible at bottom)
+  // Reels Timeline & Timestamp visibility is 100% independent of Center Playback Controls:
+  // hidden during normal playback, revealed on tap/scrub/pause, auto-hides after 1.8s (1.5-2s window).
+  const [isTimelineVisible, setIsTimelineVisible] = useState<boolean>(false);
+  const isTimelineVisibleRef = useRef<boolean>(false);
+  const timelineHideTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Bottom expandable timeline state (used in Feed variant only)
   const [isTimelineOpen, setIsTimelineOpen] = useState<boolean>(false);
 
   const progressBarRef = useRef<HTMLDivElement | null>(null);
@@ -173,6 +180,7 @@ export const AdvancedVideoControls: React.FC<AdvancedVideoControlsProps> = ({
   const activeScrubTouchIdRef = useRef<number | null>(null);
   const wasPlayingBeforeScrubRef = useRef<boolean>(false);
   const pendingSeekRef = useRef<{ target: number; timestamp: number } | null>(null);
+  const isPlayingRef = useRef<boolean>(true);
 
   // Center tap tracking (scroll/swipe rejection)
   const centerTapPointerRef = useRef<{
@@ -201,10 +209,25 @@ export const AdvancedVideoControls: React.FC<AdvancedVideoControlsProps> = ({
     areControlsVisibleRef.current = areControlsVisible;
   }, [areControlsVisible]);
 
+  useEffect(() => {
+    isTimelineVisibleRef.current = isTimelineVisible;
+  }, [isTimelineVisible]);
+
+  useEffect(() => {
+    isPlayingRef.current = isPlaying;
+  }, [isPlaying]);
+
   const clearTapRevealTimer = useCallback(() => {
     if (tapRevealTimerRef.current) {
       clearTimeout(tapRevealTimerRef.current);
       tapRevealTimerRef.current = null;
+    }
+  }, []);
+
+  const clearTimelineHideTimer = useCallback(() => {
+    if (timelineHideTimerRef.current) {
+      clearTimeout(timelineHideTimerRef.current);
+      timelineHideTimerRef.current = null;
     }
   }, []);
 
@@ -227,28 +250,57 @@ export const AdvancedVideoControls: React.FC<AdvancedVideoControlsProps> = ({
     }
   }, [videoRef]);
 
-  // Schedule auto-hide of controls after ~1s (1000ms) of user inactivity
-  const scheduleControlsAutoHide = useCallback((delayMs: number = 1000) => {
+  // Schedule auto-hide of center controls after ~1s (1000ms) of inactivity (independent of timeline state)
+  const scheduleControlsAutoHide = useCallback((delayMs: number = AUTO_HIDE_DELAY_MS) => {
     if (inactivityTimerRef.current) {
       clearTimeout(inactivityTimerRef.current);
     }
     inactivityTimerRef.current = setTimeout(() => {
-      // Do not hide controls during an active press, drag, or seek
+      // Do not hide center controls during an active press, drag, or seek
       if (!isScrubbingRef.current) {
         setAreControlsVisible(false);
-        setIsTimelineOpen(false);
+        if (!shouldRenderCenterControls) {
+          setIsTimelineOpen(false);
+        }
       }
     }, delayMs);
-  }, []);
+  }, [shouldRenderCenterControls]);
 
-  // Keep controls visible while actively interacting
+  // Schedule auto-hide of Reels timeline & timestamp after 1.5–2s (1800ms) of inactivity
+  const scheduleTimelineAutoHide = useCallback((delayMs: number = TIMELINE_AUTO_HIDE_DELAY_MS) => {
+    clearTimelineHideTimer();
+    timelineHideTimerRef.current = setTimeout(() => {
+      timelineHideTimerRef.current = null;
+      // Keep timeline visible while actively scrubbing or paused
+      if (!isScrubbingRef.current && isPlayingRef.current) {
+        setIsTimelineVisible(false);
+      }
+    }, delayMs);
+  }, [clearTimelineHideTimer]);
+
+  // Keep center controls visible while actively interacting (never forces timeline or vice versa)
   const keepControlsVisible = useCallback(() => {
     clearTapRevealTimer();
     setAreControlsVisible(true);
     scheduleControlsAutoHide(1000);
   }, [clearTapRevealTimer, scheduleControlsAutoHide]);
 
-  // Strict single-tap disambiguation: suppresses rapid multi-tap popups, swipe reveals, and timeline conflicts
+  // Reveal Timeline & Timestamp ONLY (center Play/Pause & ±5s controls stay hidden)
+  const revealTimelineOnly = useCallback(() => {
+    clearTapRevealTimer();
+    setIsTimelineVisible(true);
+    if (isPlayingRef.current) {
+      scheduleTimelineAutoHide(TIMELINE_AUTO_HIDE_DELAY_MS);
+    } else {
+      clearTimelineHideTimer();
+    }
+  }, [clearTapRevealTimer, scheduleTimelineAutoHide, clearTimelineHideTimer]);
+
+  // Strict single-tap disambiguation:
+  // - Suppresses rapid multi-tap popups, swipe reveals, and 2X long-press conflicts
+  // - Tap 1 on normal playback reveals Timeline + Timestamp ONLY (never pops up center controls)
+  // - Tap while Timeline + Timestamp are already shown toggles/opens center controls independently
+  // - Tap while center controls are visible hides center controls cleanly
   const handleIntentionalTapCandidate = useCallback(() => {
     if (!shouldRenderCenterControls || isScrubbingRef.current || isSpeed2xRef.current) {
       return;
@@ -279,22 +331,28 @@ export const AdvancedVideoControls: React.FC<AdvancedVideoControlsProps> = ({
 
     tapRevealTimerRef.current = setTimeout(() => {
       tapRevealTimerRef.current = null;
-      if (!isScrubbingRef.current && !isSpeed2xRef.current) {
+      if (isScrubbingRef.current || isSpeed2xRef.current) return;
+
+      if (!isTimelineVisibleRef.current && isPlayingRef.current) {
+        revealTimelineOnly();
+      } else {
         keepControlsVisible();
       }
     }, SINGLE_TAP_DISAMBIGUATION_MS);
-  }, [shouldRenderCenterControls, keepControlsVisible]);
+  }, [shouldRenderCenterControls, revealTimelineOnly, keepControlsVisible]);
 
   // Reset per-reel state cleanly when reelId changes so no stale duration/position flashes
   useEffect(() => {
     setAreControlsVisible(false);
+    setIsTimelineVisible(false);
     setScrubPreviewTime(null);
     setIsScrubbing(false);
     isScrubbingRef.current = false;
     pendingSeekRef.current = null;
     clearTapRevealTimer();
+    clearTimelineHideTimer();
     stopHoldToSpeed();
-  }, [reelId, clearTapRevealTimer, stopHoldToSpeed]);
+  }, [reelId, clearTapRevealTimer, clearTimelineHideTimer, stopHoldToSpeed]);
 
   // Sync state with HTML5 video events (bound cleanly without re-subscribing on scrub)
   useEffect(() => {
@@ -338,9 +396,17 @@ export const AdvancedVideoControls: React.FC<AdvancedVideoControlsProps> = ({
       }
     };
 
-    const handlePlay = () => setIsPlaying(true);
+    const handlePlay = () => {
+      setIsPlaying(true);
+      isPlayingRef.current = true;
+      if (isTimelineVisibleRef.current && !isScrubbingRef.current) {
+        scheduleTimelineAutoHide(TIMELINE_AUTO_HIDE_DELAY_MS);
+      }
+    };
     const handlePause = () => {
       setIsPlaying(false);
+      isPlayingRef.current = false;
+      clearTimelineHideTimer();
       stopHoldToSpeed();
     };
     const handleEnded = () => {
@@ -355,10 +421,12 @@ export const AdvancedVideoControls: React.FC<AdvancedVideoControlsProps> = ({
     video.addEventListener('pause', handlePause);
     video.addEventListener('ended', handleEnded);
 
-    // Initial sync
+    // Initial sync: treat autoplay startup before playback begins as playing so timeline does not flash on load
     syncMetadataState();
     setCurrentTime(video.readyState >= 1 && isFinite(video.currentTime) ? video.currentTime : 0);
-    setIsPlaying(!video.paused);
+    const initialPaused = video.paused && (video.currentTime > 0 || !video.autoplay);
+    setIsPlaying(!initialPaused);
+    isPlayingRef.current = !initialPaused;
 
     return () => {
       video.removeEventListener('timeupdate', handleTimeUpdate);
@@ -370,9 +438,10 @@ export const AdvancedVideoControls: React.FC<AdvancedVideoControlsProps> = ({
       video.removeEventListener('ended', handleEnded);
       stopHoldToSpeed();
       clearTapRevealTimer();
+      clearTimelineHideTimer();
       if (inactivityTimerRef.current) clearTimeout(inactivityTimerRef.current);
     };
-  }, [videoRef, reelId, clearTapRevealTimer, stopHoldToSpeed]);
+  }, [videoRef, reelId, clearTapRevealTimer, clearTimelineHideTimer, scheduleTimelineAutoHide, stopHoldToSpeed]);
 
   // Global interruption safety: restore 1X speed on window blur, visibility change, or pointer release anywhere
   useEffect(() => {
@@ -423,17 +492,27 @@ export const AdvancedVideoControls: React.FC<AdvancedVideoControlsProps> = ({
     return 0;
   }, [duration, videoRef]);
 
-  // Toggle timeline visibility on clicking the duration display (Feed expandable timeline)
+  // Toggle timeline visibility on clicking the duration display
   const toggleTimeline = (e: React.MouseEvent) => {
     e.stopPropagation();
     e.preventDefault();
     if (!shouldRenderCenterControls) {
       setIsTimelineOpen((prev) => !prev);
       scheduleControlsAutoHide(1000);
+    } else if (isPlayingRef.current) {
+      setIsTimelineVisible((prev) => {
+        const next = !prev;
+        if (next) {
+          scheduleTimelineAutoHide(TIMELINE_AUTO_HIDE_DELAY_MS);
+        } else {
+          clearTimelineHideTimer();
+        }
+        return next;
+      });
     }
   };
 
-  // Toggle Play / Pause (also stops 2X if active)
+  // Toggle Play / Pause (also stops 2X if active; keeps timeline visible when paused without auto-opening center controls)
   const togglePlay = (e: React.MouseEvent) => {
     e.stopPropagation();
     e.preventDefault();
@@ -443,10 +522,18 @@ export const AdvancedVideoControls: React.FC<AdvancedVideoControlsProps> = ({
     if (!video) return;
 
     if (video.paused) {
-      video.play().then(() => setIsPlaying(true)).catch(() => {});
+      video.play().then(() => {
+        setIsPlaying(true);
+        isPlayingRef.current = true;
+        if (isTimelineVisibleRef.current) {
+          scheduleTimelineAutoHide(TIMELINE_AUTO_HIDE_DELAY_MS);
+        }
+      }).catch(() => {});
     } else {
       video.pause();
       setIsPlaying(false);
+      isPlayingRef.current = false;
+      clearTimelineHideTimer();
     }
   };
 
@@ -490,7 +577,7 @@ export const AdvancedVideoControls: React.FC<AdvancedVideoControlsProps> = ({
     [getValidMaxDuration]
   );
 
-  // Unified scrub start helper (never pops up center controls during/after timeline drag!)
+  // Unified scrub start helper (shows Timeline + Timestamp, never pops up center controls!)
   const beginScrubAt = useCallback(
     (clientX: number) => {
       const maxDuration = getValidMaxDuration();
@@ -498,16 +585,20 @@ export const AdvancedVideoControls: React.FC<AdvancedVideoControlsProps> = ({
 
       stopHoldToSpeed();
       clearTapRevealTimer();
+      clearTimelineHideTimer();
       pendingSeekRef.current = null;
-      if (inactivityTimerRef.current) clearTimeout(inactivityTimerRef.current);
 
       isScrubbingRef.current = true;
       setIsScrubbing(true);
 
-      // Keep center playback controls hidden during timeline scrubbing in Reels
+      // Show Timeline + Timestamp while keeping center playback controls hidden in Reels
+      if (shouldRenderCenterControls) {
+        setIsTimelineVisible(true);
+      }
       if (shouldRenderCenterControls) {
         setAreControlsVisible(false);
       } else {
+        if (inactivityTimerRef.current) clearTimeout(inactivityTimerRef.current);
         setIsTimelineOpen(true);
       }
 
@@ -525,7 +616,7 @@ export const AdvancedVideoControls: React.FC<AdvancedVideoControlsProps> = ({
         } catch {}
       }
     },
-    [getValidMaxDuration, calculateSeekTime, stopHoldToSpeed, clearTapRevealTimer, shouldRenderCenterControls, videoRef]
+    [getValidMaxDuration, calculateSeekTime, stopHoldToSpeed, clearTapRevealTimer, clearTimelineHideTimer, shouldRenderCenterControls, videoRef]
   );
 
   // Unified scrub move helper
@@ -546,7 +637,7 @@ export const AdvancedVideoControls: React.FC<AdvancedVideoControlsProps> = ({
     [getValidMaxDuration, calculateSeekTime, videoRef]
   );
 
-  // Unified scrub finish helper
+  // Unified scrub finish helper (starts 1.8s timeline auto-hide ONLY after drag/tap interaction ends)
   const endScrubAt = useCallback(
     (clientX?: number) => {
       const video = videoRef.current;
@@ -575,11 +666,15 @@ export const AdvancedVideoControls: React.FC<AdvancedVideoControlsProps> = ({
 
       if (shouldRenderCenterControls) {
         setAreControlsVisible(false);
+        setIsTimelineVisible(true);
+        if (wasPlayingBeforeScrubRef.current || isPlayingRef.current) {
+          scheduleTimelineAutoHide(TIMELINE_AUTO_HIDE_DELAY_MS);
+        }
       } else {
         scheduleControlsAutoHide(1000);
       }
     },
-    [getValidMaxDuration, calculateSeekTime, shouldRenderCenterControls, scheduleControlsAutoHide, videoRef]
+    [getValidMaxDuration, calculateSeekTime, shouldRenderCenterControls, scheduleTimelineAutoHide, scheduleControlsAutoHide, videoRef]
   );
 
   // Primary Pointer handler for timeline scrub (isolated from vertical Reels swipe via touch-none & setPointerCapture)
@@ -796,10 +891,17 @@ export const AdvancedVideoControls: React.FC<AdvancedVideoControlsProps> = ({
   const effectiveTime = validDuration > 0 ? (scrubPreviewTime !== null ? scrubPreviewTime : currentTime) : 0;
   const progressPercent = validDuration > 0 ? (effectiveTime / validDuration) * 100 : 0;
 
+  // In Reels, both Timeline and Timestamp are hidden during normal playback and appear strictly on tap, scrub, or pause.
+  const isReelsTimelineDisplayed = isTimelineVisible || isScrubbing || !isPlaying;
+  const showTimelineContainer = shouldRenderCenterControls || isTimelineOpen;
+  const isReelsTimelineHidden = shouldRenderCenterControls && !isReelsTimelineDisplayed;
+
   return (
     <div
       data-testid="advanced-video-controls"
       data-variant={variant}
+      data-timeline-visible={shouldRenderCenterControls ? (isReelsTimelineDisplayed ? 'true' : 'false') : (isTimelineOpen ? 'true' : 'false')}
+      data-center-controls-visible={areControlsVisible ? 'true' : 'false'}
       className={`absolute inset-0 z-30 pointer-events-none flex flex-col justify-between p-3 select-none transition-opacity duration-200 ${className}`}
     >
       {/* Reels-Only Left & Right 2X Hold-to-Speed Zones (z-10: touch-pan-y preserves vertical swipe scrolling) */}
@@ -832,7 +934,7 @@ export const AdvancedVideoControls: React.FC<AdvancedVideoControlsProps> = ({
         </>
       )}
 
-      {/* Center Tap-to-Reveal Area (REELS ONLY when controls are hidden; swipe & multi-tap immune) */}
+      {/* Center Tap-to-Reveal Area (REELS ONLY when center controls are hidden; swipe & multi-tap immune) */}
       {shouldRenderCenterControls && !areControlsVisible && (
         <div
           data-testid="video-tap-reveal-area"
@@ -923,17 +1025,21 @@ export const AdvancedVideoControls: React.FC<AdvancedVideoControlsProps> = ({
         </div>
       )}
 
-      {/* C. Bottom Timeline & Duration Controls (Always directly interactive in Reels without revealing center controls) */}
+      {/* C. Bottom Timeline & Duration Controls (Hidden during normal Reels playback; reveals on tap, scrub, or pause) */}
       <div
         className="relative z-20 mt-auto w-full flex flex-col gap-0.5 pointer-events-auto"
         onPointerDown={(e) => e.stopPropagation()}
         onClick={(e) => e.stopPropagation()}
       >
         {/* Clean Thin 2px Timeline with generous touch-none hit target */}
-        {(isTimelineOpen || shouldRenderCenterControls) && (
+        {showTimelineContainer && (
           <div
             data-testid="expandable-timeline-container"
-            className="w-full select-none"
+            data-timeline-visible={shouldRenderCenterControls ? (isReelsTimelineDisplayed ? 'true' : 'false') : 'true'}
+            aria-hidden={isReelsTimelineHidden}
+            className={`w-full select-none transition-opacity duration-200 ${
+              isReelsTimelineHidden ? 'opacity-0' : 'opacity-100'
+            }`}
             onPointerDown={(e) => e.stopPropagation()}
             onClick={(e) => e.stopPropagation()}
           >
@@ -944,7 +1050,7 @@ export const AdvancedVideoControls: React.FC<AdvancedVideoControlsProps> = ({
               aria-valuemax={validDuration}
               aria-valuenow={effectiveTime}
               aria-label="Video scrubber"
-              tabIndex={0}
+              tabIndex={isReelsTimelineHidden ? -1 : 0}
               data-testid="video-progress-bar"
               onPointerDown={handlePointerDown}
               onTouchStart={handleTouchStart}
@@ -977,17 +1083,24 @@ export const AdvancedVideoControls: React.FC<AdvancedVideoControlsProps> = ({
           </div>
         )}
 
-        {/* Compact bottom bar: Clean M:SS time display (no heavy box in Reels), plus Sound Toggle */}
+        {/* Compact bottom bar: Clean M:SS timestamp (hidden during normal Reels playback; visible when timeline is shown) */}
         <div className="flex items-center justify-between gap-2 w-full">
           {/* Tappable Duration / Time Display (M:SS format) */}
           <button
             type="button"
             data-testid="video-duration-toggle-btn"
+            data-timestamp-visible={shouldRenderCenterControls ? (isReelsTimelineDisplayed ? 'true' : 'false') : 'true'}
+            aria-hidden={isReelsTimelineHidden}
+            tabIndex={isReelsTimelineHidden ? -1 : 0}
             onPointerDown={(e) => e.stopPropagation()}
             onClick={toggleTimeline}
             className={
               shouldRenderCenterControls
-                ? 'text-[11px] font-mono flex items-center gap-1 cursor-pointer select-none text-white/90 drop-shadow-sm py-0.5 touch-manipulation'
+                ? `text-[11px] font-mono flex items-center gap-1 select-none text-white/90 drop-shadow-sm py-0.5 touch-manipulation transition-opacity duration-200 ${
+                    isReelsTimelineDisplayed
+                      ? 'opacity-100 pointer-events-auto cursor-pointer'
+                      : 'opacity-0 pointer-events-none'
+                  }`
                 : `px-2.5 py-1 rounded-full border backdrop-blur-xs text-[11px] font-mono flex items-center gap-1 cursor-pointer transition select-none shadow-xs touch-manipulation ${
                     isTimelineOpen
                       ? 'bg-teal-950/80 border-teal-500/50 text-white'

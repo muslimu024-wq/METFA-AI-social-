@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
-import { X, Check, Hash, Sparkles, Image as ImageIcon, Video, Type, Palette, Maximize2, Minimize2 } from 'lucide-react';
-import { CommunityPost } from '../types/community';
+import { X, Check, Hash, Sparkles, Image as ImageIcon, Video, Type, Palette, Maximize2, Minimize2, Globe, Users, Lock, ShieldCheck, AlertCircle } from 'lucide-react';
+import { CommunityPost, PostAudience } from '../types/community';
+import { isLegacyUnspecifiedAudience, normalizeAudience } from '../utils/privacyPolicy';
 
 interface EditPostModalProps {
   isOpen: boolean;
@@ -30,6 +31,7 @@ export const EditPostModal: React.FC<EditPostModalProps> = ({
   const [tagInput, setTagInput] = useState('');
   const [textBackgroundPreset, setTextBackgroundPreset] = useState<string | undefined>(undefined);
   const [stylePreset, setStylePreset] = useState<string | undefined>(undefined);
+  const [visibility, setVisibility] = useState<PostAudience | null>(() => normalizeAudience(post?.visibility));
   const [isFullscreen, setIsFullscreen] = useState(true);
 
   useEffect(() => {
@@ -39,6 +41,7 @@ export const EditPostModal: React.FC<EditPostModalProps> = ({
       setTags(post.tags || []);
       setTextBackgroundPreset(post.textBackgroundPreset);
       setStylePreset(post.stylePreset);
+      setVisibility(normalizeAudience(post.visibility));
     }
   }, [post]);
 
@@ -65,6 +68,8 @@ export const EditPostModal: React.FC<EditPostModalProps> = ({
     setTags(tags.filter((t) => t !== tagToRemove));
   };
 
+  const wasLegacyUnset = isLegacyUnspecifiedAudience(post.visibility);
+
   const handleSave = () => {
     const updatedPost: CommunityPost = {
       ...post,
@@ -73,6 +78,8 @@ export const EditPostModal: React.FC<EditPostModalProps> = ({
       tags,
       textBackgroundPreset: textBackgroundPreset === 'none' ? undefined : textBackgroundPreset,
       stylePreset,
+      // Preserve NULL/unknown legacy value unless the owner explicitly selects an audience
+      visibility: visibility !== null ? visibility : (post.visibility ?? null),
     };
     onSave(updatedPost);
     onClose();
@@ -196,6 +203,57 @@ export const EditPostModal: React.FC<EditPostModalProps> = ({
               </div>
             </div>
           )}
+
+          {/* Post Audience Editor */}
+          <div className="bg-slate-50 border border-slate-200 rounded-2xl p-4 space-y-2.5">
+            <div className="flex items-center justify-between gap-2 flex-wrap">
+              <label className="text-xs sm:text-sm font-bold text-slate-800 flex items-center gap-2">
+                <ShieldCheck className="w-4 h-4 text-purple-600" />
+                <span>Post Audience</span>
+              </label>
+              {wasLegacyUnset && visibility === null && (
+                <span className="text-[11px] font-bold px-2.5 py-0.5 rounded-lg bg-amber-100 text-amber-800 border border-amber-300 flex items-center gap-1">
+                  <Lock className="w-3 h-3" />
+                  <span>Unset — Restricted (Owner Only)</span>
+                </span>
+              )}
+            </div>
+
+            {wasLegacyUnset && visibility === null && (
+              <div className="p-2.5 bg-amber-50 border border-amber-200 rounded-xl flex items-start gap-2 text-xs text-amber-800">
+                <AlertCircle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+                <span>
+                  This legacy post has no explicit audience stored, so it is restricted to Owner Only. Select an explicit audience below to update it, or leave unset to keep it Owner Only.
+                </span>
+              </div>
+            )}
+
+            <div className="grid grid-cols-3 gap-2">
+              {[
+                { id: 'public' as PostAudience, label: 'Public / Everyone', icon: Globe },
+                { id: 'followers' as PostAudience, label: 'Followers', icon: Users },
+                { id: 'only_me' as PostAudience, label: 'Only Me', icon: Lock },
+              ].map((opt) => {
+                const IconComp = opt.icon;
+                const active = visibility === opt.id;
+                return (
+                  <button
+                    key={opt.id}
+                    type="button"
+                    onClick={() => setVisibility(opt.id)}
+                    className={`px-3 py-2 rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 border transition cursor-pointer ${
+                      active
+                        ? 'bg-purple-600 text-white border-purple-600 shadow-xs'
+                        : 'bg-white text-slate-700 border-slate-200 hover:border-purple-300 hover:text-slate-900'
+                    }`}
+                  >
+                    <IconComp className="w-3.5 h-3.5 shrink-0" />
+                    <span className="truncate">{opt.label}</span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
 
           {/* Post Caption / Text (Spacious Full View) */}
           <div className="space-y-2 flex-1 flex flex-col">

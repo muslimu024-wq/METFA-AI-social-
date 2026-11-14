@@ -519,9 +519,12 @@ export async function fetchUnifiedContentAnalytics(
   dateRange: AnalyticsDateRange = '30d'
 ): Promise<UnifiedContentAnalytics | null> {
   try {
+    const token = await getClientAuthToken().catch(() => null);
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    if (token) headers.Authorization = `Bearer ${token}`;
     const res = await fetch('/api/analytics/content/item', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers,
       body: JSON.stringify({ content, dateRange }),
     });
     if (res.ok) {
@@ -541,9 +544,12 @@ export async function fetchCreatorStudioAnalytics(params: {
   dateRange?: AnalyticsDateRange;
 }): Promise<CreatorStudioAnalyticsSummary | null> {
   try {
+    const token = await getClientAuthToken().catch(() => null);
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    if (token) headers.Authorization = `Bearer ${token}`;
     const res = await fetch('/api/analytics/content/studio', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers,
       body: JSON.stringify({
         creatorId: params.creatorId,
         catalog: params.catalog,
@@ -567,9 +573,12 @@ export async function generateContentAIInsights(params: {
   contentId?: string;
 }): Promise<{ insights: AIInsightItem[]; source: 'gemini' | 'deterministic' } | null> {
   try {
+    const token = await getClientAuthToken().catch(() => null);
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    if (token) headers.Authorization = `Bearer ${token}`;
     const res = await fetch('/api/analytics/content/ai-insights', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers,
       body: JSON.stringify(params),
     });
     if (res.ok) {

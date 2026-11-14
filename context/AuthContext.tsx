@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect, useCallback, ReactNode } from 'react';
+import React, { createContext, useContext, useState, useEffect, useCallback, useRef, ReactNode } from 'react';
 import {
   AuthUser,
   getActiveSSOUser,
@@ -14,6 +14,7 @@ import {
   GUEST_PROFILE,
   GUEST_AVATAR,
   clearStaleAuthCache,
+  clearAllUserScopedCaches,
   getDefaultAvatar,
   sanitizeAvatarUrl,
   resendConfirmationEmail,
@@ -128,6 +129,7 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   });
 
   const [authNotification, setAuthNotification] = useState<AuthNotification | null>(null);
+  const lastResolvedUserIdRef = useRef<string | null>(null);
 
   const clearAuthNotification = useCallback(() => {
     setAuthNotification(null);
@@ -189,6 +191,24 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       const realUserId = supabaseUser.id;
       console.log(`[METFA AUTH] Supabase user ID: ${realUserId}`);
 
+      // Detect account switch (either in-memory ref or persisted cache) and purge stale user caches
+      let cachedUserId: string | null = null;
+      try {
+        const cachedAuthRaw = localStorage.getItem('metfa_auth_user_v2');
+        if (cachedAuthRaw) {
+          cachedUserId = JSON.parse(cachedAuthRaw)?.id || null;
+        }
+      } catch {}
+
+      if (
+        (lastResolvedUserIdRef.current && lastResolvedUserIdRef.current !== realUserId) ||
+        (cachedUserId && cachedUserId !== realUserId)
+      ) {
+        console.log(`[METFA AUTH] Account switch detected (${lastResolvedUserIdRef.current || cachedUserId} -> ${realUserId}); purging user-scoped caches.`);
+        clearAllUserScopedCaches();
+      }
+      lastResolvedUserIdRef.current = realUserId;
+
       // Profile cache verification: cachedProfile.id === currentSupabaseUser.id
       let resolvedProfile: UserProfile | null = null;
       try {
@@ -235,9 +255,10 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       // Only after successful Supabase resolution, update LocalStorage cache
       persistSSOSession(authUser, finalProfile);
     } else {
-      // If there is NO Supabase session: clear stale cache and set clean guest state
+      // If there is NO Supabase session: clear ALL user-scoped caches and set clean guest state
       console.log('[METFA AUTH] Guest mode: no Supabase session');
-      clearStaleAuthCache();
+      lastResolvedUserIdRef.current = null;
+      clearAllUserScopedCaches();
       setUser(GUEST_USER);
       setUserProfile(GUEST_PROFILE);
       const guestIdentity: PostingIdentity = {
@@ -425,7 +446,8 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         await resolveSupabaseSession(session);
       } else if (event === 'SIGNED_OUT' || !session) {
         console.log('[METFA AUTH] Guest mode: signed out');
-        clearStaleAuthCache();
+        lastResolvedUserIdRef.current = null;
+        clearAllUserScopedCaches();
         if (isMounted) {
           setUser(GUEST_USER);
           setUserProfile(GUEST_PROFILE);
@@ -592,7 +614,9 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
 
   const logout = useCallback(async () => {
     console.log('[METFA AUTH] Logging out...');
+    lastResolvedUserIdRef.current = null;
     const guestUser = await supabaseSignOut();
+    clearAllUserScopedCaches();
     setUser(guestUser);
     setUserProfile(GUEST_PROFILE);
     const guestIdentity: PostingIdentity = {
@@ -622,19 +646,30 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       const realUserId = currentSupabaseUser.id;
       console.log(`[METFA AUTH] Updating profile for user: ${realUserId}`);
 
-      const sanitizedUpdates = {
+      const sanitizedUpdates: Partial<UserProfile> = {
+        ...userProfile,
         ...updates,
         id: realUserId,
       };
 
-      // 1. Sync to Supabase public.profiles FIRST
+      // 1. Sync to Supabase public.profiles FIRST (note: never alters existing posts' visibility)
       const dbProfile = await upsertSupabaseProfile(realUserId, sanitizedUpdates);
 
-      const finalProfile: UserProfile = dbProfile || {
-        ...userProfile,
-        ...sanitizedUpdates,
-        id: realUserId,
-      };
+      const finalProfile: UserProfile = dbProfile
+        ? {
+            ...dbProfile,
+            profilePrivacy: updates.profilePrivacy ?? dbProfile.profilePrivacy ?? userProfile.profilePrivacy ?? 'public',
+            defaultPostAudience:
+              updates.defaultPostAudience ??
+              dbProfile.defaultPostAudience ??
+              userProfile.defaultPostAudience ??
+              'public',
+          }
+        : {
+            ...userProfile,
+            ...sanitizedUpdates,
+            id: realUserId,
+          };
 
       // 2. UI and local cache synchronization AFTER database synchronization
       doSaveUserProfile(finalProfile);

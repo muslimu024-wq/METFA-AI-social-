@@ -61,7 +61,7 @@ export const MediaCarousel: React.FC<MediaCarouselProps> = ({
 
   if (viewMode === 'grid') {
     return (
-      <div className="relative bg-slate-900 rounded-xl overflow-hidden border border-slate-200/80 mb-3">
+      <div className="relative bg-slate-900 overflow-hidden">
         <div className="absolute top-2.5 right-2.5 z-10">
           <button
             type="button"
@@ -111,7 +111,7 @@ export const MediaCarousel: React.FC<MediaCarouselProps> = ({
 
   return (
     <div
-      className="relative bg-slate-950 rounded-xl overflow-hidden border border-slate-200/80 mb-3 select-none group"
+      className="relative bg-slate-950 overflow-hidden select-none group"
       onTouchStart={handleTouchStart}
       onTouchEnd={handleTouchEnd}
     >

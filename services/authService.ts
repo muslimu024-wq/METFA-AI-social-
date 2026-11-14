@@ -1,5 +1,9 @@
-import { UserProfile, PostingIdentity } from '../types/community';
+import { UserProfile, PostingIdentity, ProfilePrivacy, PostAudience } from '../types/community';
 import { safeSetItem, safeGetItem, safeRemoveItem } from '../utils/storageUtils';
+import {
+  normalizeProfilePrivacy,
+  normalizeDefaultPostAudience,
+} from '../utils/privacyPolicy';
 import {
   supabase,
   isSupabaseConfigured,
@@ -115,6 +119,8 @@ export const GUEST_PROFILE: UserProfile = {
   website: '',
   isVerified: false,
   joinDate: '',
+  profilePrivacy: 'public',
+  defaultPostAudience: 'public',
   stats: {
     postsCount: 0,
     followersCount: 0,
@@ -125,13 +131,78 @@ export const GUEST_PROFILE: UserProfile = {
 };
 
 /**
- * Reset authentication and profile cache keys safely without deleting unrelated app data
+ * Reset authentication and profile cache keys safely
  */
 export const clearStaleAuthCache = (): void => {
   safeRemoveItem(SSO_SESSION_KEY);
   safeRemoveItem(AUTH_USER_KEY);
   safeRemoveItem(USER_PROFILE_KEY);
   safeRemoveItem(ACTIVE_IDENTITY_KEY);
+};
+
+/**
+ * Complete user-scoped cache purge on logout and account switches.
+ * Eliminates cross-account Follow, Privacy, Owned-Post, Saved, Feed, Reel, and Attribution leakage.
+ */
+export const clearAllUserScopedCaches = (): void => {
+  clearStaleAuthCache();
+  const keysToClear = [
+    'metfa_followed_users',
+    'metfa_follow_requests_v1',
+    'metfa_my_owned_post_ids',
+    'metfa_community_posts_v2',
+    'metfa_reels_v1',
+    'metfa_saved_posts_ids_v2',
+    'metfa_saved_reels_ids_v2',
+    'metfa_notifications_v2',
+    'metfa_social_pages_v1',
+    'metfa_social_groups_v1',
+  ];
+  for (const key of keysToClear) {
+    safeRemoveItem(key);
+  }
+
+  if (typeof window !== 'undefined') {
+    try {
+      const dynamicKeys: string[] = [];
+      for (let i = 0; i < window.localStorage.length; i++) {
+        const k = window.localStorage.key(i);
+        if (k && (k.startsWith('metfa_my_owned_post_ids:') || k.startsWith('metfa_follow_requests_'))) {
+          dynamicKeys.push(k);
+        }
+      }
+      dynamicKeys.forEach((k) => window.localStorage.removeItem(k));
+    } catch {}
+
+    try {
+      window.sessionStorage.removeItem('metfa_follow_attribution_history_v1');
+    } catch {}
+
+    try {
+      if (window.indexedDB) {
+        const req = window.indexedDB.open('metfa_community_posts_db', 1);
+        req.onsuccess = () => {
+          try {
+            const db = req.result;
+            if (db.objectStoreNames.contains('posts')) {
+              const tx = db.transaction('posts', 'readwrite');
+              tx.objectStore('posts').clear();
+            }
+          } catch {}
+        };
+      }
+    } catch {}
+
+    window.dispatchEvent(
+      new CustomEvent('metfa_following_updated', { detail: { followedUsers: [], isFollowing: false } })
+    );
+    window.dispatchEvent(new CustomEvent('metfa_follow_requests_updated', { detail: { pendingTargetIds: [] } }));
+    window.dispatchEvent(new CustomEvent('metfa_posts_updated', { detail: [] }));
+    window.dispatchEvent(new CustomEvent('metfa_reels_updated', { detail: [] }));
+    window.dispatchEvent(new CustomEvent('metfa_saved_items_updated', { detail: { type: 'posts', ids: [] } }));
+    window.dispatchEvent(new CustomEvent('metfa_saved_items_updated', { detail: { type: 'reels', ids: [] } }));
+    window.dispatchEvent(new CustomEvent('metfa_notifications_updated', { detail: [] }));
+  }
 };
 
 /**
@@ -238,6 +309,8 @@ export const persistSSOSession = (user: AuthUser, profileOverride?: UserProfile)
         location: '',
         website: '',
         joinDate: `Joined ${new Date().toLocaleDateString('en-US', { month: 'long', year: 'numeric' })}`,
+        profilePrivacy: 'public',
+        defaultPostAudience: 'public',
         stats: {
           postsCount: 0,
           followersCount: 0,
@@ -286,17 +359,19 @@ export async function fetchAuthorProfileFromServer(userId: string): Promise<(Use
           name: p.name || 'Metfa Creator',
           username: p.username || 'creator',
           avatar: resolvedAvatar,
-          bio: 'AI Creator & Visual Explorer on Metfa Social.',
-          location: 'Global Creator',
-          website: `https://metfa.ai/@${p.username}`,
+          bio: p.bio || '',
+          location: p.location || '',
+          website: p.website || '',
           isVerified: p.isVerified ?? true,
           joinDate: 'Joined Recently',
+          profilePrivacy: normalizeProfilePrivacy(p.profilePrivacy),
+          defaultPostAudience: normalizeDefaultPostAudience(p.defaultPostAudience),
           stats: {
-            postsCount: 0,
-            followersCount: 0,
-            followingCount: 0,
-            totalLikes: 0,
-            reelsCount: 0,
+            postsCount: Number(p.stats?.postsCount ?? 0),
+            followersCount: Number(p.stats?.followersCount ?? 0),
+            followingCount: Number(p.stats?.followingCount ?? 0),
+            totalLikes: Number(p.stats?.totalLikes ?? 0),
+            reelsCount: Number(p.stats?.reelsCount ?? 0),
           },
         };
       }
@@ -327,24 +402,61 @@ export async function fetchSupabaseProfile(userId: string): Promise<(UserProfile
     if (!data) {
       return await fetchAuthorProfileFromServer(userId);
     }
+
+    let authMeta: Record<string, any> | null = null;
+    try {
+      const { data: authData } = await supabase.auth.getUser();
+      if (authData?.user?.id === userId) {
+        authMeta = authData.user.user_metadata || null;
+      }
+    } catch {}
+
     console.log(`[METFA AUTH] Profile ID: ${data.id}`);
-    return mapSupabaseRowToUserProfile(data);
+    return mapSupabaseRowToUserProfile(data as SupabaseProfileRow, authMeta);
   } catch (err) {
     console.warn('[METFA AUTH] Error reading profile:', err);
     return await fetchAuthorProfileFromServer(userId);
   }
 }
 
+function isMissingPrivacyColumnError(err: any): boolean {
+  const code = String(err?.code || '');
+  const msg = String(err?.message || '').toLowerCase();
+  return (
+    code === '42703' ||
+    code === 'PGRST204' ||
+    msg.includes('profile_privacy') ||
+    msg.includes('default_post_audience')
+  );
+}
+
 /**
- * Upsert profile into Supabase Database
+ * Upsert profile into Supabase Database (gracefully mirrors privacy settings to user_metadata if DB columns aren't migrated yet)
  */
 export async function upsertSupabaseProfile(
   userId: string,
   profile: Partial<UserProfile> & { email?: string; phone?: string; metfaId?: string }
 ): Promise<(UserProfile & { metfaId?: string }) | null> {
   if (!isSupabaseConfigured() || !userId) return null;
+  const resolvedPrivacy: ProfilePrivacy = normalizeProfilePrivacy(profile.profilePrivacy);
+  const resolvedAudience: PostAudience = normalizeDefaultPostAudience(profile.defaultPostAudience);
+
+  const syncAuthMetadata = async () => {
+    try {
+      const { data: authData } = await supabase.auth.getUser();
+      if (authData?.user?.id === userId) {
+        await supabase.auth.updateUser({
+          data: {
+            profile_privacy: resolvedPrivacy,
+            default_post_audience: resolvedAudience,
+          },
+        });
+      }
+    } catch {}
+  };
+
   try {
-    const row: Partial<SupabaseProfileRow> = {
+    const baseRow: Record<string, any> = {
       id: userId,
       display_name: profile.name || 'Creator',
       username: profile.username || 'creator',
@@ -356,6 +468,8 @@ export async function upsertSupabaseProfile(
       email: profile.email,
       phone: profile.phone,
       metfa_id: profile.metfaId || generateUnifiedMetfaId(userId),
+      profile_privacy: resolvedPrivacy,
+      default_post_audience: resolvedAudience,
       stats: profile.stats || {
         postsCount: 0,
         followersCount: 0,
@@ -366,18 +480,38 @@ export async function upsertSupabaseProfile(
       updated_at: new Date().toISOString(),
     };
 
-    const { data, error } = await supabase
+    let { data, error } = await supabase
       .from('profiles')
-      .upsert(row, { onConflict: 'id' })
+      .upsert(baseRow, { onConflict: 'id' })
       .select()
       .single();
+
+    if (error && isMissingPrivacyColumnError(error)) {
+      const fallbackRow = { ...baseRow };
+      delete fallbackRow.profile_privacy;
+      delete fallbackRow.default_post_audience;
+      const retry = await supabase
+        .from('profiles')
+        .upsert(fallbackRow, { onConflict: 'id' })
+        .select()
+        .single();
+      data = retry.data;
+      error = retry.error;
+    }
+
+    if (profile.profilePrivacy !== undefined || profile.defaultPostAudience !== undefined) {
+      await syncAuthMetadata();
+    }
 
     if (error) {
       console.warn('[METFA AUTH] Error upserting profile:', error.message);
       return null;
     }
     console.log(`[METFA AUTH] Profile ID: ${userId}`);
-    return mapSupabaseRowToUserProfile(data);
+    return mapSupabaseRowToUserProfile(data as SupabaseProfileRow, {
+      profile_privacy: resolvedPrivacy,
+      default_post_audience: resolvedAudience,
+    });
   } catch (err) {
     console.warn('[METFA AUTH] Error during profile upsert:', err);
     return null;
@@ -474,11 +608,13 @@ export async function mapSupabaseUserToAuthUser(
     name,
     username,
     avatar,
-    bio: 'AI Creator & Visual Explorer on Metfa Social.',
-    location: 'Global Creator',
-    website: `https://metfa.ai/@${username}`,
+    bio: '',
+    location: '',
+    website: '',
     isVerified: true,
     joinDate: `Joined ${new Date(sbUser.created_at || Date.now()).toLocaleDateString('en-US', { month: 'long', year: 'numeric' })}`,
+    profilePrivacy: normalizeProfilePrivacy(rawMetadata.profile_privacy),
+    defaultPostAudience: normalizeDefaultPostAudience(rawMetadata.default_post_audience),
     stats: {
       postsCount: 0,
       followersCount: 0,
@@ -967,7 +1103,7 @@ export async function supabaseSignOut(): Promise<AuthUser> {
     }
   }
 
-  clearStaleAuthCache();
+  clearAllUserScopedCaches();
   const guestUser = GUEST_USER;
   const guestProfile = GUEST_PROFILE;
 

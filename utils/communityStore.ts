@@ -139,9 +139,61 @@ export const saveCommunityPosts = (posts: CommunityPost[]): void => {
   }
 };
 
-const OWNED_POSTS_STORAGE_KEY = 'metfa_my_owned_post_ids';
+const OWNED_POSTS_STORAGE_PREFIX = 'metfa_my_owned_post_ids';
 const IDB_COMMUNITY_DB = 'metfa_community_posts_db';
 const IDB_COMMUNITY_STORE = 'posts';
+
+function getScopedOwnedPostsKey(userId?: string | null): string | null {
+  const clean = typeof userId === 'string' ? userId.trim() : '';
+  if (!clean || clean === 'guest') return null;
+  return `${OWNED_POSTS_STORAGE_PREFIX}:${clean}`;
+}
+
+function getActiveCacheUserId(): string | null {
+  try {
+    const raw = safeGetItem(USER_PROFILE_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (parsed?.id && typeof parsed.id === 'string' && parsed.id !== 'guest') {
+        return parsed.id.trim();
+      }
+    }
+  } catch {}
+  return null;
+}
+
+export const clearCommunityLocalCache = (): void => {
+  safeRemoveItem(POSTS_STORAGE_KEY);
+  safeRemoveItem(USER_PROFILE_KEY);
+  safeRemoveItem(OWNED_POSTS_STORAGE_PREFIX);
+  if (typeof window !== 'undefined') {
+    try {
+      const toRemove: string[] = [];
+      for (let i = 0; i < window.localStorage.length; i++) {
+        const k = window.localStorage.key(i);
+        if (k && k.startsWith(`${OWNED_POSTS_STORAGE_PREFIX}:`)) {
+          toRemove.push(k);
+        }
+      }
+      toRemove.forEach((k) => window.localStorage.removeItem(k));
+    } catch {}
+    try {
+      if (window.indexedDB) {
+        const req = indexedDB.open(IDB_COMMUNITY_DB, 1);
+        req.onsuccess = () => {
+          try {
+            const db = req.result;
+            if (db.objectStoreNames.contains(IDB_COMMUNITY_STORE)) {
+              const tx = db.transaction(IDB_COMMUNITY_STORE, 'readwrite');
+              tx.objectStore(IDB_COMMUNITY_STORE).clear();
+            }
+          } catch {}
+        };
+      }
+    } catch {}
+    window.dispatchEvent(new CustomEvent('metfa_posts_updated', { detail: [] }));
+  }
+};
 
 function openCommunityIDB(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
@@ -203,7 +255,12 @@ export async function deletePostFromIDB(postId: string): Promise<void> {
 
 export async function fetchServerPosts(): Promise<CommunityPost[]> {
   try {
-    const res = await fetch('/api/posts');
+    const token = await getClientAuthToken().catch(() => null);
+    const headers: Record<string, string> = {};
+    if (token) {
+      headers.Authorization = `Bearer ${token}`;
+    }
+    const res = await fetch('/api/posts', { headers });
     if (res.ok) {
       const data = await res.json();
       if (Array.isArray(data?.posts)) {
@@ -318,25 +375,29 @@ export async function deleteServerPost(postId: string): Promise<void> {
   }
 }
 
-export const recordOwnedPostId = (postId: string): void => {
+export const recordOwnedPostId = (postId: string, ownerUserId?: string | null): void => {
   if (typeof window === 'undefined' || !postId) return;
   try {
-    const raw = localStorage.getItem(OWNED_POSTS_STORAGE_KEY);
+    const key = getScopedOwnedPostsKey(ownerUserId ?? getActiveCacheUserId());
+    if (!key) return;
+    const raw = localStorage.getItem(key);
     const set = new Set(raw ? JSON.parse(raw) : []);
     set.add(postId);
-    localStorage.setItem(OWNED_POSTS_STORAGE_KEY, JSON.stringify(Array.from(set)));
+    localStorage.setItem(key, JSON.stringify(Array.from(set)));
   } catch (err) {
     console.warn('[CommunityStore] Error saving owned post id:', err);
   }
 };
 
-export const isLocallyOwnedPost = (postId?: string): boolean => {
+export const isLocallyOwnedPost = (postId?: string, activeUserId?: string | null): boolean => {
   if (typeof window === 'undefined' || !postId) return false;
   try {
-    const raw = localStorage.getItem(OWNED_POSTS_STORAGE_KEY);
+    const key = getScopedOwnedPostsKey(activeUserId ?? getActiveCacheUserId());
+    if (!key) return false;
+    const raw = localStorage.getItem(key);
     if (!raw) return false;
     const list: string[] = JSON.parse(raw);
-    return list.includes(postId);
+    return Array.isArray(list) && list.includes(postId);
   } catch {
     return false;
   }
@@ -357,7 +418,7 @@ export const saveCommunityPost = (post: Omit<CommunityPost, 'id' | 'likesCount' 
     createdAt: 'Just now',
   };
 
-  recordOwnedPostId(newPost.id);
+  recordOwnedPostId(newPost.id, newPost.author?.id);
   const updated = [newPost, ...current];
   saveCommunityPosts(updated);
   savePostsToIDB(updated);
@@ -535,7 +596,7 @@ export const createPostAsync = async (
       throw new Error(error || 'Failed to create post in Supabase');
     }
 
-    recordOwnedPostId(dbPost.id);
+    recordOwnedPostId(dbPost.id, resolvedAuthorId);
     const current = getCommunityPosts();
     const updated = [dbPost, ...current.filter((p) => p.id !== dbPost.id)];
     saveCommunityPosts(updated);
@@ -689,16 +750,6 @@ export const isContentOwner = (
   postingIdentity?: { id?: string; username?: string } | string | null,
   postId?: string
 ): boolean => {
-  // If this post was created locally on this browser, the user is the owner
-  if (postId && isLocallyOwnedPost(postId)) {
-    return true;
-  }
-
-  if (!author) return false;
-
-  const authorId = typeof author === 'string' ? author : author.id;
-  const authorUsername = typeof author === 'string' ? undefined : author.username;
-
   const getId = (item?: { id?: string; username?: string } | string | null) =>
     typeof item === 'string' ? item : item?.id;
   const getUsername = (item?: { id?: string; username?: string } | string | null) =>
@@ -707,26 +758,37 @@ export const isContentOwner = (
   const userProfileId = getId(userProfile);
   const authUserId = getId(authUser);
 
-  // Unauthenticated visitors never own posts
-  if (!userProfileId && !authUserId) return false;
-
-  const validIds = [userProfileId, authUserId]
-    .filter((id): id is string => typeof id === 'string' && id !== 'guest' && id.trim().length > 0);
+  // Unauthenticated visitors never own posts (even if stale local keys exist)
+  const validIds = [authUserId, userProfileId].filter(
+    (id): id is string => typeof id === 'string' && id !== 'guest' && id.trim().length > 0
+  );
 
   if (validIds.length === 0) return false;
 
+  const authorId = typeof author === 'string' ? author : author?.id;
+  const authorUsername = typeof author === 'string' ? undefined : author?.username;
+
   const validUsernames = [
-    getUsername(userProfile)?.toLowerCase(),
     getUsername(authUser)?.toLowerCase(),
+    getUsername(userProfile)?.toLowerCase(),
   ].filter((u): u is string => typeof u === 'string' && u !== 'guest' && u.trim().length > 0);
 
   if (authorId && validIds.includes(authorId)) return true;
   if (authorUsername && validUsernames.includes(authorUsername.toLowerCase())) return true;
-  
+
   const postIdentityId = getId(postingIdentity);
   if (postIdentityId && validIds.includes(postIdentityId)) return true;
   const postIdentityUsername = getUsername(postingIdentity);
   if (postIdentityUsername && validUsernames.includes(postIdentityUsername.toLowerCase())) return true;
+
+  // User-scoped local ownership check: only applies if authorId isn't conflicting with another explicit account ID
+  if (postId && (!authorId || validIds.includes(authorId))) {
+    for (const uid of validIds) {
+      if (isLocallyOwnedPost(postId, uid)) {
+        return true;
+      }
+    }
+  }
 
   return false;
 };

@@ -21,9 +21,18 @@ import {
   MicOff,
   Loader2
 } from 'lucide-react';
-import { CommunityPost, SocialGroup } from '../types/community';
-import { getCommunityPosts } from '../utils/communityStore';
+import { CommunityPost, ProfilePrivacy, SocialGroup } from '../types/community';
+import { getCommunityPosts, isContentOwner } from '../utils/communityStore';
 import { getGroups, toggleJoinGroup } from '../utils/socialStore';
+import { useAuth } from '../context/AuthContext';
+import { canViewerAccessPost } from '../utils/privacyPolicy';
+import { isUserFollowed } from '../utils/followStore';
+import {
+  fetchFollowedUserIds,
+  fetchProfilesPrivacyBatch,
+  isValidProfileUuid,
+} from '../services/followService';
+import { isSupabaseConfigured } from '../services/supabaseClient';
 
 interface GlobalSearchBarProps {
   onNavigateTab: (tabId: string) => void;
@@ -34,11 +43,14 @@ export const GlobalSearchBar: React.FC<GlobalSearchBarProps> = ({
   onNavigateTab,
   className = '',
 }) => {
+  const { user: authUser, userProfile } = useAuth();
   const [query, setQuery] = useState('');
   const [isOpen, setIsOpen] = useState(false);
   const [activeCategory, setActiveCategory] = useState<'all' | 'posts' | 'groups'>('all');
   const [posts, setPosts] = useState<CommunityPost[]>([]);
   const [groups, setGroups] = useState<SocialGroup[]>([]);
+  const [followedUserIds, setFollowedUserIds] = useState<Set<string>>(new Set());
+  const [profilesPrivacyMap, setProfilesPrivacyMap] = useState<Map<string, ProfilePrivacy>>(new Map());
   const [isMobileSearchOpen, setIsMobileSearchOpen] = useState(false);
   const [isListening, setIsListening] = useState(false);
   const [speechError, setSpeechError] = useState<string | null>(null);
@@ -97,6 +109,34 @@ export const GlobalSearchBar: React.FC<GlobalSearchBarProps> = ({
     };
   }, []);
 
+  useEffect(() => {
+    let active = true;
+    if (authUser?.id && isValidProfileUuid(authUser.id)) {
+      fetchFollowedUserIds().then(({ followedIds, error }) => {
+        if (active && !error) setFollowedUserIds(followedIds);
+      });
+    } else {
+      setFollowedUserIds(new Set());
+    }
+    return () => {
+      active = false;
+    };
+  }, [authUser?.id]);
+
+  useEffect(() => {
+    const ids = Array.from(
+      new Set(posts.map((p) => p.author?.id).filter((id): id is string => Boolean(id && isValidProfileUuid(id))))
+    );
+    if (ids.length === 0) return;
+    let active = true;
+    fetchProfilesPrivacyBatch(ids).then(({ privacyMap, error }) => {
+      if (active && !error && privacyMap.size > 0) setProfilesPrivacyMap(privacyMap);
+    });
+    return () => {
+      active = false;
+    };
+  }, [posts]);
+
   // Global Keyboard shortcut: Cmd+K / Ctrl+K / '/'
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -133,9 +173,34 @@ export const GlobalSearchBar: React.FC<GlobalSearchBarProps> = ({
 
   // Filter posts and groups
   const trimmedQuery = query.trim().toLowerCase();
+  const viewerId = authUser?.id || (userProfile?.id !== 'guest' ? userProfile?.id : null);
+  const supabaseActive = isSupabaseConfigured();
 
   const matchedPosts = trimmedQuery
     ? posts.filter((p) => {
+        const authorId = p.author?.id;
+        const viewerIsOwner = isContentOwner(p.author, userProfile, authUser, p.postingIdentity, p.id);
+        const authorProfilePrivacy =
+          (authorId && profilesPrivacyMap.get(authorId)) ||
+          p.authorProfilePrivacy ||
+          p.author?.profilePrivacy ||
+          'public';
+        const viewerFollowsAuthor = Boolean(
+          (authorId && followedUserIds.has(authorId)) ||
+            (!supabaseActive && (isUserFollowed(p.author?.id) || isUserFollowed(p.author?.username)))
+        );
+        if (
+          !canViewerAccessPost({
+            visibility: p.visibility,
+            authorId,
+            authorProfilePrivacy,
+            viewerId,
+            viewerFollowsAuthor,
+            viewerIsOwner,
+          })
+        ) {
+          return false;
+        }
         const promptMatch = p.prompt?.toLowerCase().includes(trimmedQuery);
         const captionMatch = p.caption?.toLowerCase().includes(trimmedQuery);
         const authorMatch =

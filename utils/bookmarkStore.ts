@@ -1,18 +1,15 @@
-import { CommunityPost, ReelHighlight } from '../types/community';
+import { CommunityPost, ProfilePrivacy, ReelHighlight } from '../types/community';
 import { getCommunityPosts, saveCommunityPosts } from './communityStore';
 import { getReelHighlights, saveReelHighlights } from './socialStore';
-import { safeGetItem, safeSetItem } from './storageUtils';
+import { canViewerAccessPost, resolveViewerIsOwner } from './privacyPolicy';
+import { safeGetItem, safeSetItem, safeRemoveItem } from './storageUtils';
 
 const SAVED_POSTS_KEY = 'metfa_saved_posts_ids_v2';
 const SAVED_REELS_KEY = 'metfa_saved_reels_ids_v2';
 
-// Seed default saved items if first time
 const DEFAULT_SAVED_POST_IDS: string[] = [];
 const DEFAULT_SAVED_REEL_IDS: string[] = [];
 
-/**
- * Retrieve saved post IDs array from localStorage
- */
 export const getSavedPostIds = (): string[] => {
   try {
     const raw = safeGetItem(SAVED_POSTS_KEY);
@@ -26,9 +23,6 @@ export const getSavedPostIds = (): string[] => {
   return DEFAULT_SAVED_POST_IDS;
 };
 
-/**
- * Save post IDs array to localStorage
- */
 export const saveSavedPostIds = (ids: string[]): void => {
   safeSetItem(SAVED_POSTS_KEY, JSON.stringify(ids));
   if (typeof window !== 'undefined') {
@@ -36,9 +30,6 @@ export const saveSavedPostIds = (ids: string[]): void => {
   }
 };
 
-/**
- * Retrieve saved reel IDs array from localStorage
- */
 export const getSavedReelIds = (): string[] => {
   try {
     const raw = safeGetItem(SAVED_REELS_KEY);
@@ -52,9 +43,6 @@ export const getSavedReelIds = (): string[] => {
   return DEFAULT_SAVED_REEL_IDS;
 };
 
-/**
- * Save reel IDs array to localStorage
- */
 export const saveSavedReelIds = (ids: string[]): void => {
   safeSetItem(SAVED_REELS_KEY, JSON.stringify(ids));
   if (typeof window !== 'undefined') {
@@ -62,27 +50,19 @@ export const saveSavedReelIds = (ids: string[]): void => {
   }
 };
 
-/**
- * Check if a post is currently saved
- */
 export const isPostSaved = (postId: string): boolean => {
   const savedIds = getSavedPostIds();
   return savedIds.includes(postId);
 };
 
-/**
- * Check if a reel is currently saved
- */
 export const isReelSaved = (reelId: string): boolean => {
   const savedIds = getSavedReelIds();
   return savedIds.includes(reelId);
 };
 
-/**
- * Toggle bookmark/save state for a community post
- * Returns updated status and updates posts in communityStore
- */
-export const toggleSavePost = (postId: string): { isSaved: boolean; updatedPosts: CommunityPost[]; post?: CommunityPost } => {
+export const toggleSavePost = (
+  postId: string
+): { isSaved: boolean; updatedPosts: CommunityPost[]; post?: CommunityPost } => {
   const currentSavedIds = getSavedPostIds();
   const alreadySaved = currentSavedIds.includes(postId);
   const nextSaved = !alreadySaved;
@@ -93,7 +73,6 @@ export const toggleSavePost = (postId: string): { isSaved: boolean; updatedPosts
 
   saveSavedPostIds(nextSavedIds);
 
-  // Sync isBookmarked flag on community posts
   const posts = getCommunityPosts();
   let targetPost: CommunityPost | undefined;
   const updatedPosts = posts.map((p) => {
@@ -109,11 +88,9 @@ export const toggleSavePost = (postId: string): { isSaved: boolean; updatedPosts
   return { isSaved: nextSaved, updatedPosts, post: targetPost };
 };
 
-/**
- * Toggle bookmark/save state for a Reel
- * Returns updated status and updates reels in socialStore
- */
-export const toggleSaveReel = (reelId: string): { isSaved: boolean; updatedReels: ReelHighlight[]; reel?: ReelHighlight } => {
+export const toggleSaveReel = (
+  reelId: string
+): { isSaved: boolean; updatedReels: ReelHighlight[]; reel?: ReelHighlight } => {
   const currentSavedIds = getSavedReelIds();
   const alreadySaved = currentSavedIds.includes(reelId);
   const nextSaved = !alreadySaved;
@@ -124,7 +101,6 @@ export const toggleSaveReel = (reelId: string): { isSaved: boolean; updatedReels
 
   saveSavedReelIds(nextSavedIds);
 
-  // Sync isSaved flag and savesCount on Reels
   const reels = getReelHighlights();
   let targetReel: ReelHighlight | undefined;
   const updatedReels = reels.map((r) => {
@@ -146,27 +122,90 @@ export const toggleSaveReel = (reelId: string): { isSaved: boolean; updatedReels
   return { isSaved: nextSaved, updatedReels, reel: targetReel };
 };
 
-/**
- * Get all full CommunityPost objects that are bookmarked
- */
 export const getSavedPostsList = (allPosts?: CommunityPost[]): CommunityPost[] => {
   const savedIds = getSavedPostIds();
   const source = allPosts && allPosts.length > 0 ? allPosts : getCommunityPosts();
   return source.filter((p) => savedIds.includes(p.id) || p.isBookmarked);
 };
 
-/**
- * Get all full ReelHighlight objects that are bookmarked
- */
 export const getSavedReelsList = (allReels?: ReelHighlight[]): ReelHighlight[] => {
   const savedIds = getSavedReelIds();
   const source = allReels && allReels.length > 0 ? allReels : getReelHighlights();
   return source.filter((r) => savedIds.includes(r.id) || r.isSaved);
 };
 
+export interface SavedVisibilityContext {
+  viewerId?: string | null;
+  followedUserIds?: Set<string>;
+  profilesPrivacyMap?: Map<string, ProfilePrivacy>;
+}
+
 /**
- * Total count of saved items (posts + reels)
+ * Filters bookmarked posts by live viewer access rules so previously saved items
+ * that became private, only_me, or unfollowed are never revealed to unauthorized viewers.
  */
+export const filterVisibleSavedPosts = (
+  posts: CommunityPost[],
+  viewerCtx: SavedVisibilityContext
+): CommunityPost[] => {
+  const viewerId = viewerCtx.viewerId || null;
+  return posts.filter((post) => {
+    const authorId = post.author?.id || null;
+    const authorProfilePrivacy =
+      (authorId ? viewerCtx.profilesPrivacyMap?.get(authorId) : undefined) ||
+      post.authorProfilePrivacy ||
+      post.author?.profilePrivacy ||
+      'public';
+    const viewerFollowsAuthor = Boolean(authorId && viewerCtx.followedUserIds?.has(authorId));
+    const viewerIsOwner = resolveViewerIsOwner(
+      { authorId, postingIdentityId: post.postingIdentity?.id, postId: post.id },
+      viewerId
+    );
+    return canViewerAccessPost({
+      visibility: post.visibility ?? null,
+      authorId,
+      authorProfilePrivacy,
+      viewerId,
+      viewerFollowsAuthor,
+      viewerIsOwner,
+    });
+  });
+};
+
+export const filterVisibleSavedReels = (
+  reels: ReelHighlight[],
+  viewerCtx: SavedVisibilityContext
+): ReelHighlight[] => {
+  const viewerId = viewerCtx.viewerId || null;
+  return reels.filter((reel) => {
+    const authorId = reel.author?.id || null;
+    const authorProfilePrivacy =
+      (authorId ? viewerCtx.profilesPrivacyMap?.get(authorId) : undefined) ||
+      reel.authorProfilePrivacy ||
+      reel.author?.profilePrivacy ||
+      'public';
+    const viewerFollowsAuthor = Boolean(authorId && viewerCtx.followedUserIds?.has(authorId));
+    const viewerIsOwner = resolveViewerIsOwner({ authorId, postId: reel.id }, viewerId);
+    return canViewerAccessPost({
+      visibility: reel.visibility ?? null,
+      authorId,
+      authorProfilePrivacy,
+      viewerId,
+      viewerFollowsAuthor,
+      viewerIsOwner,
+    });
+  });
+};
+
+export const clearBookmarkCache = (): void => {
+  safeRemoveItem(SAVED_POSTS_KEY);
+  safeRemoveItem(SAVED_REELS_KEY);
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new CustomEvent('metfa_saved_items_updated', { detail: { type: 'posts', ids: [] } }));
+    window.dispatchEvent(new CustomEvent('metfa_saved_items_updated', { detail: { type: 'reels', ids: [] } }));
+  }
+};
+
 export const getTotalSavedCount = (): number => {
   const postCount = getSavedPostIds().length;
   const reelCount = getSavedReelIds().length;

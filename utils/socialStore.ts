@@ -1,6 +1,5 @@
-import { SocialPage, SocialGroup, PostingIdentity, ReelHighlight, LiveStream, UserProfile } from '../types/community';
+import { SocialPage, SocialGroup, PostingIdentity, ReelHighlight, LiveStream } from '../types/community';
 import { addNotification } from './notificationStore';
-import { saveUserProfile, getUserProfile } from './communityStore';
 import { safeSetItem, safeGetItem, safeRemoveItem } from './storageUtils';
 import {
   AuthUser,
@@ -25,7 +24,6 @@ const REELS_STORAGE_KEY = 'metfa_reels_v1';
 const LIVE_STREAMS_KEY = 'metfa_live_streams_v1';
 
 export const INITIAL_AUTH_USER: AuthUser = GUEST_USER;
-
 export const INITIAL_PAGES: SocialPage[] = [];
 
 export const isRealPage = (p: SocialPage): boolean => {
@@ -72,9 +70,6 @@ export const isRealLiveStream = (l: LiveStream): boolean => {
 
 export { generateUniqueUsername, generateUnifiedMetfaId };
 
-/**
- * Authentication management
- */
 export const getAuthUser = (): AuthUser => {
   return getActiveSSOUser();
 };
@@ -145,7 +140,9 @@ export const savePages = (pages: SocialPage[]): void => {
   }
 };
 
-export const createSocialPage = (page: Omit<SocialPage, 'id' | 'createdAt' | 'followersCount' | 'followingCount' | 'isFollowing'>): SocialPage => {
+export const createSocialPage = (
+  page: Omit<SocialPage, 'id' | 'createdAt' | 'followersCount' | 'followingCount' | 'isFollowing'>
+): SocialPage => {
   const current = getPages();
   const auth = getAuthUser();
   const newPage: SocialPage = {
@@ -212,7 +209,9 @@ export const saveGroups = (groups: SocialGroup[]): void => {
   }
 };
 
-export const createSocialGroup = (group: Omit<SocialGroup, 'id' | 'createdAt' | 'membersCount' | 'postsCount' | 'isJoined' | 'members'>): SocialGroup => {
+export const createSocialGroup = (
+  group: Omit<SocialGroup, 'id' | 'createdAt' | 'membersCount' | 'postsCount' | 'isJoined' | 'members'>
+): SocialGroup => {
   const current = getGroups();
   const auth = getAuthUser();
   const newGroup: SocialGroup = {
@@ -299,7 +298,7 @@ export const getActiveIdentity = (): PostingIdentity => {
     name: auth.name,
     username: auth.username,
     avatar: auth.avatar,
-    badge: auth.isVerified ? 'Verified Creator' : (auth.authType === 'guest' ? 'Visitor' : 'Creator'),
+    badge: auth.isVerified ? 'Verified Creator' : auth.authType === 'guest' ? 'Visitor' : 'Creator',
   };
 };
 
@@ -324,7 +323,6 @@ export const getReelHighlights = (): ReelHighlight[] => {
 };
 
 export const saveReelHighlights = (reels: ReelHighlight[]): void => {
-  // Cap reels to latest 50
   const trimmed = reels.filter(isRealReel).slice(0, 50);
   safeSetItem(REELS_STORAGE_KEY, JSON.stringify(trimmed));
   if (typeof window !== 'undefined') {
@@ -353,7 +351,9 @@ export const incrementReelShares = (reelId: string): ReelHighlight[] => {
   return updated;
 };
 
-export const addReelHighlight = (reel: Omit<ReelHighlight, 'id' | 'likesCount' | 'commentsCount' | 'sharesCount' | 'createdAt'>): ReelHighlight => {
+export const addReelHighlight = (
+  reel: Omit<ReelHighlight, 'id' | 'likesCount' | 'commentsCount' | 'sharesCount' | 'createdAt'>
+): ReelHighlight => {
   const current = getReelHighlights();
   const newReel: ReelHighlight = {
     ...reel,
@@ -388,9 +388,6 @@ export const saveLiveStreams = (streams: LiveStream[]): void => {
   }
 };
 
-/**
- * Permanently deletes a reel from storage and broadcasts the update event.
- */
 export const deleteReelHighlight = (reelId: string): ReelHighlight[] => {
   const current = getReelHighlights();
   const updated = current.filter((r) => r.id !== reelId);
@@ -398,9 +395,6 @@ export const deleteReelHighlight = (reelId: string): ReelHighlight[] => {
   return updated;
 };
 
-/**
- * Updates an existing reel's metadata (title, caption).
- */
 export const editReelHighlight = (reelId: string, updates: Partial<ReelHighlight>): ReelHighlight[] => {
   const current = getReelHighlights();
   const updated = current.map((r) => {
@@ -416,6 +410,17 @@ export const editReelHighlight = (reelId: string, updates: Partial<ReelHighlight
   return updated;
 };
 
+export const clearSocialLocalCache = (): void => {
+  safeRemoveItem(AUTH_USER_KEY);
+  safeRemoveItem(ACTIVE_IDENTITY_KEY);
+  safeRemoveItem(REELS_STORAGE_KEY);
+  safeRemoveItem(PAGES_STORAGE_KEY);
+  safeRemoveItem(GROUPS_STORAGE_KEY);
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new CustomEvent('metfa_reels_updated', { detail: [] }));
+  }
+};
+
 import {
   getStoredApiKeys,
   saveStoredApiKeys,
@@ -424,9 +429,6 @@ import {
   type AppApiKeys,
 } from './apiKeysStore';
 
-// =========================================================================
-// API KEY & CLOUD ACCELERATION HELPERS
-// =========================================================================
 export {
   getStoredApiKeys,
   saveStoredApiKeys,
@@ -445,8 +447,8 @@ export const getCloudAccelerationStatus = () => {
       hasClaude: Boolean(keys.claudeApiKey && keys.claudeApiKey.trim().length > 3),
       isAccelerated: Boolean(
         (keys.geminiApiKey && keys.geminiApiKey.trim().length > 3) ||
-        (keys.openaiApiKey && keys.openaiApiKey.trim().length > 3) ||
-        (keys.grokApiKey && keys.grokApiKey.trim().length > 3)
+          (keys.openaiApiKey && keys.openaiApiKey.trim().length > 3) ||
+          (keys.grokApiKey && keys.grokApiKey.trim().length > 3)
       ),
     };
   } catch {
@@ -459,5 +461,3 @@ export const getCloudAccelerationStatus = () => {
     };
   }
 };
-
-

@@ -1,0 +1,807 @@
+import React, { useState, useEffect, useMemo, useRef, useCallback, Suspense, lazy } from 'react';
+import CommunityFeed from '../../components/CommunityFeed';
+import ReelsFeedView from '../../components/ReelsFeedView';
+import CreatePostModal from '../../components/CreatePostModal';
+import ProfileView from '../../components/ProfileView';
+
+// Lazy-load heavy non-initial views and modals
+const LiveStreamingStudio = lazy(() => import('../../components/LiveStreamingStudio'));
+const PagesDirectory = lazy(() => import('../../components/PagesDirectory'));
+const GroupsDirectory = lazy(() => import('../../components/GroupsDirectory'));
+const NotificationsView = lazy(() => import('../../components/NotificationsView'));
+const CreateReelModal = lazy(() => import('../../components/CreateReelModal'));
+const CreatePageModal = lazy(() => import('../../components/CreatePageModal'));
+const CreateGroupModal = lazy(() => import('../../components/CreateGroupModal'));
+const ShareToFeedModal = lazy(() => import('../../components/ShareToFeedModal'));
+const MessagesModule = lazy(() => import('../../components/messaging/MessagesModule'));
+const AiEditorModal = lazy(() => import('../ai-editor'));
+import { CommunityPost, ReelHighlight, UserProfile } from '../../types/community';
+import { AudioTrack } from '../../types/audio';
+import { ProcessedMediaResult } from '../ai-editor/types';
+import { createOriginalSoundRecord } from '../../utils/audioStore';
+import {
+  getCommunityPosts,
+  saveCommunityPosts,
+  fetchAndSyncCommunityPosts,
+  createPostAsync,
+  isContentOwner,
+  extractPostIdFromHash,
+  matchesPostId,
+} from '../../utils/communityStore';
+import { fetchSupabasePostById } from '../../services/postService';
+import { fetchFollowedUserIds, fetchSingleProfilePrivacy } from '../../services/followService';
+import { canViewerAccessPost } from '../../utils/privacyPolicy';
+import { isSupabaseConfigured } from '../../services/supabaseClient';
+import {
+  getReelHighlights,
+  saveReelHighlights,
+} from '../../utils/socialStore';
+import {
+  fetchPersistentReels,
+  migrateLocalStorageReels,
+} from '../../services/reelService';
+import { DailyCreditsData } from '../../utils/creditManager';
+import { addNotification } from '../../utils/notificationStore';
+import { useAuth } from '../../context/AuthContext';
+
+export type SocialSubTab = 'feed' | 'reels' | 'notifications' | 'live' | 'pages' | 'groups' | 'profile' | 'marketplace' | 'messages';
+
+export interface SocialEcosystemProps {
+  currentTab: SocialSubTab;
+  onNavigateTab: (tab: string) => void;
+  creditsData: DailyCreditsData;
+  onWatchAdClick?: () => void;
+  onOpenAuthModal?: () => void;
+  onRemixPrompt?: (prompt: string, stylePreset?: string) => void;
+  shareModalData?: { prompt: string; imageSrc: string; stylePreset?: string } | null;
+  onCloseShareModal?: () => void;
+  activeChatPartnerId?: string | null;
+  activeChatPartnerProfile?: UserProfile | null;
+  activeConversationId?: string | null;
+  viewedProfileUserId?: string | null;
+  onViewProfile?: (targetUserId: string) => void;
+}
+
+export const SocialEcosystemModule: React.FC<SocialEcosystemProps> = ({
+  currentTab,
+  onNavigateTab,
+  creditsData,
+  onWatchAdClick,
+  onOpenAuthModal,
+  onRemixPrompt,
+  shareModalData,
+  onCloseShareModal,
+  activeChatPartnerId,
+  activeChatPartnerProfile,
+  activeConversationId,
+  viewedProfileUserId,
+  onViewProfile,
+}) => {
+  const { user, userProfile, updateProfile, isSupabaseConnected, isAuthenticated } = useAuth();
+
+  // Social State (Isolated from AI Studio chat & inference)
+  const [posts, setPosts] = useState<CommunityPost[]>(() => getCommunityPosts());
+  const [reels, setReels] = useState<ReelHighlight[]>(() => getReelHighlights());
+  const [isLoadingPosts, setIsLoadingPosts] = useState<boolean>(true);
+  const [isLoadingReels, setIsLoadingReels] = useState<boolean>(true);
+  const [targetSharedPostId, setTargetSharedPostId] = useState<string | null>(() => {
+    if (typeof window !== 'undefined') {
+      return extractPostIdFromHash(window.location.hash);
+    }
+    return null;
+  });
+  const [targetReelId, setTargetReelId] = useState<string | null>(() => {
+    if (typeof window !== 'undefined') {
+      const match = window.location.hash.match(/^#\/?reel[_-]([a-zA-Z0-9_\-]+)/);
+      return match ? match[1] : null;
+    }
+    return null;
+  });
+  const [directSelectedReel, setDirectSelectedReel] = useState<ReelHighlight | null>(null);
+
+  const postsRef = useRef<CommunityPost[]>(posts);
+  const reelsRef = useRef<ReelHighlight[]>(reels);
+  useEffect(() => {
+    postsRef.current = posts;
+  }, [posts]);
+  useEffect(() => {
+    reelsRef.current = reels;
+  }, [reels]);
+
+  // Creation Modals
+  const [isCreatePostOpen, setIsCreatePostOpen] = useState(false);
+  const [isCreateReelOpen, setIsCreateReelOpen] = useState(false);
+  const [isCreatePageOpen, setIsCreatePageOpen] = useState(false);
+  const [isCreateGroupOpen, setIsCreateGroupOpen] = useState(false);
+  const [isAiEditorOpen, setIsAiEditorOpen] = useState(false);
+  const [editorInitialVideo, setEditorInitialVideo] = useState<{ src: string; isReel: boolean; title?: string } | null>(null);
+  const [editorInitialAudio, setEditorInitialAudio] = useState<AudioTrack | null>(null);
+
+  // Automatically load and synchronize posts from Supabase database
+  useEffect(() => {
+    let isMounted = true;
+    setIsLoadingPosts(true);
+
+    fetchAndSyncCommunityPosts().then(async (syncedPosts) => {
+      if (!isMounted) return;
+
+      let finalPosts = syncedPosts || [];
+
+      // Check if a deep-linked shared post is requested
+      const currentTargetId = extractPostIdFromHash(window.location.hash) || targetSharedPostId;
+      if (currentTargetId) {
+        const alreadyPresent = finalPosts.some((p) => matchesPostId(p, currentTargetId));
+        if (!alreadyPresent && isSupabaseConfigured()) {
+          try {
+            const { post: singlePost } = await fetchSupabasePostById(currentTargetId);
+            if (singlePost && isMounted) {
+              finalPosts = [singlePost, ...finalPosts.filter((p) => p.id !== singlePost.id)];
+            }
+          } catch (err) {
+            console.warn('[SocialModule] Error fetching targeted shared post:', err);
+          }
+        }
+      }
+
+      if (isMounted) {
+        setPosts(finalPosts);
+        setIsLoadingPosts(false);
+      }
+    });
+
+    return () => {
+      isMounted = false;
+    };
+  }, [user?.id, isSupabaseConnected]);
+
+  // Automatically load and synchronize reels from persistent cloud storage / Supabase
+  useEffect(() => {
+    let isMounted = true;
+    if (reelsRef.current.length === 0) {
+      setIsLoadingReels(true);
+    }
+
+    fetchPersistentReels()
+      .then(({ reels: persistentReels }) => {
+        if (isMounted) {
+          setReels(persistentReels);
+          setIsLoadingReels(false);
+        }
+      })
+      .catch(() => {
+        if (isMounted) setIsLoadingReels(false);
+      });
+
+    // If user is authenticated, attempt safe idempotent migration of legacy LocalStorage reels
+    if (user?.id) {
+      migrateLocalStorageReels(user.id).then((res) => {
+        if (res.migratedCount > 0 && isMounted) {
+          fetchPersistentReels().then(({ reels: updated }) => {
+            if (isMounted) setReels(updated);
+          });
+        }
+      }).catch((e) => console.warn('[SocialModule] Reel migration note:', e));
+    }
+
+    return () => {
+      isMounted = false;
+    };
+  }, [user?.id, isSupabaseConnected, currentTab === 'reels']);
+
+  const [targetReelInitialTime, setTargetReelInitialTime] = useState<number>(0);
+
+  const resolveDirectSelectedReel = useCallback(
+    (
+      reelId: string,
+      videoPayload?: { videoSrc?: string; title?: string; author?: any; thumbnailSrc?: string; currentTime?: number }
+    ) => {
+      const inPersistent = reelsRef.current.some((r) => r.id === reelId);
+      if (inPersistent) {
+        setDirectSelectedReel(null);
+        return;
+      }
+
+      const matchedPost = postsRef.current.find((p) => p.id === reelId);
+      const effectiveVideoSrc = matchedPost?.videoSrc || videoPayload?.videoSrc;
+      if (effectiveVideoSrc) {
+        const transientReel: ReelHighlight = {
+          id: reelId,
+          title: matchedPost?.videoTitle || matchedPost?.prompt || videoPayload?.title || 'Metfa Reel',
+          caption: matchedPost?.caption || '',
+          visibility: matchedPost?.visibility,
+          authorProfilePrivacy:
+            matchedPost?.authorProfilePrivacy || matchedPost?.author?.profilePrivacy || 'public',
+          author: {
+            id: matchedPost?.author?.id || videoPayload?.author?.id || userProfile?.id || 'creator',
+            name: matchedPost?.author?.name || videoPayload?.author?.name || userProfile?.name || 'Metfa Creator',
+            username: matchedPost?.author?.username || videoPayload?.author?.username || userProfile?.username || 'creator',
+            avatar: matchedPost?.author?.avatar || videoPayload?.author?.avatar || userProfile?.avatar || '',
+            isVerified: matchedPost?.author?.isVerified ?? true,
+            profilePrivacy: matchedPost?.authorProfilePrivacy || matchedPost?.author?.profilePrivacy || 'public',
+          },
+          videoSrc: effectiveVideoSrc,
+          thumbnailSrc: matchedPost?.videoThumbnail || matchedPost?.imageSrc || videoPayload?.thumbnailSrc,
+          duration: 15,
+          likesCount: matchedPost?.likesCount || 0,
+          commentsCount: matchedPost?.commentsCount || 0,
+          sharesCount: matchedPost?.sharesCount || 0,
+          createdAt: matchedPost?.createdAt || 'Just now',
+        };
+        setDirectSelectedReel(transientReel);
+        return;
+      }
+
+      // If opened via deep link before posts loaded, resolve from Supabase by post ID
+      if (isSupabaseConfigured()) {
+        setIsLoadingReels(true);
+        fetchSupabasePostById(reelId)
+          .then(async ({ post }) => {
+            if (post && post.videoSrc) {
+              const viewerId = user?.id || (userProfile?.id !== 'guest' ? userProfile?.id : null);
+              const viewerIsOwner = isContentOwner(post.author, userProfile, user, post.postingIdentity, post.id);
+              const [{ followedIds }, authorPrivacy] = await Promise.all([
+                viewerId ? fetchFollowedUserIds() : Promise.resolve({ followedIds: new Set<string>() }),
+                post.author?.id
+                  ? fetchSingleProfilePrivacy(post.author.id)
+                  : Promise.resolve(post.authorProfilePrivacy || post.author?.profilePrivacy || 'public'),
+              ]);
+              const allowed = canViewerAccessPost({
+                visibility: post.visibility,
+                authorId: post.author?.id,
+                authorProfilePrivacy: authorPrivacy,
+                viewerId,
+                viewerFollowsAuthor: Boolean(post.author?.id && followedIds.has(post.author.id)),
+                viewerIsOwner,
+              });
+              if (!allowed) {
+                setDirectSelectedReel(null);
+                return;
+              }
+              setDirectSelectedReel({
+                id: post.id,
+                title: post.videoTitle || post.prompt || 'Metfa Reel',
+                caption: post.caption || '',
+                visibility: post.visibility,
+                authorProfilePrivacy: authorPrivacy,
+                author: {
+                  id: post.author?.id || 'creator',
+                  name: post.author?.name || 'Metfa Creator',
+                  username: post.author?.username || 'creator',
+                  avatar: post.author?.avatar || '',
+                  isVerified: post.author?.isVerified ?? true,
+                  profilePrivacy: authorPrivacy,
+                },
+                videoSrc: post.videoSrc,
+                thumbnailSrc: post.videoThumbnail || post.imageSrc,
+                duration: 15,
+                likesCount: post.likesCount || 0,
+                commentsCount: post.commentsCount || 0,
+                sharesCount: post.sharesCount || 0,
+                createdAt: post.createdAt || 'Just now',
+              });
+            }
+          })
+          .catch(() => {})
+          .finally(() => {
+            setIsLoadingReels(false);
+          });
+      }
+    },
+    [userProfile, user]
+  );
+
+  // If a deep-linked targetReelId was present before Supabase config loaded, resolve it once connected
+  useEffect(() => {
+    if (isSupabaseConnected && currentTab === 'reels' && targetReelId && !directSelectedReel) {
+      if (!reelsRef.current.some((r) => r.id === targetReelId)) {
+        resolveDirectSelectedReel(targetReelId);
+      }
+    }
+  }, [isSupabaseConnected, currentTab, targetReelId, directSelectedReel, resolveDirectSelectedReel]);
+
+  const handleOpenReel = useCallback(
+    (
+      reelId: string,
+      videoPayload?: { videoSrc?: string; title?: string; author?: any; thumbnailSrc?: string; currentTime?: number }
+    ) => {
+      if (!reelId) return;
+      console.log('[Metfa Nav] features/social handleOpenReel called with:', reelId, 'pos:', videoPayload?.currentTime);
+      setTargetReelId(reelId);
+      if (typeof videoPayload?.currentTime === 'number' && videoPayload.currentTime > 0) {
+        setTargetReelInitialTime(videoPayload.currentTime);
+      } else {
+        setTargetReelInitialTime(0);
+      }
+
+      resolveDirectSelectedReel(reelId, videoPayload);
+
+      if (typeof window !== 'undefined') {
+        try {
+          if (window.location.hash !== `#reel-${reelId}`) {
+            window.location.hash = `#reel-${reelId}`;
+          }
+        } catch {}
+      }
+      if (currentTab !== 'reels') {
+        onNavigateTab('reels');
+      }
+    },
+    [currentTab, onNavigateTab, resolveDirectSelectedReel]
+  );
+
+  // Deep Link listener for URL hash changes (#post-post_1788406851913 or #reel-reel_123)
+  useEffect(() => {
+    const handleHashChange = async () => {
+      const hash = window.location.hash || '';
+      const reelMatch = hash.match(/^#\/?reel[_-]([a-zA-Z0-9_\-]+)/);
+      if (reelMatch) {
+        const reelId = reelMatch[1];
+        setTargetReelId(reelId);
+        resolveDirectSelectedReel(reelId);
+        onNavigateTab('reels');
+        return;
+      }
+
+      const postId = extractPostIdFromHash(hash);
+      if (postId) {
+        setTargetSharedPostId(postId);
+        onNavigateTab('feed');
+
+        // If post not already in state and Supabase is configured, fetch immediately
+        setPosts((currentPosts) => {
+          const exists = currentPosts.some((p) => matchesPostId(p, postId));
+          if (!exists && isSupabaseConfigured()) {
+            fetchSupabasePostById(postId).then(({ post }) => {
+              if (post) {
+                setPosts((prev) => {
+                  if (prev.some((p) => matchesPostId(p, post.id))) return prev;
+                  return [post, ...prev];
+                });
+              }
+            });
+          }
+          return currentPosts;
+        });
+      } else {
+        setTargetSharedPostId(null);
+      }
+    };
+
+    // Only process initial hash on mount if an explicit hash is present in the URL
+    if (typeof window !== 'undefined' && window.location.hash) {
+      handleHashChange();
+    }
+    window.addEventListener('hashchange', handleHashChange);
+    return () => {
+      window.removeEventListener('hashchange', handleHashChange);
+    };
+  }, [onNavigateTab, resolveDirectSelectedReel]);
+
+  // Clear targetReelId, transient directSelectedReel, and any stale reel hash when currentTab is not reels
+  useEffect(() => {
+    if (currentTab !== 'reels') {
+      setTargetReelId(null);
+      setDirectSelectedReel(null);
+      setTargetReelInitialTime(0);
+      if (typeof window !== 'undefined' && window.location.hash.match(/^#\/?reel[_-]/)) {
+        try {
+          history.replaceState(null, '', window.location.pathname + window.location.search);
+        } catch {}
+      }
+    }
+  }, [currentTab]);
+
+  // Listen for custom event metfa_open_reel across the app
+  useEffect(() => {
+    const handleMetfaOpenReel = (e: any) => {
+      const reelId = e?.detail?.reelId;
+      if (reelId) {
+        handleOpenReel(reelId, {
+          videoSrc: e?.detail?.videoSrc,
+          title: e?.detail?.title,
+          author: e?.detail?.author,
+          thumbnailSrc: e?.detail?.thumbnailSrc,
+          currentTime: e?.detail?.currentTime,
+        });
+      }
+    };
+    window.addEventListener('metfa_open_reel', handleMetfaOpenReel);
+    return () => {
+      window.removeEventListener('metfa_open_reel', handleMetfaOpenReel);
+    };
+  }, [handleOpenReel]);
+
+  // Automatically dismiss active modals when currentTab changes
+  useEffect(() => {
+    if (currentTab === 'marketplace') {
+      window.open('https://sellme-copy-975fc0cd.base44.app', '_blank', 'noopener,noreferrer');
+      onNavigateTab('feed');
+      return;
+    }
+    setIsCreatePostOpen(false);
+    setIsCreateReelOpen(false);
+    setIsCreatePageOpen(false);
+    setIsCreateGroupOpen(false);
+  }, [currentTab, onNavigateTab]);
+
+  // Synchronize posts and reels when updated externally
+  useEffect(() => {
+    const handlePostsUpdated = (e: any) => {
+      if (e.detail) setPosts(e.detail);
+    };
+    const handleReelsUpdated = (e: any) => {
+      if (e.detail) setReels(e.detail);
+    };
+    const handleAuthChanged = () => {
+      setDirectSelectedReel(null);
+      setTargetSharedPostId(null);
+      setPosts(getCommunityPosts());
+      setReels(getReelHighlights());
+    };
+    window.addEventListener('metfa_posts_updated', handlePostsUpdated);
+    window.addEventListener('metfa_reels_updated', handleReelsUpdated);
+    window.addEventListener('metfa_auth_changed', handleAuthChanged);
+    return () => {
+      window.removeEventListener('metfa_posts_updated', handlePostsUpdated);
+      window.removeEventListener('metfa_reels_updated', handleReelsUpdated);
+      window.removeEventListener('metfa_auth_changed', handleAuthChanged);
+    };
+  }, []);
+
+  const handlePostCreated = async (newPostData: any) => {
+    try {
+      const authorId = user?.id || userProfile?.id;
+      const createdPost = await createPostAsync(newPostData, authorId);
+      setPosts((prev) => [createdPost, ...prev.filter((p) => p.id !== createdPost.id)]);
+      onNavigateTab('feed');
+      return createdPost;
+    } catch (err) {
+      console.warn('[SocialModule] Error creating post:', err);
+      throw err;
+    }
+  };
+
+  const handleReelCreated = (newReel: ReelHighlight) => {
+    const updated = [newReel, ...reels];
+    setReels(updated);
+    onNavigateTab('reels');
+
+    addNotification({
+      type: 'remix',
+      title: 'Reel Published',
+      message: `Your reel "${newReel.title}" is now live!`,
+      linkTab: 'reels',
+    });
+  };
+
+  const handleRemix = (prompt: string, stylePreset?: string) => {
+    if (onRemixPrompt) {
+      onRemixPrompt(prompt, stylePreset);
+    }
+  };
+
+  return (
+    <div className="w-full h-full flex flex-col flex-1 min-h-0 relative overflow-hidden">
+      {/* Sub-view switcher based on currentTab */}
+      {currentTab === 'feed' && (
+        <CommunityFeed
+          posts={posts}
+          onUpdatePosts={(p) => {
+            setPosts(p);
+            saveCommunityPosts(p);
+          }}
+          userProfile={userProfile}
+          onRemixPrompt={handleRemix}
+          onCreatePostClick={() => {
+            if (!isAuthenticated) {
+              if (onOpenAuthModal) onOpenAuthModal();
+              else window.dispatchEvent(new CustomEvent('metfa_open_auth_modal'));
+              return;
+            }
+            setIsCreatePostOpen(true);
+          }}
+          onOpenAiEditor={() => {
+            if (!isAuthenticated) {
+              if (onOpenAuthModal) onOpenAuthModal();
+              else window.dispatchEvent(new CustomEvent('metfa_open_auth_modal'));
+              return;
+            }
+            setIsAiEditorOpen(true);
+          }}
+          targetSharedPostId={targetSharedPostId}
+          isLoadingPosts={isLoadingPosts}
+          onOpenReel={handleOpenReel}
+          onClearSharedPost={() => {
+            setTargetSharedPostId(null);
+            if (typeof window !== 'undefined' && window.location.hash.startsWith('#post')) {
+              window.history.replaceState(null, '', window.location.pathname + window.location.search);
+            }
+          }}
+        />
+      )}
+
+      {currentTab === 'reels' && (
+        <ReelsFeedView
+          reels={reels}
+          directSelectedReel={directSelectedReel}
+          isLoading={isLoadingReels}
+          targetReelId={targetReelId}
+          initialCurrentTime={targetReelInitialTime}
+          onClearTargetReel={() => {
+            setTargetReelId(null);
+            setDirectSelectedReel(null);
+            setTargetReelInitialTime(0);
+            if (typeof window !== 'undefined' && window.location.hash.startsWith('#reel')) {
+              window.history.replaceState(null, '', window.location.pathname + window.location.search);
+            }
+          }}
+          onUpdateReels={(r) => setReels(r)}
+          userProfile={userProfile}
+          onRemixPrompt={(prompt) => handleRemix(prompt)}
+          onNavigateTab={onNavigateTab}
+          onViewProfile={onViewProfile}
+          onCreateReelClick={() => {
+            if (!isAuthenticated) {
+              if (onOpenAuthModal) onOpenAuthModal();
+              else window.dispatchEvent(new CustomEvent('metfa_open_auth_modal'));
+              return;
+            }
+            setIsCreateReelOpen(true);
+          }}
+          onUseMusic={(track) => {
+            if (!isAuthenticated) {
+              if (onOpenAuthModal) onOpenAuthModal();
+              else window.dispatchEvent(new CustomEvent('metfa_open_auth_modal'));
+              return;
+            }
+            setEditorInitialAudio(track);
+            setIsCreateReelOpen(true);
+          }}
+        />
+      )}
+
+      {currentTab === 'notifications' && (
+        <Suspense fallback={<div className="flex-1 flex items-center justify-center p-8 text-slate-400 text-xs">Loading Notifications...</div>}>
+          <NotificationsView
+            onNavigateTab={onNavigateTab}
+            onWatchAdClick={onWatchAdClick}
+          />
+        </Suspense>
+      )}
+
+      {currentTab === 'live' && (
+        <Suspense fallback={<div className="flex-1 flex items-center justify-center p-8 text-slate-400 text-xs">Loading Live Studio...</div>}>
+          <LiveStreamingStudio userProfile={userProfile} />
+        </Suspense>
+      )}
+
+      {currentTab === 'pages' && (
+        <Suspense fallback={<div className="flex-1 flex items-center justify-center p-8 text-slate-400 text-xs">Loading Pages...</div>}>
+          <PagesDirectory
+            userProfile={userProfile}
+            onCreatePageClick={() => {
+              if (!isAuthenticated) {
+                if (onOpenAuthModal) onOpenAuthModal();
+                else window.dispatchEvent(new CustomEvent('metfa_open_auth_modal'));
+                return;
+              }
+              setIsCreatePageOpen(true);
+            }}
+          />
+        </Suspense>
+      )}
+
+      {currentTab === 'groups' && (
+        <Suspense fallback={<div className="flex-1 flex items-center justify-center p-8 text-slate-400 text-xs">Loading Groups...</div>}>
+          <GroupsDirectory
+            userProfile={userProfile}
+            onCreateGroupClick={() => {
+              if (!isAuthenticated) {
+                if (onOpenAuthModal) onOpenAuthModal();
+                else window.dispatchEvent(new CustomEvent('metfa_open_auth_modal'));
+                return;
+              }
+              setIsCreateGroupOpen(true);
+            }}
+          />
+        </Suspense>
+      )}
+
+      {currentTab === 'profile' && (
+        <ProfileView
+          userProfile={userProfile}
+          viewedProfileUserId={viewedProfileUserId}
+          onUpdateProfile={updateProfile}
+          creditsData={creditsData}
+          userPosts={
+            viewedProfileUserId && viewedProfileUserId !== user?.id && viewedProfileUserId !== userProfile?.id
+              ? posts.filter((p) => p.author?.id === viewedProfileUserId)
+              : posts.filter((p) => isContentOwner(p.author, userProfile, user, p.postingIdentity, p.id))
+          }
+          userReels={
+            viewedProfileUserId && viewedProfileUserId !== user?.id && viewedProfileUserId !== userProfile?.id
+              ? reels.filter((r) => r.author?.id === viewedProfileUserId)
+              : reels.filter((r) => isContentOwner(r.author, userProfile, user, undefined, r.id))
+          }
+          allPosts={posts}
+          allReels={reels}
+          onUpdatePosts={(updated) => {
+            setPosts(updated);
+            saveCommunityPosts(updated);
+          }}
+          onUpdateReels={(updated) => {
+            setReels(updated);
+            saveReelHighlights(updated);
+          }}
+          onWatchAdClick={onWatchAdClick}
+          onOpenAuthModal={onOpenAuthModal}
+          onCreatePageClick={() => {
+            if (!isAuthenticated) {
+              if (onOpenAuthModal) onOpenAuthModal();
+              else window.dispatchEvent(new CustomEvent('metfa_open_auth_modal'));
+              return;
+            }
+            setIsCreatePageOpen(true);
+          }}
+          onCreateGroupClick={() => {
+            if (!isAuthenticated) {
+              if (onOpenAuthModal) onOpenAuthModal();
+              else window.dispatchEvent(new CustomEvent('metfa_open_auth_modal'));
+              return;
+            }
+            setIsCreateGroupOpen(true);
+          }}
+          onOpenChatWithUser={(targetId, targetProfile, conversationId) => {
+            window.dispatchEvent(
+              new CustomEvent('metfa_open_chat', {
+                detail: { partnerId: targetId, partnerProfile: targetProfile, conversationId },
+              })
+            );
+          }}
+        />
+      )}
+
+      {currentTab === 'messages' && (
+        <Suspense fallback={<div className="flex-1 flex items-center justify-center p-8 text-slate-400 text-xs">Loading Messages...</div>}>
+          <div className="max-w-6xl mx-auto w-full p-2 sm:p-4 h-full flex-1 flex flex-col">
+            <MessagesModule
+              initialPartnerId={activeChatPartnerId || undefined}
+              initialPartnerProfile={activeChatPartnerProfile || undefined}
+              initialConversationId={activeConversationId || undefined}
+              onViewProfile={(targetId) => {
+                if (onViewProfile) {
+                  onViewProfile(targetId);
+                } else {
+                  window.dispatchEvent(
+                    new CustomEvent('metfa_view_profile', {
+                      detail: { userId: targetId },
+                    })
+                  );
+                }
+              }}
+              onExploreProfiles={() => onNavigateTab('feed')}
+            />
+          </div>
+        </Suspense>
+      )}
+
+      {/* Share AI Studio Creation to Social Feed Modal */}
+      {shareModalData && (
+        <Suspense fallback={null}>
+          <ShareToFeedModal
+            isOpen={true}
+            onClose={() => onCloseShareModal?.()}
+            postData={shareModalData}
+            userProfile={userProfile}
+            onPostCreated={handlePostCreated}
+          />
+        </Suspense>
+      )}
+
+      {/* Creation Modals */}
+      <CreatePostModal
+        isOpen={isCreatePostOpen}
+        onClose={() => {
+          setIsCreatePostOpen(false);
+          setEditorInitialVideo(null);
+          setEditorInitialAudio(null);
+        }}
+        userProfile={userProfile}
+        onPostCreated={handlePostCreated}
+        initialVideoSrc={editorInitialVideo && !editorInitialVideo.isReel ? editorInitialVideo.src : undefined}
+        initialAudioTrack={editorInitialAudio}
+        onOpenAiEditor={() => {
+          setIsCreatePostOpen(false);
+          if (!isAuthenticated) {
+            if (onOpenAuthModal) onOpenAuthModal();
+            else window.dispatchEvent(new CustomEvent('metfa_open_auth_modal'));
+            return;
+          }
+          setIsAiEditorOpen(true);
+        }}
+      />
+
+      {isCreateReelOpen && (
+        <Suspense fallback={null}>
+          <CreateReelModal
+            isOpen={isCreateReelOpen}
+            onClose={() => {
+              setIsCreateReelOpen(false);
+              setEditorInitialVideo(null);
+              setEditorInitialAudio(null);
+            }}
+            userProfile={userProfile}
+            onReelCreated={handleReelCreated}
+            initialVideoSrc={editorInitialVideo && editorInitialVideo.isReel ? editorInitialVideo.src : undefined}
+            initialAudioTrack={editorInitialAudio}
+            onOpenAiEditor={() => {
+              setIsCreateReelOpen(false);
+              if (!isAuthenticated) {
+                if (onOpenAuthModal) onOpenAuthModal();
+                else window.dispatchEvent(new CustomEvent('metfa_open_auth_modal'));
+                return;
+              }
+              setIsAiEditorOpen(true);
+            }}
+          />
+        </Suspense>
+      )}
+
+      {/* AI Video & Audio Editor Modal */}
+      {isAiEditorOpen && (
+        <Suspense fallback={null}>
+          <AiEditorModal
+            isOpen={isAiEditorOpen}
+            onClose={() => setIsAiEditorOpen(false)}
+            onPostVideo={(dataUrl, isReel, title) => {
+              setIsAiEditorOpen(false);
+              if (isReel) {
+                setEditorInitialVideo({ src: dataUrl, isReel: true, title });
+                setIsCreateReelOpen(true);
+              } else {
+                setEditorInitialVideo({ src: dataUrl, isReel: false, title });
+                setIsCreatePostOpen(true);
+              }
+            }}
+            onPostAudio={(result) => {
+              setIsAiEditorOpen(false);
+              const soundTrack = createOriginalSoundRecord({
+                userId: userProfile.id,
+                username: userProfile.username,
+                userAvatar: userProfile.avatar,
+                reelId: `sound_${Date.now()}`,
+                title: result.name.replace(/\.[^/.]+$/, ''),
+                audioUrl: result.dataUrl,
+                duration: Math.round(result.durationSeconds),
+              });
+              setEditorInitialAudio(soundTrack);
+              setIsCreatePostOpen(true);
+            }}
+          />
+        </Suspense>
+      )}
+
+      {isCreatePageOpen && (
+        <Suspense fallback={null}>
+          <CreatePageModal
+            isOpen={isCreatePageOpen}
+            onClose={() => setIsCreatePageOpen(false)}
+            userProfile={userProfile}
+          />
+        </Suspense>
+      )}
+
+      {isCreateGroupOpen && (
+        <Suspense fallback={null}>
+          <CreateGroupModal
+            isOpen={isCreateGroupOpen}
+            onClose={() => setIsCreateGroupOpen(false)}
+            userProfile={userProfile}
+          />
+        </Suspense>
+      )}
+    </div>
+  );
+};
+
+export default SocialEcosystemModule;

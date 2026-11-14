@@ -29,6 +29,8 @@ import {
   matchesPostId,
 } from '../../utils/communityStore';
 import { fetchSupabasePostById } from '../../services/postService';
+import { fetchFollowedUserIds, fetchSingleProfilePrivacy } from '../../services/followService';
+import { canViewerAccessPost } from '../../utils/privacyPolicy';
 import { isSupabaseConfigured } from '../../services/supabaseClient';
 import {
   getReelHighlights,
@@ -206,12 +208,16 @@ export const SocialEcosystemModule: React.FC<SocialEcosystemProps> = ({
           id: reelId,
           title: matchedPost?.videoTitle || matchedPost?.prompt || videoPayload?.title || 'Metfa Reel',
           caption: matchedPost?.caption || '',
+          visibility: matchedPost?.visibility,
+          authorProfilePrivacy:
+            matchedPost?.authorProfilePrivacy || matchedPost?.author?.profilePrivacy || 'public',
           author: {
             id: matchedPost?.author?.id || videoPayload?.author?.id || userProfile?.id || 'creator',
             name: matchedPost?.author?.name || videoPayload?.author?.name || userProfile?.name || 'Metfa Creator',
             username: matchedPost?.author?.username || videoPayload?.author?.username || userProfile?.username || 'creator',
             avatar: matchedPost?.author?.avatar || videoPayload?.author?.avatar || userProfile?.avatar || '',
             isVerified: matchedPost?.author?.isVerified ?? true,
+            profilePrivacy: matchedPost?.authorProfilePrivacy || matchedPost?.author?.profilePrivacy || 'public',
           },
           videoSrc: effectiveVideoSrc,
           thumbnailSrc: matchedPost?.videoThumbnail || matchedPost?.imageSrc || videoPayload?.thumbnailSrc,
@@ -229,18 +235,41 @@ export const SocialEcosystemModule: React.FC<SocialEcosystemProps> = ({
       if (isSupabaseConfigured()) {
         setIsLoadingReels(true);
         fetchSupabasePostById(reelId)
-          .then(({ post }) => {
+          .then(async ({ post }) => {
             if (post && post.videoSrc) {
+              const viewerId = user?.id || (userProfile?.id !== 'guest' ? userProfile?.id : null);
+              const viewerIsOwner = isContentOwner(post.author, userProfile, user, post.postingIdentity, post.id);
+              const [{ followedIds }, authorPrivacy] = await Promise.all([
+                viewerId ? fetchFollowedUserIds() : Promise.resolve({ followedIds: new Set<string>() }),
+                post.author?.id
+                  ? fetchSingleProfilePrivacy(post.author.id)
+                  : Promise.resolve(post.authorProfilePrivacy || post.author?.profilePrivacy || 'public'),
+              ]);
+              const allowed = canViewerAccessPost({
+                visibility: post.visibility,
+                authorId: post.author?.id,
+                authorProfilePrivacy: authorPrivacy,
+                viewerId,
+                viewerFollowsAuthor: Boolean(post.author?.id && followedIds.has(post.author.id)),
+                viewerIsOwner,
+              });
+              if (!allowed) {
+                setDirectSelectedReel(null);
+                return;
+              }
               setDirectSelectedReel({
                 id: post.id,
                 title: post.videoTitle || post.prompt || 'Metfa Reel',
                 caption: post.caption || '',
+                visibility: post.visibility,
+                authorProfilePrivacy: authorPrivacy,
                 author: {
                   id: post.author?.id || 'creator',
                   name: post.author?.name || 'Metfa Creator',
                   username: post.author?.username || 'creator',
                   avatar: post.author?.avatar || '',
                   isVerified: post.author?.isVerified ?? true,
+                  profilePrivacy: authorPrivacy,
                 },
                 videoSrc: post.videoSrc,
                 thumbnailSrc: post.videoThumbnail || post.imageSrc,
@@ -258,7 +287,7 @@ export const SocialEcosystemModule: React.FC<SocialEcosystemProps> = ({
           });
       }
     },
-    [userProfile]
+    [userProfile, user]
   );
 
   // If a deep-linked targetReelId was present before Supabase config loaded, resolve it once connected
@@ -403,11 +432,19 @@ export const SocialEcosystemModule: React.FC<SocialEcosystemProps> = ({
     const handleReelsUpdated = (e: any) => {
       if (e.detail) setReels(e.detail);
     };
+    const handleAuthChanged = () => {
+      setDirectSelectedReel(null);
+      setTargetSharedPostId(null);
+      setPosts(getCommunityPosts());
+      setReels(getReelHighlights());
+    };
     window.addEventListener('metfa_posts_updated', handlePostsUpdated);
     window.addEventListener('metfa_reels_updated', handleReelsUpdated);
+    window.addEventListener('metfa_auth_changed', handleAuthChanged);
     return () => {
       window.removeEventListener('metfa_posts_updated', handlePostsUpdated);
       window.removeEventListener('metfa_reels_updated', handleReelsUpdated);
+      window.removeEventListener('metfa_auth_changed', handleAuthChanged);
     };
   }, []);
 
@@ -474,6 +511,7 @@ export const SocialEcosystemModule: React.FC<SocialEcosystemProps> = ({
           targetSharedPostId={targetSharedPostId}
           isLoadingPosts={isLoadingPosts}
           onOpenReel={handleOpenReel}
+          onViewProfile={onViewProfile}
           onClearSharedPost={() => {
             setTargetSharedPostId(null);
             if (typeof window !== 'undefined' && window.location.hash.startsWith('#post')) {
@@ -509,6 +547,15 @@ export const SocialEcosystemModule: React.FC<SocialEcosystemProps> = ({
               else window.dispatchEvent(new CustomEvent('metfa_open_auth_modal'));
               return;
             }
+            setIsCreateReelOpen(true);
+          }}
+          onUseMusic={(track) => {
+            if (!isAuthenticated) {
+              if (onOpenAuthModal) onOpenAuthModal();
+              else window.dispatchEvent(new CustomEvent('metfa_open_auth_modal'));
+              return;
+            }
+            setEditorInitialAudio(track);
             setIsCreateReelOpen(true);
           }}
         />
@@ -575,7 +622,7 @@ export const SocialEcosystemModule: React.FC<SocialEcosystemProps> = ({
           userReels={
             viewedProfileUserId && viewedProfileUserId !== user?.id && viewedProfileUserId !== userProfile?.id
               ? reels.filter((r) => r.author?.id === viewedProfileUserId)
-              : reels.filter((r) => r.author.id === userProfile.id)
+              : reels.filter((r) => isContentOwner(r.author, userProfile, user, undefined, r.id))
           }
           allPosts={posts}
           allReels={reels}
@@ -682,10 +729,12 @@ export const SocialEcosystemModule: React.FC<SocialEcosystemProps> = ({
             onClose={() => {
               setIsCreateReelOpen(false);
               setEditorInitialVideo(null);
+              setEditorInitialAudio(null);
             }}
             userProfile={userProfile}
             onReelCreated={handleReelCreated}
             initialVideoSrc={editorInitialVideo && editorInitialVideo.isReel ? editorInitialVideo.src : undefined}
+            initialAudioTrack={editorInitialAudio}
             onOpenAiEditor={() => {
               setIsCreateReelOpen(false);
               if (!isAuthenticated) {

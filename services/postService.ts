@@ -1,8 +1,10 @@
 import { supabase, isSupabaseConfigured } from './supabaseClient';
-import { CommunityPost, PostingIdentity, VoiceComment, PostComment } from '../types/community';
+import { CommunityPost, PostingIdentity, ProfilePrivacy } from '../types/community';
 import { AudioTrack } from '../types/audio';
 import { getDefaultAvatar } from './authService';
 import { batchFetchEngagement } from './engagementService';
+import { fetchProfilesPrivacyBatch } from './followService';
+import { normalizeProfilePrivacy } from '../utils/privacyPolicy';
 
 export interface SupabasePostRow {
   id: string;
@@ -31,7 +33,7 @@ export interface SupabasePostRow {
   group_name?: string | null;
   posting_identity?: PostingIdentity | null;
   audio_track?: AudioTrack | null;
-  visibility?: 'public' | 'followers' | 'private' | null;
+  visibility?: 'public' | 'followers' | 'only_me' | 'private' | null;
   is_pinned?: boolean | null;
   is_edited?: boolean | null;
   is_ai_generated?: boolean | null;
@@ -44,16 +46,33 @@ export interface SupabasePostRow {
     username?: string | null;
     avatar_url?: string | null;
     is_verified?: boolean | null;
+    profile_privacy?: string | null;
   } | null;
 }
 
-export const authorProfileCache = new Map<string, {
-  id: string;
-  display_name: string;
-  username: string;
-  avatar_url: string;
-  is_verified: boolean;
-}>();
+export const authorProfileCache = new Map<
+  string,
+  {
+    id: string;
+    display_name: string;
+    username: string;
+    avatar_url: string;
+    is_verified: boolean;
+    profile_privacy?: ProfilePrivacy;
+  }
+>();
+
+function isMissingPrivacyColumnError(err: any): boolean {
+  const code = String(err?.code || '');
+  const msg = String(err?.message || '').toLowerCase();
+  return code === '42703' || code === 'PGRST204' || msg.includes('profile_privacy');
+}
+
+function isVisibilityConstraintError(err: any): boolean {
+  const code = String(err?.code || '');
+  const msg = String(err?.message || '').toLowerCase();
+  return code === '23514' || msg.includes('posts_visibility_check') || msg.includes('check constraint');
+}
 
 export async function fetchAuthorProfileById(authorId: string) {
   if (!authorId) return null;
@@ -71,6 +90,7 @@ export async function fetchAuthorProfileById(authorId: string) {
           username: json.profile.username,
           avatar_url: json.profile.avatar,
           is_verified: json.profile.isVerified ?? true,
+          profile_privacy: normalizeProfilePrivacy(json.profile.profilePrivacy),
         };
         authorProfileCache.set(authorId, p);
         return p;
@@ -83,18 +103,26 @@ export async function fetchAuthorProfileById(authorId: string) {
 }
 
 /**
- * Maps a database post row (with joined profiles author) to the client CommunityPost model
+ * Maps a database post row (with joined profiles author) to the client CommunityPost model.
+ * CRITICAL: Preserves `row.visibility ?? null` cleanly without silently converting legacy NULL rows to `'public'`.
  */
 export function mapSupabaseRowToCommunityPost(row: SupabasePostRow): CommunityPost {
   const cachedAuthor = row.author_id ? authorProfileCache.get(row.author_id) : null;
-  const authorName = row.author?.display_name || cachedAuthor?.display_name || row.author?.username || cachedAuthor?.username || 'Metfa Creator';
+  const authorName =
+    row.author?.display_name ||
+    cachedAuthor?.display_name ||
+    row.author?.username ||
+    cachedAuthor?.username ||
+    'Metfa Creator';
   const authorUsername = row.author?.username || cachedAuthor?.username || 'creator';
   const authorAvatar =
     row.author?.avatar_url?.trim() ||
     cachedAuthor?.avatar_url?.trim() ||
     getDefaultAvatar(authorUsername);
+  const authorProfilePrivacy = normalizeProfilePrivacy(
+    row.author?.profile_privacy ?? cachedAuthor?.profile_privacy ?? null
+  );
 
-  // Compute a human-readable relative time or formatted date string
   let relativeTime = 'Just now';
   if (row.created_at) {
     try {
@@ -128,7 +156,10 @@ export function mapSupabaseRowToCommunityPost(row: SupabasePostRow): CommunityPo
       username: authorUsername,
       avatar: authorAvatar,
       isVerified: row.author?.is_verified ?? true,
+      profilePrivacy: authorProfilePrivacy,
     },
+    authorProfilePrivacy,
+    visibility: row.visibility !== undefined ? row.visibility : null,
     postingIdentity: row.posting_identity || undefined,
     pageId: row.page_id || undefined,
     pageName: row.page_name || undefined,
@@ -162,60 +193,80 @@ export function mapSupabaseRowToCommunityPost(row: SupabasePostRow): CommunityPo
   };
 }
 
-/**
- * Fetches all persistent posts from the Supabase `public.posts` table joined with `public.profiles`.
- */
+const POST_BASE_COLUMNS = `
+  id,
+  author_id,
+  prompt,
+  caption,
+  style_preset,
+  image_src,
+  image_gallery,
+  video_src,
+  video_title,
+  video_thumbnail,
+  original_image_src,
+  text_background_preset,
+  post_type,
+  likes_count,
+  remix_count,
+  comments_count,
+  shares_count,
+  tags,
+  feed_type,
+  page_id,
+  page_name,
+  page_category,
+  group_id,
+  group_name,
+  posting_identity,
+  audio_track,
+  visibility,
+  is_pinned,
+  is_edited,
+  is_ai_generated,
+  prompt_used,
+  created_at,
+  updated_at
+`;
+
 export async function fetchSupabasePosts(): Promise<{ posts: CommunityPost[]; error?: string }> {
   if (!isSupabaseConfigured()) {
     return { posts: [], error: 'Supabase is not configured' };
   }
 
   try {
-    const { data, error } = await supabase
+    let { data, error } = await supabase
       .from('posts')
       .select(`
-        id,
-        author_id,
-        prompt,
-        caption,
-        style_preset,
-        image_src,
-        image_gallery,
-        video_src,
-        video_title,
-        video_thumbnail,
-        original_image_src,
-        text_background_preset,
-        post_type,
-        likes_count,
-        remix_count,
-        comments_count,
-        shares_count,
-        tags,
-        feed_type,
-        page_id,
-        page_name,
-        page_category,
-        group_id,
-        group_name,
-        posting_identity,
-        audio_track,
-        visibility,
-        is_pinned,
-        is_edited,
-        is_ai_generated,
-        prompt_used,
-        created_at,
-        updated_at,
+        ${POST_BASE_COLUMNS},
         author:profiles (
           id,
           display_name,
           username,
           avatar_url,
-          is_verified
+          is_verified,
+          profile_privacy
         )
       `)
       .order('created_at', { ascending: false });
+
+    if (error && isMissingPrivacyColumnError(error)) {
+      const retry = await supabase
+        .from('posts')
+        .select(`
+          ${POST_BASE_COLUMNS},
+          author:profiles (
+            id,
+            display_name,
+            username,
+            avatar_url,
+            is_verified
+          )
+        `)
+        .order('created_at', { ascending: false });
+      data = retry.data as any;
+      error = retry.error;
+    }
 
     if (error) {
       console.warn('[PostService] Error fetching posts from Supabase:', error.message);
@@ -229,28 +280,53 @@ export async function fetchSupabasePosts(): Promise<{ posts: CommunityPost[]; er
     const postIds = data.map((row: any) => row.id).filter(Boolean);
     const engagementMap = await batchFetchEngagement(postIds);
 
-    // Resolve author profiles for any rows where joined author profile is null (e.g. unauthenticated visitor)
-    const missingAuthorIds = Array.from(new Set(
-      data
-        .filter((row: any) => (!row.author || !row.author.display_name) && row.author_id)
-        .map((row: any) => row.author_id as string)
-    ));
+    const missingAuthorIds = Array.from(
+      new Set(
+        data
+          .filter((row: any) => (!row.author || !row.author.display_name) && row.author_id)
+          .map((row: any) => row.author_id as string)
+      )
+    );
 
     if (missingAuthorIds.length > 0) {
-      await Promise.all(missingAuthorIds.map(async (authorId) => {
-        const resolved = await fetchAuthorProfileById(authorId);
-        if (resolved) {
-          for (const row of data) {
-            if (row.author_id === authorId && (!row.author || !row.author.display_name)) {
-              row.author = resolved;
+      await Promise.all(
+        missingAuthorIds.map(async (authorId) => {
+          const resolved = await fetchAuthorProfileById(authorId);
+          if (resolved) {
+            for (const row of data as any[]) {
+              if (row.author_id === authorId && (!row.author || !row.author.display_name)) {
+                row.author = resolved;
+              }
             }
           }
-        }
-      }));
+        })
+      );
     }
 
-    const mappedPosts: CommunityPost[] = data.map((row: any) => {
+    // Batch-resolve privacy for authors lacking profile_privacy on the join
+    const authorsMissingPrivacy = Array.from(
+      new Set(
+        (data as any[])
+          .filter((row) => row.author_id && !row.author?.profile_privacy)
+          .map((row) => row.author_id as string)
+      )
+    );
+    const privacyBatch =
+      authorsMissingPrivacy.length > 0
+        ? await fetchProfilesPrivacyBatch(authorsMissingPrivacy)
+        : new Map<string, ProfilePrivacy>();
+
+    const mappedPosts: CommunityPost[] = (data as any[]).map((row) => {
+      if (row.author && !row.author.profile_privacy && row.author_id && privacyBatch.has(row.author_id)) {
+        row.author.profile_privacy = privacyBatch.get(row.author_id);
+      }
       const post = mapSupabaseRowToCommunityPost(row as SupabasePostRow);
+      if (row.author_id && privacyBatch.has(row.author_id) && !post.authorProfilePrivacy) {
+        const priv = privacyBatch.get(row.author_id)!;
+        post.authorProfilePrivacy = priv;
+        post.author.profilePrivacy = priv;
+      }
+
       const eng = engagementMap.get(post.id);
       if (eng) {
         post.commentsCount = Math.max(post.commentsCount, eng.commentsCount);
@@ -276,9 +352,6 @@ export async function fetchSupabasePosts(): Promise<{ posts: CommunityPost[]; er
   }
 }
 
-/**
- * Creates a new persistent post in the Supabase `public.posts` table.
- */
 export async function createSupabasePost(
   post: Omit<CommunityPost, 'id' | 'likesCount' | 'remixCount' | 'commentsCount' | 'sharesCount' | 'createdAt' | 'comments'>,
   authorId: string
@@ -291,8 +364,10 @@ export async function createSupabasePost(
     return { post: null, error: 'Author ID is required to create a post' };
   }
 
+  const resolvedVisibility = post.visibility ?? 'public';
+
   try {
-    const insertPayload = {
+    const insertPayload: Record<string, any> = {
       author_id: authorId,
       prompt: post.prompt,
       caption: post.caption || null,
@@ -318,7 +393,7 @@ export async function createSupabasePost(
       group_name: post.groupName || null,
       posting_identity: post.postingIdentity || null,
       audio_track: post.audioTrack || null,
-      visibility: 'public',
+      visibility: resolvedVisibility,
       is_pinned: false,
       is_edited: false,
       is_ai_generated: false,
@@ -326,20 +401,32 @@ export async function createSupabasePost(
       updated_at: new Date().toISOString(),
     };
 
-    const { data, error } = await supabase
-      .from('posts')
-      .insert(insertPayload)
-      .select(`
-        *,
-        author:profiles (
-          id,
-          display_name,
-          username,
-          avatar_url,
-          is_verified
-        )
-      `)
-      .single();
+    const runInsert = async (payload: Record<string, any>, includePrivacyCol: boolean) => {
+      const profileCols = includePrivacyCol
+        ? 'id, display_name, username, avatar_url, is_verified, profile_privacy'
+        : 'id, display_name, username, avatar_url, is_verified';
+      return supabase
+        .from('posts')
+        .insert(payload)
+        .select(`*, author:profiles (${profileCols})`)
+        .single();
+    };
+
+    let { data, error } = await runInsert(insertPayload, true);
+
+    if (error && isMissingPrivacyColumnError(error)) {
+      const retry = await runInsert(insertPayload, false);
+      data = retry.data;
+      error = retry.error;
+    }
+
+    // Pre-migration DB compatibility: if CHECK constraint rejects 'only_me', store 'private' (both normalize to 'only_me')
+    if (error && resolvedVisibility === 'only_me' && isVisibilityConstraintError(error)) {
+      const fallbackPayload = { ...insertPayload, visibility: 'private' };
+      const retry = await runInsert(fallbackPayload, false);
+      data = retry.data;
+      error = retry.error;
+    }
 
     if (error) {
       console.warn('[PostService] Error inserting post into Supabase:', error.message);
@@ -358,10 +445,6 @@ export async function createSupabasePost(
   }
 }
 
-/**
- * Updates an existing post in the Supabase `public.posts` table.
- * Enforces ownership via matching author_id.
- */
 export async function updateSupabasePost(
   postId: string,
   updates: Partial<CommunityPost>,
@@ -386,12 +469,22 @@ export async function updateSupabasePost(
     if (updates.videoSrc !== undefined) updatePayload.video_src = updates.videoSrc;
     if (updates.videoTitle !== undefined) updatePayload.video_title = updates.videoTitle;
     if (updates.videoThumbnail !== undefined) updatePayload.video_thumbnail = updates.videoThumbnail;
+    if (updates.visibility !== undefined) updatePayload.visibility = updates.visibility;
 
-    const { error } = await supabase
+    let { error } = await supabase
       .from('posts')
       .update(updatePayload)
       .eq('id', postId)
       .eq('author_id', authorId);
+
+    if (error && updates.visibility === 'only_me' && isVisibilityConstraintError(error)) {
+      const retry = await supabase
+        .from('posts')
+        .update({ ...updatePayload, visibility: 'private' })
+        .eq('id', postId)
+        .eq('author_id', authorId);
+      error = retry.error;
+    }
 
     if (error) {
       console.warn('[PostService] Error updating post in Supabase:', error.message);
@@ -405,10 +498,6 @@ export async function updateSupabasePost(
   }
 }
 
-/**
- * Deletes a post from the Supabase `public.posts` table.
- * Enforces ownership via matching author_id.
- */
 export async function deleteSupabasePost(
   postId: string,
   authorId: string
@@ -436,10 +525,6 @@ export async function deleteSupabasePost(
   }
 }
 
-/**
- * Fetches a single post by ID directly from Supabase.
- * Supports query variants for exact id or post-{id} strings.
- */
 export async function fetchSupabasePostById(
   postId: string
 ): Promise<{ post: CommunityPost | null; error?: string }> {
@@ -453,64 +538,23 @@ export async function fetchSupabasePostById(
 
   const cleanId = postId.trim();
 
-  try {
-    const postSelect = `
-      id,
-      author_id,
-      prompt,
-      caption,
-      style_preset,
-      image_src,
-      image_gallery,
-      video_src,
-      video_title,
-      video_thumbnail,
-      original_image_src,
-      text_background_preset,
-      post_type,
-      likes_count,
-      remix_count,
-      comments_count,
-      shares_count,
-      tags,
-      feed_type,
-      page_id,
-      page_name,
-      page_category,
-      group_id,
-      group_name,
-      posting_identity,
-      audio_track,
-      visibility,
-      is_pinned,
-      is_edited,
-      is_ai_generated,
-      prompt_used,
-      created_at,
-      updated_at,
-      author:profiles (
-        id,
-        display_name,
-        username,
-        avatar_url,
-        is_verified
-      )
-    `;
+  const queryPostBySelect = async (includePrivacyCol: boolean) => {
+    const profileCols = includePrivacyCol
+      ? 'id, display_name, username, avatar_url, is_verified, profile_privacy'
+      : 'id, display_name, username, avatar_url, is_verified';
+    const postSelect = `${POST_BASE_COLUMNS}, author:profiles (${profileCols})`;
 
-    // 1. Attempt primary exact ID lookup
     let { data, error } = await supabase
       .from('posts')
       .select(postSelect)
       .eq('id', cleanId)
       .maybeSingle();
 
-    // 2. If not found and cleanId starts with "post-", try without prefix
     if (!data && cleanId.startsWith('post-')) {
-      const strippedId = cleanId.substring(5);
       const res = await supabase
         .from('posts')
         .select(postSelect)
-        .eq('id', strippedId)
+        .eq('id', cleanId.substring(5))
         .maybeSingle();
       if (res.data) {
         data = res.data;
@@ -518,18 +562,26 @@ export async function fetchSupabasePostById(
       }
     }
 
-    // 3. If not found and cleanId does NOT start with "post-", try with "post-" prefix
     if (!data && !cleanId.startsWith('post-')) {
-      const prefixedId = `post-${cleanId}`;
       const res = await supabase
         .from('posts')
         .select(postSelect)
-        .eq('id', prefixedId)
+        .eq('id', `post-${cleanId}`)
         .maybeSingle();
       if (res.data) {
         data = res.data;
         error = res.error;
       }
+    }
+    return { data, error };
+  };
+
+  try {
+    let { data, error } = await queryPostBySelect(true);
+    if (error && isMissingPrivacyColumnError(error)) {
+      const retry = await queryPostBySelect(false);
+      data = retry.data;
+      error = retry.error;
     }
 
     if (error) {
@@ -542,6 +594,15 @@ export async function fetchSupabasePostById(
     }
 
     const mapped = mapSupabaseRowToCommunityPost(data as any);
+    if (mapped.author?.id && !(data as any)?.author?.profile_privacy) {
+      const privMap = await fetchProfilesPrivacyBatch([mapped.author.id]);
+      if (privMap.has(mapped.author.id)) {
+        const priv = privMap.get(mapped.author.id)!;
+        mapped.authorProfilePrivacy = priv;
+        mapped.author.profilePrivacy = priv;
+      }
+    }
+
     const engMap = await batchFetchEngagement([mapped.id]);
     const eng = engMap.get(mapped.id);
     if (eng) {
@@ -565,4 +626,3 @@ export async function fetchSupabasePostById(
     return { post: null, error: err?.message || 'Error fetching post' };
   }
 }
-

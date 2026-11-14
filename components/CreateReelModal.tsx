@@ -17,9 +17,13 @@ import {
   Radio,
   Loader2,
   AlertCircle,
+  Globe,
+  Users,
+  Lock,
 } from 'lucide-react';
-import { ReelHighlight, UserProfile } from '../types/community';
+import { PostAudience, ReelHighlight, UserProfile } from '../types/community';
 import { AudioTrack, ReelAudioConfig } from '../types/audio';
+import { normalizeDefaultPostAudience } from '../utils/privacyPolicy';
 import { addReelHighlight } from '../utils/socialStore';
 import { recordTrackUsage, createOriginalSoundRecord } from '../utils/audioStore';
 import { compressImageDataUrl } from '../utils/storageUtils';
@@ -33,6 +37,7 @@ interface CreateReelModalProps {
   userProfile: UserProfile;
   onReelCreated: (reel: ReelHighlight) => void;
   initialVideoSrc?: string;
+  initialAudioTrack?: AudioTrack | null;
   onOpenAiEditor?: () => void;
 }
 
@@ -42,6 +47,7 @@ export const CreateReelModal: React.FC<CreateReelModalProps> = ({
   userProfile,
   onReelCreated,
   initialVideoSrc,
+  initialAudioTrack = null,
   onOpenAiEditor,
 }) => {
   const [title, setTitle] = useState('');
@@ -53,7 +59,10 @@ export const CreateReelModal: React.FC<CreateReelModalProps> = ({
   );
   const [thumbnailSrc, setThumbnailSrc] = useState('https://images.unsplash.com/photo-1508739773434-c26b3d09e071?w=600');
   const [duration, setDuration] = useState(0);
-  const [selectedAudioTrack, setSelectedAudioTrack] = useState<AudioTrack | null>(null);
+  const [selectedAudioTrack, setSelectedAudioTrack] = useState<AudioTrack | null>(initialAudioTrack);
+  const [visibility, setVisibility] = useState<PostAudience>(() =>
+    normalizeDefaultPostAudience(userProfile?.defaultPostAudience)
+  );
 
   // Upload and persistence state
   const [isUploading, setIsUploading] = useState(false);
@@ -61,10 +70,22 @@ export const CreateReelModal: React.FC<CreateReelModalProps> = ({
   const [uploadError, setUploadError] = useState<string | null>(null);
 
   React.useEffect(() => {
+    if (isOpen) {
+      setVisibility(normalizeDefaultPostAudience(userProfile?.defaultPostAudience));
+    }
+  }, [isOpen, userProfile?.defaultPostAudience]);
+
+  React.useEffect(() => {
     if (isOpen && initialVideoSrc) {
       setVideoSrc(initialVideoSrc);
     }
   }, [isOpen, initialVideoSrc]);
+
+  React.useEffect(() => {
+    if (isOpen && initialAudioTrack) {
+      setSelectedAudioTrack(initialAudioTrack);
+    }
+  }, [isOpen, initialAudioTrack]);
 
   // Audio Mixer & Alignment settings
   const [showAudioMixer, setShowAudioMixer] = useState(false);
@@ -162,12 +183,14 @@ export const CreateReelModal: React.FC<CreateReelModalProps> = ({
           duration: finalDuration,
           musicTrack: musicTrackName,
           audioTrack: resolvedTrack || undefined,
+          visibility,
           author: {
             id: userProfile.id,
             name: userProfile.name,
             username: userProfile.username,
             avatar: userProfile.avatar,
             isVerified: userProfile.isVerified,
+            profilePrivacy: userProfile.profilePrivacy || 'public',
           },
         },
         (step) => setUploadStep(step)
@@ -477,6 +500,44 @@ export const CreateReelModal: React.FC<CreateReelModalProps> = ({
                 rows={2}
                 className="w-full bg-gray-950 border border-gray-800 rounded-xl p-3 text-xs text-white focus:outline-none focus:border-purple-500 resize-none"
               />
+            </div>
+
+            {/* Reel Audience Selector */}
+            <div className="bg-gray-950 border border-gray-800 rounded-2xl p-3 space-y-2">
+              <label className="text-xs font-bold text-gray-300 uppercase tracking-wider flex items-center gap-1.5">
+                <ShieldCheck className="w-3.5 h-3.5 text-purple-400" />
+                <span>Who can view this Reel?</span>
+              </label>
+              <div className="grid grid-cols-3 gap-1.5">
+                {[
+                  { id: 'public' as PostAudience, label: 'Public', icon: Globe },
+                  { id: 'followers' as PostAudience, label: 'Followers', icon: Users },
+                  { id: 'only_me' as PostAudience, label: 'Only Me', icon: Lock },
+                ].map((opt) => {
+                  const IconComp = opt.icon;
+                  const active = visibility === opt.id;
+                  return (
+                    <button
+                      key={opt.id}
+                      type="button"
+                      onClick={() => setVisibility(opt.id)}
+                      className={`px-2.5 py-2 rounded-xl text-[11px] font-bold flex items-center justify-center gap-1 border transition cursor-pointer ${
+                        active
+                          ? 'bg-purple-600 text-white border-purple-500 shadow-sm'
+                          : 'bg-gray-900 text-gray-300 border-gray-800 hover:border-gray-700 hover:text-white'
+                      }`}
+                    >
+                      <IconComp className="w-3.5 h-3.5 shrink-0" />
+                      <span className="truncate">{opt.label}</span>
+                    </button>
+                  );
+                })}
+              </div>
+              {userProfile.profilePrivacy === 'private' && visibility === 'public' && (
+                <p className="text-[10px] text-amber-300 bg-amber-950/50 border border-amber-500/30 rounded-xl px-2.5 py-1.5">
+                  Your profile is Private — only approved followers can watch this Reel while private.
+                </p>
+              )}
             </div>
 
             {/* Upload Progress & Error Feedback */}

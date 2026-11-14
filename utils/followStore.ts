@@ -1,5 +1,5 @@
 import { GUEST_AVATAR, sanitizeAvatarUrl } from '../services/authService';
-import { safeGetItem, safeSetItem } from './storageUtils';
+import { safeGetItem, safeSetItem, safeRemoveItem } from './storageUtils';
 
 export interface FollowedUser {
   id: string;
@@ -10,17 +10,14 @@ export interface FollowedUser {
 }
 
 const FOLLOW_STORAGE_KEY = 'metfa_followed_users';
+export const FOLLOW_REQUESTS_KEY = 'metfa_follow_requests_v1';
 
 /**
- * PHASE 2B ARCHITECTURE NOTICE:
- * This store is strictly a client-side offline/UI cache helper.
- * Supabase (`public.user_follows`) is the sole authoritative source of truth for follows.
- * Local storage records are NEVER blindly pushed or migrated to Supabase.
+ * PHASE 2B / PRIVACY ARCHITECTURE NOTICE:
+ * This store is strictly a client-side cache helper.
+ * Supabase (`public.user_follows` & `public.follow_requests`) is the authoritative source of truth.
  */
 
-/**
- * Retrieves the list of cached followed users from localStorage.
- */
 export const getFollowedUsers = (): FollowedUser[] => {
   try {
     const raw = safeGetItem(FOLLOW_STORAGE_KEY);
@@ -33,9 +30,6 @@ export const getFollowedUsers = (): FollowedUser[] => {
   }
 };
 
-/**
- * Returns an array of IDs and usernames for quick local lookup.
- */
 export const getFollowedUserIds = (): string[] => {
   const users = getFollowedUsers();
   const ids: string[] = [];
@@ -46,9 +40,6 @@ export const getFollowedUserIds = (): string[] => {
   return ids;
 };
 
-/**
- * Non-authoritative synchronous cache check (for offline/initial render only).
- */
 export const isUserFollowed = (userIdOrUsername?: string | null): boolean => {
   if (!userIdOrUsername) return false;
   const target = userIdOrUsername.toLowerCase().trim();
@@ -61,9 +52,52 @@ export const isUserFollowed = (userIdOrUsername?: string | null): boolean => {
 };
 
 /**
- * Updates the local cache in response to an authoritative Supabase follow/unfollow action.
- * Does NOT generate fake IDs or write unbacked data.
+ * Authoritatively replaces the cached followed-users list from Supabase,
+ * eliminating stale entries removed on another device or session.
  */
+export const replaceFollowedUsersCache = (
+  followedIds: Iterable<string>,
+  profilesMap?: Map<string, { name?: string; username?: string; avatar?: string }>
+): void => {
+  const existingById = new Map<string, FollowedUser>();
+  for (const u of getFollowedUsers()) {
+    if (u.id) existingById.set(u.id, u);
+  }
+
+  const nowIso = new Date().toISOString();
+  const nextList: FollowedUser[] = [];
+  const seen = new Set<string>();
+
+  for (const rawId of followedIds) {
+    const id = String(rawId || '').trim();
+    if (!id || seen.has(id)) continue;
+    seen.add(id);
+
+    const existing = existingById.get(id);
+    const meta = profilesMap?.get(id);
+    nextList.push({
+      id,
+      name: meta?.name || existing?.name || 'Creator',
+      username: (meta?.username || existing?.username || id).replace(/^@/, ''),
+      avatar: sanitizeAvatarUrl(meta?.avatar || existing?.avatar) || GUEST_AVATAR,
+      followedAt: existing?.followedAt || nowIso,
+    });
+  }
+
+  safeSetItem(FOLLOW_STORAGE_KEY, JSON.stringify(nextList));
+
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(
+      new CustomEvent('metfa_following_updated', {
+        detail: {
+          followedUsers: nextList,
+          replacedAuthoritatively: true,
+        },
+      })
+    );
+  }
+};
+
 export const syncFollowCache = (
   user: {
     id?: string;
@@ -82,7 +116,6 @@ export const syncFollowCache = (
   let updated: FollowedUser[];
 
   if (!isNowFollowing) {
-    // Remove from cache
     updated = current.filter((u) => {
       if (targetId && u.id && u.id === targetId) return false;
       if (targetUsername && u.username && u.username.toLowerCase().replace(/^@/, '') === targetUsername) {
@@ -91,7 +124,6 @@ export const syncFollowCache = (
       return true;
     });
   } else {
-    // Add to cache if not already present
     const exists = current.some((u) => {
       if (targetId && u.id && u.id === targetId) return true;
       if (targetUsername && u.username && u.username.toLowerCase().replace(/^@/, '') === targetUsername) return true;
@@ -114,7 +146,6 @@ export const syncFollowCache = (
 
   safeSetItem(FOLLOW_STORAGE_KEY, JSON.stringify(updated));
 
-  // Notify listeners in browser context
   if (typeof window !== 'undefined') {
     window.dispatchEvent(
       new CustomEvent('metfa_following_updated', {
@@ -128,9 +159,72 @@ export const syncFollowCache = (
   }
 };
 
+export const getPendingFollowRequestTargetIds = (): string[] => {
+  try {
+    const raw = safeGetItem(FOLLOW_REQUESTS_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed.filter((id) => typeof id === 'string' && id.trim().length > 0) : [];
+  } catch {
+    return [];
+  }
+};
+
+export const isFollowRequestPending = (targetUserId?: string | null): boolean => {
+  if (!targetUserId) return false;
+  const clean = targetUserId.trim();
+  return getPendingFollowRequestTargetIds().includes(clean);
+};
+
+export const syncPendingFollowRequestCache = (targetId: string, isPending: boolean): void => {
+  const clean = String(targetId || '').trim();
+  if (!clean) return;
+  const current = new Set(getPendingFollowRequestTargetIds());
+  if (isPending) {
+    current.add(clean);
+  } else {
+    current.delete(clean);
+  }
+  const next = Array.from(current);
+  safeSetItem(FOLLOW_REQUESTS_KEY, JSON.stringify(next));
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(
+      new CustomEvent('metfa_follow_requests_updated', {
+        detail: { pendingTargetIds: next, targetId: clean, isPending },
+      })
+    );
+  }
+};
+
+export const replacePendingFollowRequestsCache = (targetIds: Iterable<string>): void => {
+  const next = Array.from(
+    new Set(
+      Array.from(targetIds)
+        .map((id) => String(id || '').trim())
+        .filter(Boolean)
+    )
+  );
+  safeSetItem(FOLLOW_REQUESTS_KEY, JSON.stringify(next));
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(
+      new CustomEvent('metfa_follow_requests_updated', {
+        detail: { pendingTargetIds: next, replacedAuthoritatively: true },
+      })
+    );
+  }
+};
+
+export const clearFollowCache = (): void => {
+  safeRemoveItem(FOLLOW_STORAGE_KEY);
+  safeRemoveItem(FOLLOW_REQUESTS_KEY);
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new CustomEvent('metfa_following_updated', { detail: { followedUsers: [], isFollowing: false } }));
+    window.dispatchEvent(new CustomEvent('metfa_follow_requests_updated', { detail: { pendingTargetIds: [] } }));
+  }
+};
+
 /**
  * Legacy compatibility wrapper - redirects to syncFollowCache.
- * Marked as legacy compatibility; UI components now invoke followService directly.
  */
 export const toggleFollowUser = (user: {
   id?: string;
