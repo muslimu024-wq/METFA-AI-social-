@@ -31,6 +31,7 @@ import { getSellmeShopUrl } from '../services/marketplaceService';
 import { SellmeLogo } from './SellmeLogo';
 import GlobalSearchBar from './GlobalSearchBar';
 import BrandTitle, { BrandService } from './BrandTitle';
+import { GUEST_AVATAR, sanitizeAvatarUrl } from '../services/authService';
 
 // Lazy-load dropdown only needed when on AI tools tab
 const AISettingsDropdown = lazy(() => import('./AISettingsDropdown'));
@@ -83,9 +84,9 @@ export const Header: React.FC<HeaderProps> = ({
   return (
     <>
       <header className="sticky top-0 z-40 w-full bg-white/95 backdrop-blur-xl border-b border-slate-200 shadow-xs transition-all">
-        <div className="w-full px-4 h-16 flex items-center justify-between">
+        <div className="w-full px-3 sm:px-4 h-16 flex items-center justify-between gap-2 min-w-0">
           {/* Left: Drawer Menu + App Logo + Metfa Social Brand Title */}
-          <div className="flex items-center gap-2.5 sm:gap-3 shrink-0">
+          <div className="flex items-center gap-2 sm:gap-3 min-w-0">
             {/* [Menu Drawer] */}
             <button
               type="button"
@@ -272,7 +273,7 @@ export const Header: React.FC<HeaderProps> = ({
               title="View User Profile"
             >
               <img
-                src={activeIdentity.avatar || authUser.avatar}
+                src={sanitizeAvatarUrl(activeIdentity?.avatar || authUser?.avatar, activeIdentity?.name || authUser?.name) || GUEST_AVATAR}
                 alt="User Avatar"
                 decoding="async"
                 className="w-full h-full object-cover"

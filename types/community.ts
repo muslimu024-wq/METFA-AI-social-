@@ -68,6 +68,72 @@ export interface PostComment {
   isLiked?: boolean;
 }
 
+export type SeriesContentType = 'video' | 'text';
+
+export interface VideoSeriesMeta {
+  seriesId: string;
+  seriesTitle: string;
+  seriesDescription?: string;
+  creatorId: string;
+  partNumber: number;
+  totalParts?: number;
+  firstPartId?: string;
+  visibility?: PostAudience | 'private' | null;
+  isPublished?: boolean;
+  seriesType?: SeriesContentType;
+  isOngoing?: boolean;
+}
+
+export type ContentSeriesMeta = VideoSeriesMeta;
+
+export interface VideoWatchProgress {
+  videoId: string;
+  creatorId?: string;
+  seriesId?: string;
+  partNumber?: number;
+  positionSeconds: number;
+  durationSeconds?: number;
+  updatedAt: string;
+}
+
+export interface TextReadingProgress {
+  postId: string;
+  seriesId: string;
+  creatorId: string;
+  partNumber: number;
+  totalParts?: number;
+  scrollOffset?: number;
+  updatedAt: string;
+}
+
+export type SupportedTranslationLanguage =
+  | 'en'
+  | 'bn'
+  | 'ar'
+  | 'hi'
+  | 'es'
+  | 'fr'
+  | 'ur';
+
+export interface PostTranslationResult {
+  postId: string;
+  contentHash: string;
+  targetLanguage: SupportedTranslationLanguage;
+  translatedText: string;
+  detectedSourceLanguage: string;
+  modelUsed?: string;
+  createdAt: string;
+}
+
+export interface TranslationReportRecord {
+  postId: string;
+  contentHash: string;
+  targetLanguage: SupportedTranslationLanguage;
+  detectedSourceLanguage?: string;
+  reason?: string;
+  reportedAt: string;
+}
+
 export interface CommunityPost {
   id: string;
   author: {
@@ -96,11 +162,12 @@ export interface CommunityPost {
   videoThumbnail?: string;
   originalImageSrc?: string;
   textBackgroundPreset?: string; // e.g. 'sunset', 'cyberpunk', 'emerald', 'midnight', 'fire'
-  postType?: 'text' | 'media' | 'ai_art';
+  postType?: 'text' | 'media' | 'ai_art' | 'reel';
   likesCount: number;
   remixCount: number;
   commentsCount: number;
   sharesCount: number;
+  viewsCount?: number;
   isLiked?: boolean;
   isBookmarked?: boolean;
   userReaction?: 'like' | 'love' | 'haha' | 'wow' | 'sad' | 'fire';
@@ -119,6 +186,7 @@ export interface CommunityPost {
   tags: string[];
   feedType?: 'for_you' | 'following' | 'trending' | 'page' | 'group';
   audioTrack?: AudioTrack;
+  series?: VideoSeriesMeta;
 }
 
 export interface ReelHighlight {
@@ -135,6 +203,7 @@ export interface ReelHighlight {
   };
   authorProfilePrivacy?: ProfilePrivacy;
   visibility?: PostAudience | 'private' | null;
+  sourcePostType?: 'reel' | 'media' | 'video';
   videoSrc: string;
   thumbnailSrc?: string;
   duration: number;
@@ -142,6 +211,7 @@ export interface ReelHighlight {
   commentsCount: number;
   sharesCount: number;
   savesCount?: number;
+  viewsCount?: number;
   isLiked?: boolean;
   isSaved?: boolean;
   createdAt: string;
@@ -149,6 +219,7 @@ export interface ReelHighlight {
   promptUsed?: string;
   musicTrack?: string;
   audioTrack?: AudioTrack;
+  series?: VideoSeriesMeta;
 }
 
 export interface SocialPage {

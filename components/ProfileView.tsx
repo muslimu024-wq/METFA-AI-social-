@@ -39,10 +39,11 @@ import {
   Clock,
   AlertCircle,
   UserX,
+  Layers,
+  Search,
+  ChevronRight,
 } from 'lucide-react';
 import {
-  FollowRequestRecord,
-  FollowRelationStatus,
   PostAudience,
   ProfilePrivacy,
   UserProfile,
@@ -56,7 +57,7 @@ import { isSupabaseConfigured, supabase } from '../services/supabaseClient';
 import { fileToBase64, saveMediaItem } from '../utils/mediaStorage';
 import { generateCustomAIAvatar } from '../services/aiAssistantService';
 import { compressImageDataUrl } from '../utils/storageUtils';
-import { fetchSupabaseProfile } from '../services/authService';
+import { fetchSupabaseProfile, GUEST_AVATAR, sanitizeAvatarUrl } from '../services/authService';
 import {
   followUser,
   unfollowUser,
@@ -77,6 +78,9 @@ import {
 } from '../utils/followStore';
 import { isContentOwner } from '../utils/communityStore';
 import {
+  FollowRequestRecord,
+  FollowRelationStatus,
+  canViewFollowList,
   canViewerAccessPost,
   canViewPrivateProfileContent,
   formatAudienceMeta,
@@ -101,6 +105,15 @@ import {
   reelToContentDescriptor,
   trackFollowAttribution,
 } from '../utils/contentTracker';
+import { convertCommunityPostToReel } from '../services/reelService';
+import {
+  getContinueWatchingForCreator,
+  getContinueReadingForCreator,
+  groupCreatorTextSeries,
+  groupCreatorVideosAndSeries,
+  isExplicitSeriesItem,
+} from '../utils/videoSeries';
+import { BookOpen } from 'lucide-react';
 
 interface ProfileViewProps {
   userProfile: UserProfile;
@@ -177,7 +190,7 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
 
       if (isValidProfileUuid(viewedProfileUserId)) {
         reconcileProfileFollowCounts(viewedProfileUserId).then((counts) => {
-          if (isMounted && !counts.error) {
+          if (isMounted && counts) {
             setFetchedProfile((prev) =>
               prev
                 ? {
@@ -192,9 +205,14 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
             );
           }
         });
-        fetchFollowStatus(viewedProfileUserId).then(({ status }) => {
+        fetchFollowStatus(viewedProfileUserId).then((res) => {
           if (isMounted) {
-            setFollowStatus(status);
+            const resolved: FollowRelationStatus = res.isFollowing
+              ? 'following'
+              : res.requestStatus === 'pending'
+              ? 'pending'
+              : 'none';
+            setFollowStatus(resolved);
           }
         });
       } else {
@@ -211,7 +229,7 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
       setFollowStatus('none');
       if (authUser?.id && isValidProfileUuid(authUser.id)) {
         reconcileProfileFollowCounts(authUser.id).then((counts) => {
-          if (isMounted && !counts.error) {
+          if (isMounted && counts) {
             setOwnReconciledCounts({
               followersCount: counts.followersCount,
               followingCount: counts.followingCount,
@@ -249,8 +267,8 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
       ].filter((id): id is string => Boolean(id && isValidProfileUuid(id))))
     );
     if (authorIds.length > 0) {
-      fetchProfilesPrivacyBatch(authorIds).then(({ privacyMap, error }) => {
-        if (active && !error) setProfilesPrivacyMap(privacyMap);
+      fetchProfilesPrivacyBatch(authorIds).then((privacyMap) => {
+        if (active && privacyMap) setProfilesPrivacyMap(privacyMap);
       });
     }
     return () => {
@@ -322,20 +340,32 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
     );
   }, [isOwnProfile, canViewTargetProfileContent, userReels, displayProfile.profilePrivacy, viewerId, isFollowingProfile, authUser?.id, userProfile?.id]);
 
+  const visibleProfileVideos = React.useMemo(() => {
+    const byId = new Map<string, ReelHighlight>();
+    visibleUserReels.forEach((r) => {
+      if (r && r.id && r.videoSrc) byId.set(r.id, r);
+    });
+    visibleUserPosts.forEach((p) => {
+      const converted = convertCommunityPostToReel(p);
+      if (converted && !byId.has(converted.id)) {
+        byId.set(converted.id, converted);
+      }
+    });
+    return Array.from(byId.values());
+  }, [visibleUserReels, visibleUserPosts]);
+
   const computeVisibleSavedPosts = () =>
-    filterVisibleSavedPosts(allPosts, {
+    filterVisibleSavedPosts(getSavedPostsList(allPosts || []), {
       viewerId,
       followedUserIds: followedSet,
       profilesPrivacyMap,
-      isOwnerCheck: (p) => isContentOwner(p.author, userProfile, authUser, p.postingIdentity, p.id),
     });
 
   const computeVisibleSavedReels = () =>
-    filterVisibleSavedReels(allReels, {
+    filterVisibleSavedReels(getSavedReelsList(allReels || []), {
       viewerId,
       followedUserIds: followedSet,
       profilesPrivacyMap,
-      isOwnerCheck: (r) => isContentOwner(r.author, userProfile, authUser, undefined, r.id),
     });
 
   const [isEditing, setIsEditing] = useState(false);
@@ -352,11 +382,73 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
     normalizeDefaultPostAudience(userProfile.defaultPostAudience)
   );
   const [activeTab, setActiveTab] = useState<'creations' | 'reels' | 'analytics' | 'saved'>('creations');
+  const [videoFilter, setVideoFilter] = useState<'all' | 'series' | 'standalone'>('all');
+  const [videoSearchQuery, setVideoSearchQuery] = useState('');
+  const [videoSort, setVideoSort] = useState<'newest' | 'oldest' | 'series'>('newest');
+  const [expandedSeriesIds, setExpandedSeriesIds] = useState<Record<string, boolean>>({});
+  const [creationFilter, setCreationFilter] = useState<'all' | 'text_series'>('all');
+  const [textSeriesSearchQuery, setTextSeriesSearchQuery] = useState('');
   const [savedFilter, setSavedFilter] = useState<'all' | 'posts' | 'reels'>('all');
   const [savedPosts, setSavedPosts] = useState<CommunityPost[]>(() => computeVisibleSavedPosts());
   const [savedReels, setSavedReels] = useState<ReelHighlight[]>(() => computeVisibleSavedReels());
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [inspectingAnalyticsItem, setInspectingAnalyticsItem] = useState<ContentCatalogDescriptor | null>(null);
+
+  const { seriesGroups, filteredVideos } = React.useMemo(
+    () =>
+      groupCreatorVideosAndSeries(visibleProfileVideos, {
+        filter: videoFilter,
+        searchQuery: videoSearchQuery,
+        sortBy: videoSort,
+      }),
+    [visibleProfileVideos, videoFilter, videoSearchQuery, videoSort]
+  );
+
+  const continueWatchingMatch = React.useMemo(
+    () => getContinueWatchingForCreator(visibleProfileVideos),
+    [visibleProfileVideos]
+  );
+
+  const { textSeriesGroups } = React.useMemo(
+    () =>
+      groupCreatorTextSeries(visibleUserPosts, {
+        searchQuery: textSeriesSearchQuery,
+      }),
+    [visibleUserPosts, textSeriesSearchQuery]
+  );
+
+  const continueReadingMatch = React.useMemo(
+    () => getContinueReadingForCreator(visibleUserPosts, displayProfile.id || undefined),
+    [visibleUserPosts, displayProfile.id]
+  );
+
+  const openTextPostInFeed = (targetPost: CommunityPost) => {
+    if (!targetPost?.id || typeof window === 'undefined') return;
+    try {
+      const targetHash = `#post-${targetPost.id}`;
+      if (window.location.hash === targetHash) {
+        window.dispatchEvent(new Event('hashchange'));
+      } else {
+        window.location.hash = targetHash;
+      }
+    } catch {}
+  };
+
+  const openVideoInReels = (video: ReelHighlight, startTime?: number) => {
+    if (!video?.id) return;
+    window.dispatchEvent(
+      new CustomEvent('metfa_open_reel', {
+        detail: {
+          reelId: video.id,
+          videoSrc: video.videoSrc,
+          title: video.title,
+          author: video.author,
+          thumbnailSrc: video.thumbnailSrc,
+          currentTime: startTime,
+        },
+      })
+    );
+  };
 
   // Listen for Header / external Studio Analytics shortcut event
   useEffect(() => {
@@ -489,7 +581,7 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
     setIncomingRequests((prev) => prev.filter((r) => r.id !== req.id));
     if (decision === 'approve' && authUser?.id && isValidProfileUuid(authUser.id)) {
       reconcileProfileFollowCounts(authUser.id).then((counts) => {
-        if (!counts.error) {
+        if (counts) {
           setOwnReconciledCounts({
             followersCount: counts.followersCount,
             followingCount: counts.followingCount,
@@ -598,7 +690,7 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
   };
 
   return (
-    <div className="flex-1 overflow-y-auto w-full max-w-4xl mx-auto px-4 py-6 space-y-6">
+    <div className="flex-1 overflow-y-auto w-full max-w-4xl mx-auto px-3 sm:px-4 py-4 sm:py-6 space-y-4 sm:space-y-6 min-w-0">
       {/* Hidden File Input for Avatar */}
       <input
         type="file"
@@ -640,7 +732,12 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
             {/* Avatar with Verified Badge Overlay */}
             <div className="relative inline-block group shrink-0">
               <img
-                src={isOwnProfile ? (activeIdentity.avatar || userProfile.avatar) : displayProfile.avatar}
+                src={
+                  sanitizeAvatarUrl(
+                    isOwnProfile ? (activeIdentity.avatar || userProfile.avatar) : displayProfile.avatar,
+                    displayProfile.username
+                  ) || GUEST_AVATAR
+                }
                 alt={isOwnProfile ? (activeIdentity.name || userProfile.name) : displayProfile.name}
                 decoding="async"
                 className="w-24 h-24 sm:w-32 sm:h-32 rounded-3xl object-cover border-4 border-white shadow-xl bg-slate-100 group-hover:opacity-90 transition"
@@ -1022,7 +1119,7 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
                           trafficSource: 'profile',
                         });
                         reconcileProfileFollowCounts(targetUserId).then((counts) => {
-                          if (!counts.error) {
+                          if (counts) {
                             setFetchedProfile((prev) =>
                               prev
                                 ? {
@@ -1059,7 +1156,7 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
                           trafficSource: 'profile',
                         });
                         reconcileProfileFollowCounts(targetUserId).then((counts) => {
-                          if (!counts.error) {
+                          if (counts) {
                             setFetchedProfile((prev) =>
                               prev
                                 ? {
@@ -1593,14 +1690,14 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
               type="button"
               id="tab-reels-btn"
               onClick={() => setActiveTab('reels')}
-              className={`px-4 py-2 rounded-xl text-xs font-bold transition flex items-center gap-1.5 cursor-pointer ${
+              className={`px-3.5 sm:px-4 py-2 rounded-xl text-xs font-bold transition flex items-center gap-1.5 cursor-pointer whitespace-nowrap shrink-0 ${
                 activeTab === 'reels'
                   ? 'bg-purple-600 text-white shadow-xs'
                   : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
               }`}
             >
               <Film className="w-3.5 h-3.5" />
-              <span>Reels ({canViewTargetProfileContent ? visibleUserReels.length : 0})</span>
+              <span>Videos &amp; Reels ({canViewTargetProfileContent ? visibleProfileVideos.length : 0})</span>
             </button>
 
             {isOwnProfile && (
@@ -1652,97 +1749,482 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
 
         {/* Tab Content */}
         {activeTab === 'creations' && canViewTargetProfileContent && (
-          <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
-            {visibleUserPosts.length > 0 ? (
-              visibleUserPosts.map((post) => (
-                <div
-                  key={post.id}
-                  onClick={() => {
-                    if (isOwnProfile) {
-                      setInspectingAnalyticsItem(postToContentDescriptor(post));
-                    }
-                  }}
-                  className={`group relative rounded-2xl overflow-hidden aspect-square bg-slate-100 border border-slate-200 shadow-xs ${
-                    isOwnProfile ? 'cursor-pointer' : ''
+          <div className="space-y-4">
+            {/* Creations Sub-Filter: All Posts vs Text Series / Serial Stories */}
+            <div className="flex flex-wrap items-center justify-between gap-2 bg-white border border-slate-200 rounded-2xl p-2.5 shadow-2xs">
+              <div className="flex items-center gap-1.5">
+                <button
+                  type="button"
+                  data-testid="profile-creation-filter-all"
+                  onClick={() => setCreationFilter('all')}
+                  className={`px-3 py-1.5 rounded-xl text-xs font-bold transition cursor-pointer ${
+                    creationFilter === 'all'
+                      ? 'bg-purple-600 text-white'
+                      : 'bg-slate-100 text-slate-600 hover:text-slate-900'
                   }`}
                 >
-                  {post.imageSrc || post.imageGallery?.[0] ? (
-                    <img
-                      src={post.imageSrc || post.imageGallery?.[0]}
-                      alt={post.prompt}
-                      loading="lazy"
-                      decoding="async"
-                      className="w-full h-full object-cover group-hover:scale-105 transition duration-300"
-                    />
-                  ) : (
-                    <div className="w-full h-full p-4 flex items-center justify-center text-center bg-purple-50 text-xs font-bold text-slate-800">
-                      {post.caption || post.prompt}
-                    </div>
+                  All Posts ({visibleUserPosts.length})
+                </button>
+                <button
+                  type="button"
+                  data-testid="profile-creation-filter-text-series"
+                  onClick={() => setCreationFilter('text_series')}
+                  className={`px-3 py-1.5 rounded-xl text-xs font-bold transition flex items-center gap-1.5 cursor-pointer ${
+                    creationFilter === 'text_series'
+                      ? 'bg-purple-600 text-white'
+                      : 'bg-slate-100 text-slate-600 hover:text-slate-900'
+                  }`}
+                >
+                  <BookOpen className="w-3.5 h-3.5" />
+                  <span>Text Series ({textSeriesGroups.length})</span>
+                </button>
+              </div>
+
+              {creationFilter === 'text_series' && (
+                <div className="flex items-center gap-2 bg-slate-50 border border-slate-200 rounded-xl px-3 py-1.5 flex-1 min-w-[200px] max-w-xs">
+                  <Search className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+                  <input
+                    type="text"
+                    data-testid="profile-text-series-search-input"
+                    value={textSeriesSearchQuery}
+                    onChange={(e) => setTextSeriesSearchQuery(e.target.value)}
+                    placeholder="Search Text Series by title..."
+                    className="w-full min-w-0 bg-transparent text-xs text-slate-900 placeholder:text-slate-400 focus:outline-none"
+                  />
+                  {textSeriesSearchQuery && (
+                    <button
+                      type="button"
+                      onClick={() => setTextSeriesSearchQuery('')}
+                      className="text-slate-400 hover:text-slate-700 cursor-pointer shrink-0"
+                    >
+                      <X className="w-3.5 h-3.5" />
+                    </button>
                   )}
-                  {isOwnProfile && (
-                    <span className="absolute top-2 right-2 p-1.5 rounded-lg bg-black/65 text-teal-300 opacity-0 group-hover:opacity-100 transition">
-                      <BarChart3 className="w-3.5 h-3.5" />
-                    </span>
-                  )}
-                  <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-transparent to-transparent opacity-0 group-hover:opacity-100 transition flex items-end p-3">
-                    <p className="text-[11px] text-white line-clamp-2 font-medium">{post.caption || post.prompt}</p>
-                  </div>
                 </div>
-              ))
+              )}
+            </div>
+
+            {creationFilter === 'text_series' ? (
+              <div className="space-y-3" data-testid="profile-text-series-section">
+                {continueReadingMatch && (
+                  <div
+                    data-testid="profile-continue-reading"
+                    className="bg-gradient-to-r from-purple-50 to-amber-50 border border-purple-200 rounded-2xl p-3 flex items-center justify-between gap-3"
+                  >
+                    <div className="min-w-0 flex items-center gap-2.5">
+                      <div className="w-9 h-9 rounded-xl bg-purple-600 text-white flex items-center justify-center shrink-0">
+                        <BookOpen className="w-4 h-4" />
+                      </div>
+                      <div className="min-w-0">
+                        <div className="text-[11px] font-bold text-purple-800 uppercase tracking-wider">
+                          Continue Reading · Part {continueReadingMatch.progress.partNumber}
+                        </div>
+                        <div className="text-xs font-bold text-slate-900 truncate">
+                          {continueReadingMatch.post.series?.seriesTitle || 'Serial Story'}
+                        </div>
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => openTextPostInFeed(continueReadingMatch.post)}
+                      className="px-3 py-1.5 rounded-xl bg-purple-600 hover:bg-purple-700 text-white text-xs font-bold shrink-0 cursor-pointer transition"
+                    >
+                      Resume Part {continueReadingMatch.progress.partNumber}
+                    </button>
+                  </div>
+                )}
+
+                {textSeriesGroups.length > 0 ? (
+                  textSeriesGroups.map((group) => {
+                    const firstPart = group.parts[0];
+                    return (
+                      <div
+                        key={group.seriesId}
+                        data-testid={`profile-text-series-card-${group.seriesId}`}
+                        className="bg-white border border-slate-200 rounded-2xl p-4 space-y-3 shadow-xs"
+                      >
+                        <div className="flex items-start justify-between gap-3 flex-wrap">
+                          <div className="min-w-0 flex-1">
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <h4 className="text-sm font-black text-slate-900">{group.seriesTitle}</h4>
+                              <span className="px-2 py-0.5 rounded-md bg-purple-50 text-purple-700 border border-purple-200 text-[11px] font-bold">
+                                {group.parts.length} {group.parts.length === 1 ? 'Part' : 'Parts'}
+                              </span>
+                              {group.isOngoing && (
+                                <span className="px-2 py-0.5 rounded-md bg-teal-50 text-teal-800 border border-teal-200 text-[10px] font-bold">
+                                  More parts coming soon
+                                </span>
+                              )}
+                            </div>
+                            {group.seriesDescription && (
+                              <p className="text-xs text-slate-600 mt-1">{group.seriesDescription}</p>
+                            )}
+                          </div>
+                          {firstPart && (
+                            <button
+                              type="button"
+                              onClick={() => openTextPostInFeed(firstPart)}
+                              className="px-3 py-1.5 rounded-xl bg-purple-600 hover:bg-purple-700 text-white text-xs font-bold shrink-0 cursor-pointer transition"
+                            >
+                              Start Part {firstPart.series?.partNumber || 1}
+                            </button>
+                          )}
+                        </div>
+
+                        <div className="space-y-1.5 pt-2 border-t border-slate-100">
+                          {group.parts.map((part) => (
+                            <button
+                              key={part.id}
+                              type="button"
+                              onClick={() => openTextPostInFeed(part)}
+                              className="w-full text-left px-3 py-2 rounded-xl bg-slate-50 hover:bg-purple-50 border border-slate-200 hover:border-purple-200 flex items-center justify-between gap-2 text-xs transition cursor-pointer"
+                            >
+                              <div className="min-w-0 flex items-center gap-2">
+                                <span className="px-1.5 py-0.5 rounded bg-purple-100 text-purple-800 font-bold text-[10px] shrink-0 tabular-nums">
+                                  Part {part.series?.partNumber || 1}
+                                </span>
+                                <span className="text-slate-700 truncate">
+                                  {(part.caption || part.prompt || '').replace(/\s+/g, ' ').slice(0, 90)}
+                                </span>
+                              </div>
+                              <span className="text-[11px] font-bold text-purple-600 shrink-0">Read →</span>
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    );
+                  })
+                ) : (
+                  <div className="py-10 text-center bg-white rounded-3xl border border-slate-200 p-6">
+                    <BookOpen className="w-8 h-8 text-slate-400 mx-auto mb-2" />
+                    <h4 className="text-sm font-bold text-slate-800">
+                      {textSeriesSearchQuery ? 'No matching Text Series found' : 'No Text Series published yet'}
+                    </h4>
+                    <p className="text-xs text-slate-500 mt-1 max-w-sm mx-auto">
+                      When serial story posts are explicitly linked to a Text Series, they appear here in order.
+                    </p>
+                  </div>
+                )}
+              </div>
             ) : (
-              <div className="col-span-full py-12 text-center bg-white rounded-3xl border border-slate-200 p-6">
-                <Compass className="w-8 h-8 text-slate-400 mx-auto mb-2" />
-                <h4 className="text-sm font-bold text-slate-800">No creations published yet</h4>
-                <p className="text-xs text-slate-500 mt-1 max-w-sm mx-auto">
-                  Create posts or share artworks from the AI Studio to showcase them on your profile.
-                </p>
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+                {visibleUserPosts.length > 0 ? (
+                  visibleUserPosts.map((post) => (
+                    <div
+                      key={post.id}
+                      onClick={() => {
+                        if (isOwnProfile) {
+                          setInspectingAnalyticsItem(postToContentDescriptor(post));
+                        }
+                      }}
+                      className={`group relative rounded-2xl overflow-hidden aspect-square bg-slate-100 border border-slate-200 shadow-xs ${
+                        isOwnProfile ? 'cursor-pointer' : ''
+                      }`}
+                    >
+                      {post.imageSrc || post.imageGallery?.[0] ? (
+                        <img
+                          src={post.imageSrc || post.imageGallery?.[0]}
+                          alt={post.prompt}
+                          loading="lazy"
+                          decoding="async"
+                          className="w-full h-full object-cover group-hover:scale-105 transition duration-300"
+                        />
+                      ) : (
+                        <div className="w-full h-full p-4 flex items-center justify-center text-center bg-purple-50 text-xs font-bold text-slate-800">
+                          {post.caption || post.prompt}
+                        </div>
+                      )}
+                      {isOwnProfile && (
+                        <span className="absolute top-2 right-2 p-1.5 rounded-lg bg-black/65 text-teal-300 opacity-0 group-hover:opacity-100 transition">
+                          <BarChart3 className="w-3.5 h-3.5" />
+                        </span>
+                      )}
+                      <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-transparent to-transparent opacity-0 group-hover:opacity-100 transition flex items-end p-3">
+                        <p className="text-[11px] text-white line-clamp-2 font-medium">{post.caption || post.prompt}</p>
+                      </div>
+                    </div>
+                  ))
+                ) : (
+                  <div className="col-span-full py-12 text-center bg-white rounded-3xl border border-slate-200 p-6">
+                    <Compass className="w-8 h-8 text-slate-400 mx-auto mb-2" />
+                    <h4 className="text-sm font-bold text-slate-800">No creations published yet</h4>
+                    <p className="text-xs text-slate-500 mt-1 max-w-sm mx-auto">
+                      Create posts or share artworks from the AI Studio to showcase them on your profile.
+                    </p>
+                  </div>
+                )}
               </div>
             )}
           </div>
         )}
 
         {activeTab === 'reels' && canViewTargetProfileContent && (
-          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3">
-            {visibleUserReels.length > 0 ? (
-              visibleUserReels.map((reel) => (
-                <div
-                  key={reel.id}
-                  onClick={() => {
-                    if (isOwnProfile) {
-                      setInspectingAnalyticsItem(reelToContentDescriptor(reel));
-                    }
-                  }}
-                  className={`group relative rounded-2xl overflow-hidden aspect-[9/16] bg-slate-100 border border-slate-200 shadow-xs ${
-                    isOwnProfile ? 'cursor-pointer' : ''
-                  }`}
-                >
-                  <img
-                    src={reel.thumbnailSrc || reel.videoSrc}
-                    alt={reel.title}
-                    loading="lazy"
-                    decoding="async"
-                    className="w-full h-full object-cover group-hover:scale-105 transition duration-300"
-                  />
-                  <div className="absolute inset-0 bg-gradient-to-t from-black/90 via-black/20 to-transparent flex flex-col justify-between p-3">
-                    <span className="self-end px-2 py-0.5 rounded-full bg-black/60 text-[10px] font-mono text-teal-300">
-                      {reel.duration}s
-                    </span>
-                    <div>
-                      <h4 className="text-xs font-bold text-white line-clamp-1">{reel.title}</h4>
-                      <p className="text-[10px] text-slate-200 line-clamp-1">{reel.caption}</p>
+          <div className="space-y-4" data-testid="profile-videos-series-section">
+            {/* Optional Continue Watching card */}
+            {continueWatchingMatch && (
+              <div
+                data-testid="profile-continue-watching"
+                className="bg-gradient-to-r from-purple-50 to-teal-50 border border-purple-200 rounded-2xl p-3 flex items-center justify-between gap-3"
+              >
+                <div className="min-w-0 flex items-center gap-2.5">
+                  <div className="w-10 h-10 rounded-xl bg-purple-600 text-white flex items-center justify-center shrink-0">
+                    <Play className="w-4 h-4 fill-current" />
+                  </div>
+                  <div className="min-w-0">
+                    <div className="text-[11px] font-bold text-purple-800 uppercase tracking-wider">
+                      Continue Watching
+                      {continueWatchingMatch.video.series?.partNumber
+                        ? ` · Part ${continueWatchingMatch.video.series.partNumber}`
+                        : ''}
+                    </div>
+                    <div className="text-xs font-bold text-slate-900 truncate">
+                      {continueWatchingMatch.video.title}
+                    </div>
+                    <div className="text-[11px] text-slate-500 font-mono tabular-nums">
+                      Resumes at {Math.floor(continueWatchingMatch.progress.positionSeconds)}s
                     </div>
                   </div>
                 </div>
-              ))
-            ) : (
-              <div className="col-span-full py-12 text-center bg-white rounded-3xl border border-slate-200 p-6">
-                <Film className="w-8 h-8 text-slate-400 mx-auto mb-2" />
-                <h4 className="text-sm font-bold text-slate-800">No reels created yet</h4>
-                <p className="text-xs text-slate-500 mt-1 max-w-sm mx-auto">
-                  Record or generate short video reels to build your video highlight portfolio.
-                </p>
+                <button
+                  type="button"
+                  onClick={() =>
+                    openVideoInReels(continueWatchingMatch.video, continueWatchingMatch.progress.positionSeconds)
+                  }
+                  className="px-3 py-1.5 rounded-xl bg-purple-600 hover:bg-purple-700 text-white text-xs font-bold shrink-0 cursor-pointer transition"
+                >
+                  Resume
+                </button>
               </div>
             )}
+
+            {/* Search, Filter (All / Series / Standalone) & Sort Bar */}
+            <div className="bg-white border border-slate-200 rounded-2xl p-2.5 space-y-2 shadow-2xs">
+              <div className="flex items-center gap-2 bg-slate-50 border border-slate-200 rounded-xl px-3 py-1.5 min-w-0">
+                <Search className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+                <input
+                  type="text"
+                  data-testid="profile-videos-search-input"
+                  value={videoSearchQuery}
+                  onChange={(e) => setVideoSearchQuery(e.target.value)}
+                  placeholder="Search videos, series titles, captions, or Part #..."
+                  className="w-full min-w-0 bg-transparent text-xs text-slate-900 placeholder:text-slate-400 focus:outline-none"
+                />
+                {videoSearchQuery && (
+                  <button
+                    type="button"
+                    onClick={() => setVideoSearchQuery('')}
+                    className="text-slate-400 hover:text-slate-700 cursor-pointer shrink-0"
+                    aria-label="Clear video search"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                )}
+              </div>
+
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="flex flex-wrap items-center gap-1">
+                  {([
+                    { id: 'all', label: 'All Videos' },
+                    { id: 'series', label: 'Series' },
+                    { id: 'standalone', label: 'Standalone' },
+                  ] as const).map((tab) => (
+                    <button
+                      key={tab.id}
+                      type="button"
+                      data-testid={`profile-video-filter-${tab.id}`}
+                      onClick={() => setVideoFilter(tab.id)}
+                      className={`px-2.5 py-1 rounded-lg text-[11px] font-bold transition cursor-pointer ${
+                        videoFilter === tab.id
+                          ? 'bg-purple-600 text-white'
+                          : 'bg-slate-100 text-slate-600 hover:text-slate-900'
+                      }`}
+                    >
+                      {tab.label}
+                    </button>
+                  ))}
+                </div>
+
+                <select
+                  data-testid="profile-video-sort-select"
+                  value={videoSort}
+                  onChange={(e) => setVideoSort(e.target.value as 'newest' | 'oldest' | 'series')}
+                  className="bg-slate-50 border border-slate-200 rounded-lg px-2 py-1 text-[11px] font-semibold text-slate-700 focus:outline-none"
+                >
+                  <option value="newest">Newest First</option>
+                  <option value="oldest">Oldest First</option>
+                  <option value="series">Series Order</option>
+                </select>
+              </div>
+            </div>
+
+            {/* Explicit Grouped Creator Series Cards (Hidden when filter is standalone or no series exist) */}
+            {videoFilter !== 'standalone' && seriesGroups.length > 0 && (
+              <div className="space-y-3" data-testid="profile-series-groups">
+                {seriesGroups.map((group) => {
+                  const isExpanded = Boolean(expandedSeriesIds[group.seriesId]);
+                  const visibleParts = isExpanded ? group.parts : group.parts.slice(0, 6);
+                  return (
+                    <div
+                      key={group.seriesId}
+                      data-testid={`profile-series-card-${group.seriesId}`}
+                      className="bg-white border border-purple-200/80 rounded-2xl p-3.5 space-y-2.5 shadow-2xs"
+                    >
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="min-w-0">
+                          <div className="flex items-center gap-1.5 text-xs font-bold text-slate-900">
+                            <Layers className="w-4 h-4 text-purple-600 shrink-0" />
+                            <span className="truncate">{group.seriesTitle}</span>
+                          </div>
+                          {group.seriesDescription && (
+                            <p className="text-[11px] text-slate-500 mt-0.5 line-clamp-1">
+                              {group.seriesDescription}
+                            </p>
+                          )}
+                        </div>
+                        <span className="px-2 py-0.5 rounded-md bg-purple-50 text-purple-700 border border-purple-200 text-[10px] font-bold shrink-0 tabular-nums">
+                          {group.parts.length} {group.parts.length === 1 ? 'Part' : 'Parts'}
+                        </span>
+                      </div>
+
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                        {visibleParts.map((part) => (
+                          <button
+                            key={part.id}
+                            type="button"
+                            data-testid={`profile-series-part-${part.id}`}
+                            onClick={() => openVideoInReels(part)}
+                            className="p-2 rounded-xl bg-slate-50 hover:bg-purple-50 border border-slate-200 hover:border-purple-300 flex items-center gap-2.5 text-left transition cursor-pointer min-w-0"
+                          >
+                            <div className="relative w-14 h-10 rounded-lg overflow-hidden bg-slate-900 shrink-0 flex items-center justify-center">
+                              {part.thumbnailSrc ? (
+                                <img
+                                  src={part.thumbnailSrc}
+                                  alt={part.title}
+                                  loading="lazy"
+                                  className="w-full h-full object-cover"
+                                />
+                              ) : (
+                                <Play className="w-3.5 h-3.5 text-white/80" />
+                              )}
+                            </div>
+                            <div className="min-w-0 flex-1">
+                              <div className="text-[10px] font-bold text-purple-700 font-mono tabular-nums">
+                                Part {part.series?.partNumber || 1} · {part.duration}s
+                              </div>
+                              <div className="text-xs font-bold text-slate-900 truncate">
+                                {part.title}
+                              </div>
+                            </div>
+                            <ChevronRight className="w-4 h-4 text-slate-400 shrink-0" />
+                          </button>
+                        ))}
+                      </div>
+
+                      {group.parts.length > 6 && (
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setExpandedSeriesIds((prev) => ({
+                              ...prev,
+                              [group.seriesId]: !prev[group.seriesId],
+                            }))
+                          }
+                          className="text-[11px] font-bold text-purple-600 hover:text-purple-800 cursor-pointer"
+                        >
+                          {isExpanded ? 'Show fewer parts' : `Show all ${group.parts.length} parts`}
+                        </button>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+
+            {/* Video Grid */}
+            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3">
+              {filteredVideos.length > 0 ? (
+                filteredVideos.map((reel) => {
+                  const isSeries = isExplicitSeriesItem(reel);
+                  return (
+                    <div
+                      key={reel.id}
+                      data-testid={`profile-video-card-${reel.id}`}
+                      onClick={() => openVideoInReels(reel)}
+                      className="group relative rounded-2xl overflow-hidden aspect-[9/16] bg-slate-900 border border-slate-200 shadow-xs cursor-pointer"
+                    >
+                      {reel.thumbnailSrc ? (
+                        <img
+                          src={reel.thumbnailSrc}
+                          alt={reel.title}
+                          loading="lazy"
+                          decoding="async"
+                          className="w-full h-full object-cover group-hover:scale-105 transition duration-300"
+                        />
+                      ) : (
+                        <video
+                          src={reel.videoSrc}
+                          muted
+                          playsInline
+                          preload="metadata"
+                          className="w-full h-full object-cover"
+                        />
+                      )}
+                      <div className="absolute inset-0 bg-gradient-to-t from-black/90 via-black/20 to-transparent flex flex-col justify-between p-2.5 sm:p-3">
+                        <div className="flex items-start justify-between gap-1">
+                          {isSeries ? (
+                            <span
+                              data-testid={`profile-video-part-badge-${reel.id}`}
+                              className="px-1.5 py-0.5 rounded bg-purple-600/90 text-[10px] font-bold text-white tabular-nums"
+                            >
+                              Part {reel.series?.partNumber || 1}
+                            </span>
+                          ) : (
+                            <span />
+                          )}
+                          <div className="flex items-center gap-1">
+                            {isOwnProfile && (
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setInspectingAnalyticsItem(reelToContentDescriptor(reel));
+                                }}
+                                className="p-1 rounded-md bg-black/65 text-teal-300 hover:bg-black cursor-pointer"
+                                title="View analytics"
+                                aria-label="View video analytics"
+                              >
+                                <BarChart3 className="w-3.5 h-3.5" />
+                              </button>
+                            )}
+                            <span className="px-2 py-0.5 rounded-full bg-black/65 text-[10px] font-mono text-teal-300 tabular-nums">
+                              {reel.duration}s
+                            </span>
+                          </div>
+                        </div>
+                        <div>
+                          <h4 className="text-xs font-bold text-white line-clamp-1">{reel.title}</h4>
+                          <p className="text-[10px] text-slate-200 line-clamp-1">{reel.caption}</p>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })
+              ) : (
+                <div className="col-span-full py-12 text-center bg-white rounded-3xl border border-slate-200 p-6">
+                  <Film className="w-8 h-8 text-slate-400 mx-auto mb-2" />
+                  <h4 className="text-sm font-bold text-slate-800">
+                    {videoSearchQuery.trim()
+                      ? `No videos match "${videoSearchQuery.trim()}"`
+                      : 'No videos or reels created yet'}
+                  </h4>
+                  <p className="text-xs text-slate-500 mt-1 max-w-sm mx-auto">
+                    {videoSearchQuery.trim()
+                      ? 'Try a different keyword or clear the search filter.'
+                      : 'Publish videos or multi-part Reels to showcase them in your portfolio.'}
+                  </p>
+                </div>
+              )}
+            </div>
           </div>
         )}
 

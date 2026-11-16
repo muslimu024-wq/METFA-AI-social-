@@ -28,7 +28,7 @@ import {
   Info,
   User,
 } from 'lucide-react';
-import { CommunityPost, FollowRelationStatus, ProfilePrivacy, UserProfile } from '../types/community';
+import { CommunityPost, ProfilePrivacy, SupportedTranslationLanguage, UserProfile } from '../types/community';
 import { AudioTrack } from '../types/audio';
 import { isContentOwner } from '../utils/communityStore';
 import {
@@ -46,7 +46,15 @@ import {
 } from '../services/followService';
 import { isPostSaved, toggleSavePost } from '../utils/bookmarkStore';
 import { useAuth } from '../context/AuthContext';
-import { canSharePost, formatAudienceMeta } from '../utils/privacyPolicy';
+import { canSharePost, canViewerAccessPost, FollowRelationStatus, formatAudienceMeta } from '../utils/privacyPolicy';
+import { GUEST_AVATAR, sanitizeAvatarUrl } from '../services/authService';
+import { resolveTextSeriesNavigationContext } from '../utils/videoSeries';
+import {
+  getPreferredTranslationLanguage,
+  setPreferredTranslationLanguage,
+} from '../utils/translationCache';
+import TextSeriesNavigationBar from './TextSeriesNavigationBar';
+import TextPostTranslationBar from './TextPostTranslationBar';
 import { formatDuration } from '../utils/audioStore';
 import { AiRecipeBox } from './AiRecipeBox';
 import AudioLicenseInfoModal from './AudioLicenseInfoModal';
@@ -117,6 +125,8 @@ export interface PostCardProps {
   onToggleAuthorFollow?: (author: { id?: string; name?: string; username?: string; avatar?: string }) => void;
   onOpenReel?: (reelId: string, payload?: { videoSrc?: string; title?: string; currentTime?: number }) => void;
   onViewProfile?: (userId: string) => void;
+  allPosts?: CommunityPost[];
+  onNavigateToSeriesPart?: (targetPost: CommunityPost) => void;
 }
 
 export const PostCard: React.FC<PostCardProps> = ({
@@ -144,6 +154,8 @@ export const PostCard: React.FC<PostCardProps> = ({
   onToggleAuthorFollow,
   onOpenReel,
   onViewProfile,
+  allPosts,
+  onNavigateToSeriesPart,
 }) => {
   const { user: authUser } = useAuth();
   const [isMenuOpen, setIsMenuOpen] = useState(false);
@@ -154,6 +166,13 @@ export const PostCard: React.FC<PostCardProps> = ({
   const [isFeedVideoMuted, setIsFeedVideoMuted] = useState(true);
   const [isAnalyticsModalOpen, setIsAnalyticsModalOpen] = useState(false);
   const [isDetailsModalOpen, setIsDetailsModalOpen] = useState(false);
+  const [targetLanguage, setTargetLanguage] = useState<SupportedTranslationLanguage>(() =>
+    getPreferredTranslationLanguage()
+  );
+  const [translationState, setTranslationState] = useState<{
+    isShowingTranslation: boolean;
+    translatedText: string | null;
+  }>({ isShowingTranslation: false, translatedText: null });
   const feedVideoRef = useRef<HTMLVideoElement | null>(null);
   const touchStartPosRef = useRef<{ x: number; y: number } | null>(null);
   const isTouchScrollingRef = useRef(false);
@@ -302,9 +321,14 @@ export const PostCard: React.FC<PostCardProps> = ({
       let active = true;
       fetchFollowStatus(post.author.id).then((res) => {
         if (!active || res.error) return;
-        setFollowStatus(res.status);
-        syncFollowCache(post.author, res.status === 'following');
-        syncPendingFollowRequestCache(post.author.id, res.status === 'pending');
+        const resolvedStatus: FollowRelationStatus = res.isFollowing
+          ? 'following'
+          : res.requestStatus === 'pending'
+          ? 'pending'
+          : 'none';
+        setFollowStatus(resolvedStatus);
+        syncFollowCache(post.author, resolvedStatus === 'following');
+        syncPendingFollowRequestCache(post.author.id, resolvedStatus === 'pending');
       });
       return () => {
         active = false;
@@ -760,6 +784,49 @@ export const PostCard: React.FC<PostCardProps> = ({
 
   const isPureTextPost = post.postType === 'text' || (!post.imageSrc && !post.videoSrc && (!post.imageGallery || post.imageGallery.length === 0));
   const hasGradient = Boolean(post.textBackgroundPreset && GRADIENT_PRESETS[post.textBackgroundPreset]);
+  const originalBodyText = post.caption || post.prompt || '';
+  const activeDisplayText =
+    translationState.isShowingTranslation && translationState.translatedText
+      ? translationState.translatedText
+      : originalBodyText;
+  const viewerId = authUser?.id || (userProfile?.id !== 'guest' ? userProfile?.id : null);
+  const textSeriesNav = React.useMemo(
+    () =>
+      resolveTextSeriesNavigationContext(post, allPosts || [post], (candidate) =>
+        canViewerAccessPost({
+          visibility: candidate.visibility,
+          authorId: candidate.author?.id,
+          authorProfilePrivacy:
+            candidate.authorProfilePrivacy || candidate.author?.profilePrivacy || 'public',
+          viewerId,
+          viewerFollowsAuthor: candidate.author?.id === post.author?.id ? isFollowed : false,
+          viewerIsOwner: isContentOwner(
+            candidate.author,
+            userProfile,
+            authUser,
+            candidate.postingIdentity,
+            candidate.id
+          ),
+        })
+      ),
+    [post, allPosts, viewerId, isFollowed, userProfile, authUser]
+  );
+
+  const handleNavigateTextPart = (targetPost: CommunityPost) => {
+    if (onNavigateToSeriesPart) {
+      onNavigateToSeriesPart(targetPost);
+      return;
+    }
+    if (typeof window !== 'undefined') {
+      try {
+        window.location.hash = `#post-${targetPost.id}`;
+      } catch {}
+      const el = document.getElementById(`post-${targetPost.id}`);
+      if (el) {
+        el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }
+    }
+  };
 
   return (
     <ContentTelemetryObserver
@@ -772,7 +839,7 @@ export const PostCard: React.FC<PostCardProps> = ({
     >
       <article
         id={`post-${post.id}`}
-        className={`bg-white rounded-3xl border border-slate-200 shadow-xs overflow-hidden transition duration-300 ${
+        className={`bg-white rounded-2xl sm:rounded-3xl border border-slate-200 shadow-xs overflow-hidden transition duration-300 ${
           isHighlighted ? 'ring-2 ring-purple-500 shadow-purple-500/20' : ''
         }`}
       >
@@ -1120,7 +1187,7 @@ export const PostCard: React.FC<PostCardProps> = ({
 
             {post.caption && (
               <PostContent
-                text={post.caption}
+                text={activeDisplayText}
                 charLimit={180}
                 onExpandToggle={(isExpanded) => {
                   if (isExpanded) {
@@ -1211,13 +1278,20 @@ export const PostCard: React.FC<PostCardProps> = ({
       {/* 3. Post Media / Pure Text Body */}
       {isPureTextPost ? (
         <div className="space-y-2">
+          {textSeriesNav && (
+            <TextSeriesNavigationBar
+              nav={textSeriesNav}
+              currentPostId={post.id}
+              onNavigateToPart={handleNavigateTextPart}
+            />
+          )}
           <div
             className={`p-6 sm:p-8 flex items-center justify-center text-center ${
               hasGradient ? GRADIENT_PRESETS[post.textBackgroundPreset!] : 'bg-slate-50 text-slate-900 text-left'
             }`}
           >
             <PostContent
-              text={post.caption || post.prompt}
+              text={activeDisplayText}
               charLimit={hasGradient ? 220 : 180}
               className="w-full"
               onExpandToggle={(isExpanded) => {
@@ -1242,6 +1316,22 @@ export const PostCard: React.FC<PostCardProps> = ({
               }
             />
           </div>
+          <TextPostTranslationBar
+            postId={post.id}
+            sourceText={originalBodyText}
+            targetLanguage={targetLanguage}
+            onTargetLanguageChange={(lang) => {
+              setPreferredTranslationLanguage(lang);
+              setTargetLanguage(lang);
+            }}
+            onTranslationChange={(state) =>
+              setTranslationState({
+                isShowingTranslation: state.isShowingTranslation,
+                translatedText: state.translatedText,
+              })
+            }
+            variant={hasGradient ? 'gradient' : 'light'}
+          />
           {post.tags && post.tags.length > 0 && (
             <div className="px-4 pb-2 flex items-center gap-x-2 gap-y-0.5 flex-wrap text-xs text-teal-700 font-medium">
               {post.tags.map((tag, i) => (
@@ -1286,8 +1376,7 @@ export const PostCard: React.FC<PostCardProps> = ({
                       const currentPos = feedVideoRef.current?.currentTime || 0;
                       if (onOpenReel) {
                         try { onOpenReel(post.id, { videoSrc: post.videoSrc, title: post.videoTitle || post.caption, currentTime: currentPos }); } catch (err) { console.warn(err); }
-                      }
-                      if (typeof window !== 'undefined') {
+                      } else if (typeof window !== 'undefined') {
                         window.dispatchEvent(
                           new CustomEvent('metfa_open_reel', { detail: { reelId: post.id, videoSrc: post.videoSrc, title: post.videoTitle || post.caption, currentTime: currentPos } })
                         );
@@ -1308,8 +1397,7 @@ export const PostCard: React.FC<PostCardProps> = ({
                       const currentPos = feedVideoRef.current?.currentTime || 0;
                       if (onOpenReel) {
                         try { onOpenReel(post.id, { videoSrc: post.videoSrc, title: post.videoTitle || post.caption, currentTime: currentPos }); } catch (err) { console.warn(err); }
-                      }
-                      if (typeof window !== 'undefined') {
+                      } else if (typeof window !== 'undefined') {
                         window.dispatchEvent(
                           new CustomEvent('metfa_open_reel', { detail: { reelId: post.id, videoSrc: post.videoSrc, title: post.videoTitle || post.caption, currentTime: currentPos } })
                         );
@@ -1359,8 +1447,7 @@ export const PostCard: React.FC<PostCardProps> = ({
                   onOpenReel={post.id ? (currentTime) => {
                     if (onOpenReel) {
                       try { onOpenReel(post.id, { videoSrc: post.videoSrc, title: post.videoTitle || post.caption, currentTime }); } catch (err) { console.warn(err); }
-                    }
-                    if (typeof window !== 'undefined') {
+                    } else if (typeof window !== 'undefined') {
                       window.dispatchEvent(
                         new CustomEvent('metfa_open_reel', { detail: { reelId: post.id, videoSrc: post.videoSrc, title: post.videoTitle || post.caption, currentTime } })
                       );
@@ -1390,16 +1477,35 @@ export const PostCard: React.FC<PostCardProps> = ({
                 }}
               />
             </div>
-          ) : (
+          ) : (post.imageSrc || post.imageGallery?.[0]) ? (
             <img
-              src={post.imageSrc || post.imageGallery?.[0]}
+              src={post.imageSrc || post.imageGallery?.[0] || undefined}
               alt={post.prompt}
               loading={priority ? 'eager' : 'lazy'}
               decoding="async"
               className="w-full h-auto max-h-[520px] object-cover"
             />
-          )}
+          ) : null}
         </div>
+      )}
+
+      {!isPureTextPost && post.caption && (
+        <TextPostTranslationBar
+          postId={post.id}
+          sourceText={post.caption}
+          targetLanguage={targetLanguage}
+          onTargetLanguageChange={(lang) => {
+            setPreferredTranslationLanguage(lang);
+            setTargetLanguage(lang);
+          }}
+          onTranslationChange={(state) =>
+            setTranslationState({
+              isShowingTranslation: state.isShowingTranslation,
+              translatedText: state.translatedText,
+            })
+          }
+          variant="light"
+        />
       )}
 
       {/* 4. Action Bar (Clean, mobile-friendly primary engagement actions: Like, Comment, Share) */}
@@ -1575,7 +1681,7 @@ export const PostCard: React.FC<PostCardProps> = ({
                 <div key={c.id} className="p-3 bg-white rounded-2xl border border-slate-200 flex items-start justify-between gap-3 shadow-xs">
                   <div className="flex items-start gap-2.5 min-w-0">
                     <img
-                      src={c.author.avatar}
+                      src={sanitizeAvatarUrl(c.author.avatar, c.author.name) || GUEST_AVATAR}
                       alt={c.author.name}
                       loading="lazy"
                       decoding="async"
@@ -1605,7 +1711,7 @@ export const PostCard: React.FC<PostCardProps> = ({
           )}
 
           {/* Comment Input Bar */}
-          <form onSubmit={handleCommentSubmit} className="flex items-center gap-2 pt-2 border-t border-slate-200">
+          <form onSubmit={handleCommentSubmit} className="flex items-center gap-1.5 sm:gap-2 pt-2 border-t border-slate-200 min-w-0">
             <input
               type="text"
               value={commentText}
@@ -1617,7 +1723,7 @@ export const PostCard: React.FC<PostCardProps> = ({
                     : '🎙️ Listening (English)...'
                   : 'Write a comment or prompt reply...'
               }
-              className="flex-1 bg-white border border-slate-300 focus:border-purple-600 rounded-xl px-3.5 py-2 text-xs text-slate-900 placeholder:text-slate-400 outline-none transition font-medium shadow-xs"
+              className="flex-1 min-w-0 bg-white border border-slate-300 focus:border-purple-600 rounded-xl px-3 sm:px-3.5 py-2 text-xs text-slate-900 placeholder:text-slate-400 outline-none transition font-medium shadow-xs"
             />
 
             {/* Speech Dictation Button + Language Selector */}

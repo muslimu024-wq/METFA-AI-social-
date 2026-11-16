@@ -1242,6 +1242,91 @@ app.get("/api/authors/:id", async (req, res) => {
   }
 });
 
+// Multilingual Social Post Translation Endpoint (server-side @google/genai gemini-4-hydrogen; zero fake fallback)
+app.post("/api/ai/translate", async (req, res) => {
+  try {
+    const { text, targetLanguage, targetLanguageLabel } = req.body || {};
+    const cleanText = typeof text === "string" ? text.trim() : "";
+    const cleanTarget = typeof targetLanguage === "string" ? targetLanguage.trim() : "";
+
+    if (!cleanText || !cleanTarget) {
+      return res.status(400).json({
+        success: false,
+        error: "Both text and targetLanguage are required for translation.",
+        code: "INVALID_INPUT",
+      });
+    }
+
+    const ai = getAiClient(null, req);
+    if (!ai) {
+      return res.status(503).json({
+        success: false,
+        error: "Translation is unavailable because no Gemini API key is configured on the server.",
+        code: "AI_KEY_REQUIRED",
+      });
+    }
+
+    const languageDisplay =
+      typeof targetLanguageLabel === "string" && targetLanguageLabel.trim()
+        ? targetLanguageLabel.trim()
+        : cleanTarget;
+
+    const translationPrompt = `Translate the social post below into ${languageDisplay} (ISO code: ${cleanTarget}).
+
+STRICT PRESERVATION RULES:
+1. Preserve ALL paragraph breaks, blank lines, line breaks, indentation, bullet lists, and punctuation accurately.
+2. Preserve headings, quoted lines, emojis, URLs, @mentions, #hashtags, and proper personal/place names accurately without inventing extra commentary.
+3. Translate idioms and tone naturally into fluent ${languageDisplay}.
+4. If the text is already primarily in ${languageDisplay}, return it cleanly with the detectedSourceLanguage set to ${languageDisplay}.
+5. Return ONLY valid JSON matching: { "translatedText": string, "detectedSourceLanguage": string }.
+
+SOURCE_TEXT:
+${cleanText}`;
+
+    const result = await generateContentWithFallback(ai, {
+      models: ["gemini-4-hydrogen", "gemini-3.8-flash"],
+      timeoutMs: 15000,
+      contents: { parts: [{ text: translationPrompt }] },
+      config: {
+        systemInstruction:
+          "You are an accurate multilingual literary and social media translator. Preserve formatting, paragraphs, punctuation, headings, quoted text, emojis, and proper names verbatim in meaning. Output strictly valid JSON.",
+        responseMimeType: "application/json",
+        temperature: 0.2,
+      },
+    });
+
+    const rawText = (result.response.text || "").trim();
+    const cleanedJson = rawText.replace(/^```json\s*/i, "").replace(/```\s*$/, "").trim();
+    const parsed = JSON.parse(cleanedJson);
+    const translatedText = typeof parsed?.translatedText === "string" ? parsed.translatedText : "";
+
+    if (!translatedText.trim()) {
+      return res.status(502).json({
+        success: false,
+        error: "Translation model returned an empty result. Original text preserved.",
+        code: "TRANSLATION_FAILED",
+      });
+    }
+
+    res.json({
+      success: true,
+      translatedText,
+      detectedSourceLanguage:
+        typeof parsed?.detectedSourceLanguage === "string" && parsed.detectedSourceLanguage.trim()
+          ? parsed.detectedSourceLanguage.trim()
+          : "Auto-detected",
+      modelUsed: result.modelUsed || "gemini-4-hydrogen",
+    });
+  } catch (err: any) {
+    const safeMsg = sanitizeErrorMessage(err?.message || "Translation failed");
+    res.status(err?.status && Number.isFinite(err.status) ? err.status : 500).json({
+      success: false,
+      error: cleanErrorMessage(safeMsg),
+      code: "TRANSLATION_FAILED",
+    });
+  }
+});
+
 app.get(["/manifest.json","/manifest.webmanifest"],(_req,res)=>{res.setHeader("Content-Type","application/manifest+json");res.setHeader("Cache-Control","public, max-age=3600");const manifestPath=path.join(process.cwd(),"public","manifest.json");res.sendFile(manifestPath)});app.get("/sw.js",(_req,res)=>{res.setHeader("Service-Worker-Allowed","/");res.setHeader("Cache-Control","no-cache, no-store, must-revalidate");res.setHeader("Content-Type","application/javascript");const swPath=path.join(process.cwd(),"public","sw.js");res.sendFile(swPath)});app.get("/favicon.ico",(_req,res)=>{res.setHeader("Content-Type","image/x-icon");res.setHeader("Cache-Control","public, max-age=86400");const icoPath=path.join(process.cwd(),"public","favicon.ico");res.sendFile(icoPath)});app.get("/robots.txt",(req,res)=>{const protocol=req.headers["x-forwarded-proto"]||req.protocol||"https";const host=req.headers.host||"localhost:3000";const baseUrl=process.env.APP_URL?.trim()||`${protocol}://${host}`;res.setHeader("Content-Type","text/plain");res.setHeader("Cache-Control","public, max-age=86400");res.send(`User-agent: *
 Allow: /
 Disallow: /api/

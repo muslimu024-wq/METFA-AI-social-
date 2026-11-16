@@ -129,8 +129,8 @@ export const GlobalSearchBar: React.FC<GlobalSearchBarProps> = ({
     );
     if (ids.length === 0) return;
     let active = true;
-    fetchProfilesPrivacyBatch(ids).then(({ privacyMap, error }) => {
-      if (active && !error && privacyMap.size > 0) setProfilesPrivacyMap(privacyMap);
+    fetchProfilesPrivacyBatch(ids).then((privacyMap) => {
+      if (active && privacyMap && privacyMap.size > 0) setProfilesPrivacyMap(privacyMap);
     });
     return () => {
       active = false;

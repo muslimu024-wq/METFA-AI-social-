@@ -38,8 +38,10 @@ import {
   Lock,
   Info,
   User,
+  UserPlus,
 } from 'lucide-react';
-import { CommunityPost, FollowRelationStatus, ProfilePrivacy, UserProfile, VoiceComment, PostComment } from '../types/community';
+import { CommunityPost, ProfilePrivacy, SupportedTranslationLanguage, UserProfile, VoiceComment, PostComment } from '../types/community';
+import { GUEST_AVATAR, sanitizeAvatarUrl } from '../services/authService';
 import { AudioTrack } from '../types/audio';
 import {
   toggleLikePost,
@@ -73,7 +75,7 @@ import {
   isValidProfileUuid,
 } from '../services/followService';
 import { isSupabaseConfigured } from '../services/supabaseClient';
-import { canSharePost, canViewerAccessPost, formatAudienceMeta } from '../utils/privacyPolicy';
+import { canSharePost, canViewerAccessPost, FollowRelationStatus, formatAudienceMeta } from '../utils/privacyPolicy';
 import { toggleSavePost, isPostSaved } from '../utils/bookmarkStore';
 import { executeNativeShare, SharePayload } from '../utils/shareUtils';
 import { generateQuickAIReply } from '../services/aiAssistantService';
@@ -82,6 +84,13 @@ import { PostContent } from './PostContent';
 import PostHeader from './PostHeader';
 import PostDetailsModal, { PostDetailsInfo } from './PostDetailsModal';
 import { CommunityVideoPlayer } from './CommunityPostCard';
+import TextSeriesNavigationBar from './TextSeriesNavigationBar';
+import TextPostTranslationBar from './TextPostTranslationBar';
+import { resolveTextSeriesNavigationContext } from '../utils/videoSeries';
+import {
+  getPreferredTranslationLanguage,
+  setPreferredTranslationLanguage,
+} from '../utils/translationCache';
 import { useAuth } from '../context/AuthContext';
 import {
   createComment as createCommentRemote,
@@ -181,6 +190,34 @@ export const CommunityFeed: React.FC<CommunityFeedProps> = ({
     onConfirm: () => void;
   } | null>(null);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
+  const [translationTargetLang, setTranslationTargetLang] = useState<SupportedTranslationLanguage>(
+    () => getPreferredTranslationLanguage()
+  );
+  const [translatedPostsMap, setTranslatedPostsMap] = useState<
+    Record<string, { isShowingTranslation: boolean; translatedText: string | null }>
+  >({});
+
+  const handleTargetLanguageChange = (lang: SupportedTranslationLanguage) => {
+    setPreferredTranslationLanguage(lang);
+    setTranslationTargetLang(lang);
+  };
+
+  const handleNavigateTextSeriesPart = (targetPost: CommunityPost) => {
+    if (!targetPost?.id) return;
+    setActiveFilter('all');
+    setHighlightedPostId(targetPost.id);
+    if (typeof window !== 'undefined') {
+      try {
+        window.history.replaceState(null, '', `#post-${targetPost.id}`);
+      } catch {}
+      setTimeout(() => {
+        const el = document.getElementById(`post-${targetPost.id}`);
+        if (el) {
+          el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        }
+      }, 80);
+    }
+  };
 
   const showToast = (msg: string) => {
     setToastMessage(msg);
@@ -262,8 +299,8 @@ export const CommunityFeed: React.FC<CommunityFeedProps> = ({
     );
     if (authorIds.length === 0) return;
     let mounted = true;
-    fetchProfilesPrivacyBatch(authorIds).then(({ privacyMap, error }) => {
-      if (!error && mounted && privacyMap.size > 0) {
+    fetchProfilesPrivacyBatch(authorIds).then((privacyMap) => {
+      if (mounted && privacyMap && privacyMap.size > 0) {
         setProfilesPrivacyMap(privacyMap);
       }
     });
@@ -661,7 +698,6 @@ export const CommunityFeed: React.FC<CommunityFeedProps> = ({
     if (!allowed) return false;
 
     if (targetedPost && canAccessTargetedPost && p.id === targetedPost.id) return true;
-    if (activeFilter === 'trending') return (p.likesCount || 0) > 500;
     if (activeFilter === 'for_you') return p.feedType === 'for_you' || !p.feedType;
     if (activeFilter === 'following') {
       return ctx.viewerFollowsAuthor;
@@ -669,10 +705,52 @@ export const CommunityFeed: React.FC<CommunityFeedProps> = ({
     return true;
   });
 
+  const sortedFilteredPosts =
+    activeFilter === 'trending'
+      ? [...filteredPosts].sort((a, b) => {
+          const score = (item: CommunityPost) => {
+            const views = item.viewsCount ?? 0;
+            const comments =
+              (item.comments?.length || 0) + (item.voiceComments?.length || 0) || item.commentsCount || 0;
+            return (
+              (item.likesCount || 0) * 2 +
+              comments * 3 +
+              (item.sharesCount || 0) * 4 +
+              views * 0.15
+            );
+          };
+          const diff = score(b) - score(a);
+          if (diff !== 0) return diff;
+          return (b.likesCount || 0) - (a.likesCount || 0);
+        })
+      : filteredPosts;
+
   const displayPosts =
     targetedPost && canAccessTargetedPost
-      ? [targetedPost, ...filteredPosts.filter((p) => p.id !== targetedPost.id)]
-      : filteredPosts;
+      ? [targetedPost, ...sortedFilteredPosts.filter((p) => p.id !== targetedPost.id)]
+      : sortedFilteredPosts;
+
+  // Real registered creators from accessible posts for Following empty state (zero fake/seeded creators)
+  const suggestedCreators = React.useMemo(() => {
+    const map = new Map<string, CommunityPost>();
+    for (const p of posts) {
+      if (!p?.author?.id || !p.author.name) continue;
+      const ctx = resolvePostPrivacyContext(p);
+      if (ctx.viewerIsOwner || ctx.viewerFollowsAuthor) continue;
+      const allowed = canViewerAccessPost({
+        visibility: p.visibility,
+        authorId: p.author?.id,
+        authorProfilePrivacy: ctx.authorProfilePrivacy,
+        viewerId: ctx.viewerId,
+        viewerFollowsAuthor: ctx.viewerFollowsAuthor,
+        viewerIsOwner: ctx.viewerIsOwner,
+      });
+      if (!allowed) continue;
+      if (!map.has(p.author.id)) map.set(p.author.id, p);
+      if (map.size >= 4) break;
+    }
+    return Array.from(map.values());
+  }, [posts, authUser?.id, userProfile?.id, followedUserIds, profilesPrivacyMap]);
 
   const handleLike = (postId: string) => {
     const post = posts.find((p) => p.id === postId);
@@ -937,7 +1015,7 @@ export const CommunityFeed: React.FC<CommunityFeedProps> = ({
       (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
 
     if (!SpeechRecognition) {
-      alert('Speech recognition is not supported in this browser. Please use Chrome or Edge.');
+      showToast('Speech recognition is not supported in this browser. Please use Chrome or Edge.');
       return;
     }
 
@@ -1074,7 +1152,7 @@ export const CommunityFeed: React.FC<CommunityFeedProps> = ({
           }
         }, 1000);
       } else {
-        alert('Microphone access is not supported in this environment.');
+        showToast('Microphone access is not supported in this environment.');
       }
     } catch {
       // simulated voice comment fallback
@@ -1147,50 +1225,50 @@ export const CommunityFeed: React.FC<CommunityFeedProps> = ({
   };
 
   return (
-    <div className="flex-1 overflow-y-auto w-full max-w-2xl lg:max-w-3xl mx-auto px-3 sm:px-4 py-4 sm:py-6 space-y-4 sm:space-y-5">
+    <div className="flex-1 overflow-y-auto w-full max-w-2xl lg:max-w-3xl mx-auto px-3 sm:px-4 py-3 sm:py-5 space-y-3 sm:space-y-4 min-w-0">
       {/* 1. Prominent "Create Post" Card at Top of Main Social Feed */}
-      <div className="bg-white border border-slate-200 rounded-3xl p-3.5 sm:p-4 shadow-sm space-y-3">
-        <div className="flex items-center gap-3">
+      <div className="bg-white border border-slate-200 rounded-2xl sm:rounded-3xl p-3 sm:p-4 shadow-xs space-y-2.5 sm:space-y-3">
+        <div className="flex items-center gap-2.5 sm:gap-3 min-w-0">
           <img
-            src={userProfile.avatar}
-            alt={userProfile.name}
+            src={sanitizeAvatarUrl(userProfile?.avatar, userProfile?.name) || GUEST_AVATAR}
+            alt={userProfile?.name || 'Creator'}
             decoding="async"
             className="w-10 h-10 rounded-2xl object-cover border border-purple-500/40 shrink-0"
           />
           <button
             type="button"
             onClick={onCreatePostClick}
-            className="flex-1 bg-slate-100 hover:bg-slate-200/80 border border-slate-200 hover:border-purple-500/50 rounded-2xl px-4 py-2.5 text-left text-xs sm:text-sm text-slate-600 transition cursor-pointer"
+            className="flex-1 min-w-0 truncate bg-slate-100 hover:bg-slate-200/80 border border-slate-200 hover:border-purple-500/50 rounded-2xl px-3.5 sm:px-4 py-2 sm:py-2.5 text-left text-xs sm:text-sm text-slate-600 transition cursor-pointer"
           >
             What's on your mind, {userProfile.name.split(' ')[0]}?
           </button>
         </div>
 
-        <div className="flex items-center justify-between pt-2 border-t border-slate-100 gap-1 flex-wrap sm:flex-nowrap">
+        <div className="flex items-center justify-between pt-2 border-t border-slate-100 gap-1 flex-wrap sm:flex-nowrap min-w-0">
           <button
             type="button"
             onClick={onCreatePostClick}
-            className="flex-1 py-1.5 px-2 rounded-xl text-xs font-bold text-slate-700 hover:text-slate-900 hover:bg-slate-100 transition flex items-center justify-center gap-1.5 cursor-pointer"
+            className="flex-1 min-w-0 py-1.5 px-2 rounded-xl text-xs font-bold text-slate-700 hover:text-slate-900 hover:bg-slate-100 transition flex items-center justify-center gap-1.5 cursor-pointer whitespace-nowrap"
           >
-            <ImageIcon className="w-4 h-4 text-emerald-600" />
+            <ImageIcon className="w-4 h-4 text-emerald-600 shrink-0" />
             <span>Photo/Video</span>
           </button>
 
           <button
             type="button"
             onClick={onCreatePostClick}
-            className="flex-1 py-1.5 px-2 rounded-xl text-xs font-bold text-slate-700 hover:text-slate-900 hover:bg-slate-100 transition flex items-center justify-center gap-1.5 cursor-pointer"
+            className="flex-1 min-w-0 py-1.5 px-2 rounded-xl text-xs font-bold text-slate-700 hover:text-slate-900 hover:bg-slate-100 transition flex items-center justify-center gap-1.5 cursor-pointer whitespace-nowrap"
           >
-            <Type className="w-4 h-4 text-purple-600" />
+            <Type className="w-4 h-4 text-purple-600 shrink-0" />
             <span>Text</span>
           </button>
 
           <button
             type="button"
             onClick={onCreatePostClick}
-            className="flex-1 py-1.5 px-2 rounded-xl text-xs font-bold text-teal-700 hover:text-teal-900 hover:bg-slate-100 transition flex items-center justify-center gap-1.5 cursor-pointer"
+            className="flex-1 min-w-0 py-1.5 px-2 rounded-xl text-xs font-bold text-teal-700 hover:text-teal-900 hover:bg-slate-100 transition flex items-center justify-center gap-1.5 cursor-pointer whitespace-nowrap"
           >
-            <Sparkles className="w-4 h-4 text-teal-600" />
+            <Sparkles className="w-4 h-4 text-teal-600 shrink-0" />
             <span>AI Magic</span>
           </button>
 
@@ -1198,54 +1276,57 @@ export const CommunityFeed: React.FC<CommunityFeedProps> = ({
             <button
               type="button"
               onClick={onOpenAiEditor}
-              className="flex-1 py-1.5 px-2 rounded-xl text-xs font-bold text-indigo-700 hover:text-indigo-900 hover:bg-indigo-50/60 transition flex items-center justify-center gap-1.5 cursor-pointer"
+              className="flex-1 min-w-0 py-1.5 px-2 rounded-xl text-xs font-bold text-indigo-700 hover:text-indigo-900 hover:bg-indigo-50/60 transition flex items-center justify-center gap-1.5 cursor-pointer whitespace-nowrap"
             >
-              <Film className="w-4 h-4 text-indigo-600" />
+              <Film className="w-4 h-4 text-indigo-600 shrink-0" />
               <span>AI Editor</span>
             </button>
           )}
         </div>
       </div>
 
-      {/* 2. Feed Filters Bar */}
-      <div className="flex items-center justify-between gap-3 bg-white p-2 rounded-2xl border border-slate-200 shadow-xs">
-        <div className="flex items-center gap-1">
+      {/* 2. Feed Filters Bar (Responsive wrapping prevents mobile horizontal overflow above BottomNav) */}
+      <div
+        data-testid="feed-filters-bar"
+        className="flex flex-wrap items-center justify-between gap-2 bg-white p-2 rounded-2xl border border-slate-200 shadow-xs min-w-0"
+      >
+        <div className="flex flex-wrap items-center gap-1 min-w-0">
           <button
             type="button"
             onClick={() => setActiveFilter('all')}
-            className={`px-3 py-1.5 rounded-xl text-xs font-bold transition flex items-center gap-1 cursor-pointer ${
+            className={`px-2.5 sm:px-3 py-1.5 rounded-xl text-xs font-bold transition flex items-center gap-1 cursor-pointer whitespace-nowrap shrink-0 ${
               activeFilter === 'all'
                 ? 'bg-purple-600 text-white shadow-xs'
                 : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
             }`}
           >
-            <Compass className="w-3.5 h-3.5" />
+            <Compass className="w-3.5 h-3.5 shrink-0" />
             <span>Discover</span>
           </button>
 
           <button
             type="button"
             onClick={() => setActiveFilter('for_you')}
-            className={`px-3 py-1.5 rounded-xl text-xs font-bold transition flex items-center gap-1 cursor-pointer ${
+            className={`px-2.5 sm:px-3 py-1.5 rounded-xl text-xs font-bold transition flex items-center gap-1 cursor-pointer whitespace-nowrap shrink-0 ${
               activeFilter === 'for_you'
                 ? 'bg-purple-600 text-white shadow-xs'
                 : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
             }`}
           >
-            <Flame className="w-3.5 h-3.5 text-amber-500" />
+            <Flame className="w-3.5 h-3.5 text-amber-500 shrink-0" />
             <span>For You</span>
           </button>
 
           <button
             type="button"
             onClick={() => setActiveFilter('trending')}
-            className={`px-3 py-1.5 rounded-xl text-xs font-bold transition flex items-center gap-1 cursor-pointer ${
+            className={`px-2.5 sm:px-3 py-1.5 rounded-xl text-xs font-bold transition flex items-center gap-1 cursor-pointer whitespace-nowrap shrink-0 ${
               activeFilter === 'trending'
                 ? 'bg-purple-600 text-white shadow-xs'
                 : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
             }`}
           >
-            <TrendingUp className="w-3.5 h-3.5 text-teal-600" />
+            <TrendingUp className="w-3.5 h-3.5 text-teal-600 shrink-0" />
             <span>Trending</span>
           </button>
 
@@ -1253,13 +1334,13 @@ export const CommunityFeed: React.FC<CommunityFeedProps> = ({
             type="button"
             id="feed-filter-following-tab"
             onClick={() => setActiveFilter('following')}
-            className={`px-3 py-1.5 rounded-xl text-xs font-bold transition flex items-center gap-1 cursor-pointer ${
+            className={`px-2.5 sm:px-3 py-1.5 rounded-xl text-xs font-bold transition flex items-center gap-1 cursor-pointer whitespace-nowrap shrink-0 ${
               activeFilter === 'following'
                 ? 'bg-purple-600 text-white shadow-xs'
                 : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
             }`}
           >
-            <Users className="w-3.5 h-3.5 text-purple-500" />
+            <Users className="w-3.5 h-3.5 text-purple-500 shrink-0" />
             <span>Following</span>
           </button>
         </div>
@@ -1267,7 +1348,7 @@ export const CommunityFeed: React.FC<CommunityFeedProps> = ({
         <button
           type="button"
           onClick={onCreatePostClick}
-          className="px-3.5 py-1.5 bg-gradient-to-r from-purple-600 to-teal-500 hover:from-purple-500 hover:to-teal-400 text-white text-xs font-bold rounded-xl shadow-md flex items-center gap-1 transition transform active:scale-95"
+          className="px-3 sm:px-3.5 py-1.5 bg-gradient-to-r from-purple-600 to-teal-500 hover:from-purple-500 hover:to-teal-400 text-white text-xs font-bold rounded-xl shadow-sm flex items-center gap-1 transition transform active:scale-95 whitespace-nowrap shrink-0 ml-auto cursor-pointer"
         >
           <Plus className="w-3.5 h-3.5" />
           <span>New Post</span>
@@ -1275,7 +1356,7 @@ export const CommunityFeed: React.FC<CommunityFeedProps> = ({
       </div>
 
       {/* 3. Posts Stream */}
-      <div className="space-y-5">
+      <div className="space-y-3 sm:space-y-4">
         {/* Deep link: Loading State */}
         {targetSharedPostId && isLoadingPosts && (
           <div className="bg-white border border-purple-100 rounded-3xl p-10 text-center space-y-3 shadow-xs animate-fadeIn">
@@ -1332,16 +1413,71 @@ export const CommunityFeed: React.FC<CommunityFeedProps> = ({
           </div>
         )}
 
-        {/* Empty state for Following filter */}
+        {/* Empty state for Following filter (Honest distinction + real creator suggestions) */}
         {displayPosts.length === 0 && activeFilter === 'following' && (
-          <div className="bg-white border border-slate-200 rounded-3xl p-8 text-center space-y-3 shadow-xs animate-fadeIn">
+          <div className="bg-white border border-slate-200 rounded-2xl sm:rounded-3xl p-6 sm:p-8 text-center space-y-4 shadow-xs animate-fadeIn">
             <div className="w-12 h-12 rounded-2xl bg-purple-50 text-purple-600 border border-purple-100 flex items-center justify-center mx-auto">
               <Users className="w-6 h-6" />
             </div>
-            <h3 className="text-base font-bold text-slate-800">You're not following any creators yet</h3>
-            <p className="text-xs text-slate-500 max-w-sm mx-auto">
-              Explore the feed and tap the <span className="font-semibold text-purple-600">+ Follow</span> button on creators to see their latest posts and artworks here!
-            </p>
+            <div className="space-y-1">
+              <h3 className="text-base font-bold text-slate-800">
+                {followedUserIds.size === 0
+                  ? 'You are not following any creators yet'
+                  : 'No posts from followed creators yet'}
+              </h3>
+              <p className="text-xs text-slate-500 max-w-sm mx-auto">
+                {followedUserIds.size === 0
+                  ? 'Follow registered creators on METFA Social to see their posts, photos, and videos here.'
+                  : 'The creators you follow have not published feed posts yet.'}
+              </p>
+            </div>
+
+            {suggestedCreators.length > 0 && (
+              <div className="max-w-md mx-auto bg-slate-50 border border-slate-200 rounded-2xl p-3 text-left space-y-2">
+                <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500 block">
+                  Creators on METFA Social
+                </span>
+                <div className="space-y-2">
+                  {suggestedCreators.map((samplePost) => (
+                    <div
+                      key={samplePost.author.id}
+                      className="flex items-center justify-between gap-2 bg-white border border-slate-200 rounded-xl px-2.5 py-2"
+                    >
+                      <button
+                        type="button"
+                        onClick={() => onViewProfile?.(samplePost.author.id)}
+                        className="flex items-center gap-2 min-w-0 text-left cursor-pointer"
+                      >
+                        <img
+                          src={sanitizeAvatarUrl(samplePost.author?.avatar, samplePost.author?.name) || GUEST_AVATAR}
+                          alt={samplePost.author?.name || 'Creator'}
+                          className="w-8 h-8 rounded-full object-cover border border-slate-200 shrink-0"
+                        />
+                        <div className="min-w-0">
+                          <div className="text-xs font-bold text-slate-900 truncate">
+                            {samplePost.author.name}
+                          </div>
+                          {samplePost.author.username && (
+                            <div className="text-[10px] font-mono text-slate-500 truncate">
+                              @{samplePost.author.username.replace(/^@/, '')}
+                            </div>
+                          )}
+                        </div>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleToggleFollow(samplePost.author, samplePost)}
+                        className="px-2.5 py-1 rounded-lg bg-purple-600 hover:bg-purple-700 text-white text-[11px] font-bold shrink-0 cursor-pointer flex items-center gap-1"
+                      >
+                        <UserPlus className="w-3 h-3" />
+                        <span>Follow</span>
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
             <button
               type="button"
               onClick={() => setActiveFilter('all')}
@@ -1376,6 +1512,23 @@ export const CommunityFeed: React.FC<CommunityFeedProps> = ({
 
           const hasGradient = post.textBackgroundPreset && GRADIENT_PRESETS[post.textBackgroundPreset];
           const isPureTextPost = (!post.imageSrc && (!post.imageGallery || post.imageGallery.length === 0) && !post.videoSrc) || hasGradient;
+          const originalPostText = post.caption || post.prompt || '';
+          const activeTranslationEntry = translatedPostsMap[post.id];
+          const displayedPostText =
+            activeTranslationEntry?.isShowingTranslation && activeTranslationEntry.translatedText
+              ? activeTranslationEntry.translatedText
+              : originalPostText;
+          const textSeriesNav = resolveTextSeriesNavigationContext(post, posts, (candidate) => {
+            const cCtx = resolvePostPrivacyContext(candidate);
+            return canViewerAccessPost({
+              visibility: candidate.visibility,
+              authorId: candidate.author?.id,
+              authorProfilePrivacy: cCtx.authorProfilePrivacy,
+              viewerId: cCtx.viewerId,
+              viewerFollowsAuthor: cCtx.viewerFollowsAuthor,
+              viewerIsOwner: cCtx.viewerIsOwner,
+            });
+          });
           const resolvedContentType = clientResolveContentType(post);
           const postTrafficSource = post.groupId ? 'group' : post.pageId ? 'page' : 'feed';
           const contentTypeLabel =
@@ -1404,7 +1557,7 @@ export const CommunityFeed: React.FC<CommunityFeedProps> = ({
             >
               <div
                 id={`post-${post.id}`}
-                className={`bg-white border rounded-3xl overflow-hidden shadow-sm transition-all duration-500 animate-fadeIn ${
+                className={`bg-white border rounded-2xl sm:rounded-3xl overflow-hidden shadow-xs transition-all duration-300 animate-fadeIn ${
                   highlightedPostId === post.id || isTargetedCard
                     ? 'border-purple-500 ring-4 ring-purple-500/20 scale-[1.005] shadow-purple-500/20'
                     : 'border-slate-200 hover:border-purple-300'
@@ -1681,7 +1834,12 @@ export const CommunityFeed: React.FC<CommunityFeedProps> = ({
                 <div className="px-4 pb-3 space-y-1.5">
                   {post.caption && (
                     <PostContent
-                      text={post.caption}
+                      text={
+                        activeTranslationEntry?.isShowingTranslation &&
+                        activeTranslationEntry.translatedText
+                          ? activeTranslationEntry.translatedText
+                          : post.caption
+                      }
                       charLimit={180}
                       onExpandToggle={(isExpanded) => {
                         if (isExpanded) {
@@ -1711,13 +1869,20 @@ export const CommunityFeed: React.FC<CommunityFeedProps> = ({
               {isPureTextPost ? (
                 /* Pure Text / Gradient Canvas */
                 <div className="space-y-2">
+                  {textSeriesNav && (
+                    <TextSeriesNavigationBar
+                      nav={textSeriesNav}
+                      currentPostId={post.id}
+                      onNavigateToPart={handleNavigateTextSeriesPart}
+                    />
+                  )}
                   <div
                     className={`p-6 sm:p-8 flex items-center justify-center text-center ${
                       hasGradient ? GRADIENT_PRESETS[post.textBackgroundPreset!] : 'bg-slate-50 text-slate-900 text-left'
                     }`}
                   >
                     <PostContent
-                      text={post.caption || post.prompt}
+                      text={displayedPostText}
                       charLimit={hasGradient ? 220 : 180}
                       className="w-full"
                       onExpandToggle={(isExpanded) => {
@@ -1742,6 +1907,22 @@ export const CommunityFeed: React.FC<CommunityFeedProps> = ({
                       }
                     />
                   </div>
+                  <TextPostTranslationBar
+                    postId={post.id}
+                    sourceText={originalPostText}
+                    targetLanguage={translationTargetLang}
+                    onTargetLanguageChange={handleTargetLanguageChange}
+                    onTranslationChange={(state) =>
+                      setTranslatedPostsMap((prev) => ({
+                        ...prev,
+                        [post.id]: {
+                          isShowingTranslation: state.isShowingTranslation,
+                          translatedText: state.translatedText,
+                        },
+                      }))
+                    }
+                    variant={hasGradient ? 'gradient' : 'light'}
+                  />
                   {post.tags && post.tags.length > 0 && (
                     <div className="px-4 pb-2 flex items-center gap-x-2 gap-y-0.5 flex-wrap text-xs text-teal-700 font-medium">
                       {post.tags.map((tag, i) => (
@@ -1783,16 +1964,35 @@ export const CommunityFeed: React.FC<CommunityFeedProps> = ({
                         }}
                       />
                     </div>
-                  ) : (
+                  ) : (post.imageSrc || post.imageGallery?.[0]) ? (
                     <img
-                      src={post.imageSrc || post.imageGallery?.[0]}
+                      src={post.imageSrc || post.imageGallery?.[0] || undefined}
                       alt={post.prompt}
                       loading={postIdx === 0 ? 'eager' : 'lazy'}
                       decoding="async"
                       className="w-full h-auto max-h-[520px] object-cover"
                     />
-                  )}
+                  ) : null}
                 </div>
+              )}
+
+              {!isPureTextPost && post.caption && (
+                <TextPostTranslationBar
+                  postId={post.id}
+                  sourceText={post.caption}
+                  targetLanguage={translationTargetLang}
+                  onTargetLanguageChange={handleTargetLanguageChange}
+                  onTranslationChange={(state) =>
+                    setTranslatedPostsMap((prev) => ({
+                      ...prev,
+                      [post.id]: {
+                        isShowingTranslation: state.isShowingTranslation,
+                        translatedText: state.translatedText,
+                      },
+                    }))
+                  }
+                  variant="light"
+                />
               )}
 
               {/* 4. Engagement Row & Interactions Below Content */}
@@ -1956,8 +2156,8 @@ export const CommunityFeed: React.FC<CommunityFeedProps> = ({
                     {/* Add comment input bar + Mic triggers */}
                     <div className="flex items-center gap-2">
                       <img
-                        src={userProfile.avatar}
-                        alt={userProfile.name}
+                        src={sanitizeAvatarUrl(userProfile?.avatar, userProfile?.name) || GUEST_AVATAR}
+                        alt={userProfile?.name || 'Creator'}
                         loading="lazy"
                         decoding="async"
                         className="w-7 h-7 rounded-xl object-cover border border-slate-200"
@@ -2047,8 +2247,8 @@ export const CommunityFeed: React.FC<CommunityFeedProps> = ({
                             className="flex items-start gap-2.5 text-xs bg-purple-50 p-2.5 rounded-2xl border border-purple-200"
                           >
                             <img
-                              src={vc.author.avatar}
-                              alt={vc.author.name}
+                              src={sanitizeAvatarUrl(vc.author?.avatar, vc.author?.name) || GUEST_AVATAR}
+                              alt={vc.author?.name || 'Creator'}
                               loading="lazy"
                               decoding="async"
                               className="w-7 h-7 rounded-xl object-cover mt-0.5 border border-purple-200"
@@ -2124,8 +2324,8 @@ export const CommunityFeed: React.FC<CommunityFeedProps> = ({
                           <div key={c.id} className="space-y-1.5 text-xs">
                             <div className="flex items-start gap-2.5">
                               <img
-                                src={c.author.avatar}
-                                alt={c.author.name}
+                                src={sanitizeAvatarUrl(c.author?.avatar, c.author?.name) || GUEST_AVATAR}
+                                alt={c.author?.name || 'Creator'}
                                 loading="lazy"
                                 decoding="async"
                                 className="w-7 h-7 rounded-xl object-cover mt-0.5 border border-slate-200"

@@ -1,11 +1,12 @@
 import { supabase, isSupabaseConfigured, getClientAuthToken } from './supabaseClient';
-import { PostAudience, ProfilePrivacy, ReelHighlight } from '../types/community';
+import { CommunityPost, PostAudience, ProfilePrivacy, ReelHighlight, VideoSeriesMeta } from '../types/community';
 import { AudioTrack } from '../types/audio';
-import { uploadMediaItem } from './storageService';
+import { uploadMediaItem, UploadProgressInfo } from './storageService';
 import { getDefaultAvatar, sanitizeAvatarUrl } from './authService';
 import { fetchAuthorProfileById } from './postService';
 import { fetchProfilesPrivacyBatch } from './followService';
 import { normalizeProfilePrivacy } from '../utils/privacyPolicy';
+import { applySeriesRegistryHydrationToReel, attachVideoToSeries } from './seriesService';
 import {
   getReelHighlights,
   saveReelHighlight,
@@ -24,6 +25,7 @@ export interface CreateReelParams {
   audioTrack?: AudioTrack;
   musicTrack?: string;
   visibility?: PostAudience | 'private';
+  series?: VideoSeriesMeta;
   author: {
     id: string;
     name: string;
@@ -38,6 +40,7 @@ export interface ReelOperationResult {
   success: boolean;
   reel?: ReelHighlight;
   error?: string;
+  aborted?: boolean;
 }
 
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -98,7 +101,7 @@ export function mapSupabaseRowToReel(row: any): ReelHighlight {
     }
   }
 
-  return {
+  const reel: ReelHighlight = {
     id: String(row.id),
     title: row.video_title || row.prompt || 'Metfa Reel',
     caption: row.caption || '',
@@ -112,6 +115,7 @@ export function mapSupabaseRowToReel(row: any): ReelHighlight {
     },
     authorProfilePrivacy,
     visibility: row.visibility !== undefined ? row.visibility : null,
+    sourcePostType: row.post_type === 'reel' ? 'reel' : 'media',
     videoSrc: row.video_src || '',
     thumbnailSrc: row.video_thumbnail || undefined,
     duration: typeof row.duration === 'number' ? row.duration : 15,
@@ -126,6 +130,52 @@ export function mapSupabaseRowToReel(row: any): ReelHighlight {
       : undefined,
     audioTrack: row.audio_track || undefined,
   };
+  return applySeriesRegistryHydrationToReel(reel);
+}
+
+/**
+ * Converts any eligible published video-bearing CommunityPost into a canonical ReelHighlight
+ * WITHOUT mutating the underlying post_type in storage or database.
+ */
+export function convertCommunityPostToReel(post: CommunityPost): ReelHighlight | null {
+  if (!post?.id || !post?.videoSrc || !String(post.videoSrc).trim()) return null;
+  const authorPrivacy = normalizeProfilePrivacy(post.authorProfilePrivacy || post.author?.profilePrivacy);
+  const candidate: ReelHighlight = {
+    id: String(post.id),
+    title: post.videoTitle || post.prompt || 'Metfa Video',
+    caption: post.caption || '',
+    author: {
+      id: post.author?.id || 'creator',
+      name: post.postingIdentity?.name || post.author?.name || 'Metfa Creator',
+      username: post.postingIdentity?.username || post.author?.username || 'creator',
+      avatar:
+        post.postingIdentity?.avatar ||
+        post.author?.avatar ||
+        getDefaultAvatar(post.author?.username || 'creator'),
+      isVerified: Boolean(post.author?.isVerified ?? true),
+      profilePrivacy: authorPrivacy,
+    },
+    authorProfilePrivacy: authorPrivacy,
+    visibility: post.visibility !== undefined ? post.visibility : null,
+    sourcePostType: post.postType === 'reel' ? 'reel' : 'media',
+    videoSrc: post.videoSrc,
+    thumbnailSrc: post.videoThumbnail || post.imageSrc || undefined,
+    duration: 15,
+    likesCount: Number(post.likesCount) || 0,
+    commentsCount: Number(post.commentsCount) || 0,
+    sharesCount: Number(post.sharesCount) || 0,
+    viewsCount: post.viewsCount,
+    isLiked: post.isLiked,
+    isSaved: post.isBookmarked,
+    createdAt: post.createdAt || 'Recently',
+    createdAtIso: post.createdAtIso,
+    promptUsed: post.prompt,
+    musicTrack: post.audioTrack ? `${post.audioTrack.title} • ${post.audioTrack.artist}` : undefined,
+    audioTrack: post.audioTrack,
+    series: post.series,
+  };
+  const hydrated = applySeriesRegistryHydrationToReel(candidate);
+  return isRealReel(hydrated) ? hydrated : null;
 }
 
 async function resolveMissingReelAuthors(rows: any[]): Promise<void> {
@@ -184,14 +234,14 @@ async function fetchServerPersistentReels(): Promise<ReelHighlight[]> {
     return data.posts
       .filter(
         (p: any) =>
-          (p.postType === 'reel' || p.post_type === 'reel' || p.feedType === 'reels' || p.feed_type === 'reels') &&
-          Boolean(p.videoSrc || p.video_src)
+          Boolean(p.videoSrc || p.video_src) &&
+          String(p.videoSrc || p.video_src).trim().length > 0
       )
       .map((p: any) => {
         const authorPrivacy = normalizeProfilePrivacy(
           p.authorProfilePrivacy || p.author?.profilePrivacy || p.author?.profile_privacy
         );
-        return {
+        const mapped: ReelHighlight = {
           id: String(p.id),
           title: p.videoTitle || p.video_title || p.prompt || 'Metfa Reel',
           caption: p.caption || '',
@@ -205,6 +255,7 @@ async function fetchServerPersistentReels(): Promise<ReelHighlight[]> {
           },
           authorProfilePrivacy: authorPrivacy,
           visibility: p.visibility !== undefined ? p.visibility : null,
+          sourcePostType: (p.postType === 'reel' || p.post_type === 'reel') ? 'reel' : 'media',
           videoSrc: p.videoSrc || p.video_src,
           thumbnailSrc: p.videoThumbnail || p.video_thumbnail || p.imageSrc || undefined,
           duration: typeof p.duration === 'number' ? p.duration : 15,
@@ -216,7 +267,9 @@ async function fetchServerPersistentReels(): Promise<ReelHighlight[]> {
           promptUsed: p.promptUsed || p.prompt_used || p.prompt || undefined,
           musicTrack: p.musicTrack,
           audioTrack: p.audioTrack || p.audio_track,
-        } as ReelHighlight;
+          series: p.series,
+        };
+        return applySeriesRegistryHydrationToReel(mapped);
       })
       .filter(isRealReel);
   } catch {
@@ -258,7 +311,8 @@ export async function fetchPersistentReels(options?: {
         created_at,
         ${profileRel} (${profileCols})
       `)
-      .eq('post_type', 'reel')
+      .not('video_src', 'is', null)
+      .neq('video_src', '')
       .order('created_at', { ascending: false })
       .range(offset, offset + limit - 1);
   };
@@ -325,10 +379,29 @@ export async function fetchPersistentReels(options?: {
   return { reels: Array.from(fallbackMap.values()), source: 'local' };
 }
 
+function resolveVideoUploadFileName(videoSource: File | Blob | string): string {
+  if (typeof File !== 'undefined' && videoSource instanceof File && videoSource.name) {
+    return videoSource.name;
+  }
+  const mime = typeof videoSource !== 'string' ? (videoSource.type || '').toLowerCase() : '';
+  if (mime.includes('webm')) return `reel_${Date.now()}.webm`;
+  if (mime.includes('ogg')) return `reel_${Date.now()}.ogv`;
+  if (mime.includes('3gpp')) return `reel_${Date.now()}.3gp`;
+  return `reel_${Date.now()}.mp4`;
+}
+
 export async function createPersistentReel(
   params: CreateReelParams,
-  onProgress?: (step: string) => void
+  onProgress?: (step: string) => void,
+  options?: {
+    signal?: AbortSignal;
+    onUploadProgress?: (info: UploadProgressInfo) => void;
+  }
 ): Promise<ReelOperationResult> {
+  if (options?.signal?.aborted) {
+    return { success: false, aborted: true, error: 'Reel publishing cancelled.' };
+  }
+
   if (!params.author?.id) {
     return { success: false, error: 'Author profile ID is required' };
   }
@@ -340,19 +413,36 @@ export async function createPersistentReel(
   const resolvedVisibility = params.visibility || 'public';
 
   try {
-    onProgress?.('Uploading video to cloud storage...');
+    const isAlreadyUploadedUrl =
+      typeof params.videoSource === 'string' &&
+      !params.videoSource.startsWith('blob:') &&
+      !params.videoSource.startsWith('data:');
 
-    const videoUpload = await uploadMediaItem(params.videoSource, {
-      userId: params.author.id,
-      type: 'video',
-      fileName: `reel_${Date.now()}.mp4`,
-    });
+    let permanentVideoUrl: string;
+    if (isAlreadyUploadedUrl) {
+      permanentVideoUrl = params.videoSource as string;
+      onProgress?.('Attaching uploaded video & soundtrack...');
+    } else {
+      onProgress?.('Uploading video to cloud storage...');
+      const videoUpload = await uploadMediaItem(params.videoSource, {
+        userId: params.author.id,
+        type: 'video',
+        fileName: resolveVideoUploadFileName(params.videoSource),
+        signal: options?.signal,
+        visibility: resolvedVisibility,
+        onProgress: options?.onUploadProgress,
+      });
 
-    if (!videoUpload?.url) {
-      return { success: false, error: 'Failed to upload video media' };
+      if (!videoUpload?.url) {
+        return { success: false, error: 'Failed to upload video media' };
+      }
+
+      permanentVideoUrl = videoUpload.url;
     }
 
-    const permanentVideoUrl = videoUpload.url;
+    if (options?.signal?.aborted) {
+      return { success: false, aborted: true, error: 'Reel publishing cancelled.' };
+    }
 
     let permanentThumbUrl = params.thumbnailSource;
     if (
@@ -365,16 +455,25 @@ export async function createPersistentReel(
           userId: params.author.id,
           type: 'image',
           fileName: `thumb_${Date.now()}.jpg`,
+          signal: options?.signal,
+          visibility: resolvedVisibility,
         });
         if (thumbUpload?.url) {
           permanentThumbUrl = thumbUpload.url;
         }
-      } catch (thumbErr) {
+      } catch (thumbErr: any) {
+        if (thumbErr?.name === 'AbortError' || options?.signal?.aborted) {
+          return { success: false, aborted: true, error: 'Reel publishing cancelled.' };
+        }
         console.warn('[ReelService] Thumbnail upload warning:', thumbErr);
       }
     }
 
-    onProgress?.('Saving reel metadata to database...');
+    if (options?.signal?.aborted) {
+      return { success: false, aborted: true, error: 'Reel publishing cancelled.' };
+    }
+
+    onProgress?.('Saving reel metadata and attaching soundtrack...');
 
     const resolvedTitle = params.title.trim() || 'AI Creation Reel';
     const resolvedCaption = params.caption.trim() || 'Created with Metfa Studio #AI';
@@ -436,6 +535,15 @@ export async function createPersistentReel(
             createdReel.authorProfilePrivacy = params.author.profilePrivacy;
             createdReel.author.profilePrivacy = params.author.profilePrivacy;
           }
+          if (params.series?.seriesId) {
+            const enrichedSeries: VideoSeriesMeta = {
+              ...params.series,
+              creatorId: params.author.id,
+              firstPartId: params.series.firstPartId || (params.series.partNumber === 1 ? createdReel.id : undefined),
+            };
+            createdReel.series = enrichedSeries;
+            attachVideoToSeries(createdReel.id, enrichedSeries).catch(() => {});
+          }
           saveReelHighlight(createdReel);
           return { success: true, reel: createdReel };
         } else if (error) {
@@ -446,8 +554,17 @@ export async function createPersistentReel(
       }
     }
 
+    const fallbackId = `reel_${Date.now()}`;
+    const enrichedFallbackSeries: VideoSeriesMeta | undefined = params.series?.seriesId
+      ? {
+          ...params.series,
+          creatorId: params.author.id,
+          firstPartId: params.series.firstPartId || (params.series.partNumber === 1 ? fallbackId : undefined),
+        }
+      : undefined;
+
     const fallbackReel: ReelHighlight = {
-      id: `reel_${Date.now()}`,
+      id: fallbackId,
       title: resolvedTitle,
       caption: resolvedCaption,
       author: {
@@ -460,6 +577,7 @@ export async function createPersistentReel(
       },
       authorProfilePrivacy: params.author.profilePrivacy,
       visibility: resolvedVisibility,
+      sourcePostType: 'reel',
       videoSrc: permanentVideoUrl,
       thumbnailSrc: permanentThumbUrl,
       duration: params.duration || 15,
@@ -471,11 +589,18 @@ export async function createPersistentReel(
       promptUsed: params.promptUsed,
       musicTrack: params.musicTrack,
       audioTrack: params.audioTrack,
+      series: enrichedFallbackSeries,
     };
 
+    if (enrichedFallbackSeries) {
+      attachVideoToSeries(fallbackReel.id, enrichedFallbackSeries).catch(() => {});
+    }
     saveReelHighlight(fallbackReel);
     return { success: true, reel: fallbackReel };
   } catch (err: any) {
+    if (err?.name === 'AbortError' || options?.signal?.aborted) {
+      return { success: false, aborted: true, error: 'Reel publishing cancelled.' };
+    }
     console.error('[ReelService] Error creating persistent reel:', err);
     return { success: false, error: err?.message || 'Failed to create reel' };
   }

@@ -252,6 +252,10 @@ export const ReelCard: React.FC<ReelCardProps> = ({
             playsInline
             loop
             muted={isMuted}
+            onPlaying={() => setIsPlaying(true)}
+            onPause={() => setIsPlaying(false)}
+            onWaiting={() => setIsPlaying(false)}
+            onEnded={() => setIsPlaying(false)}
             className="w-full h-full object-cover"
           />
         ) : (
@@ -654,7 +658,13 @@ export const ReelCard: React.FC<ReelCardProps> = ({
                 className="flex items-center gap-1.5 text-[10px] text-purple-300 hover:text-teal-300 font-mono bg-black/40 hover:bg-black/70 px-2.5 py-1 rounded-full border border-purple-500/30 transition cursor-pointer shrink-0 max-w-[85%]"
                 title="View music license terms & rights certificate"
               >
-                <Music className="w-3 h-3 text-teal-400 animate-spin shrink-0" />
+                <Music
+                  className={`w-3 h-3 shrink-0 ${
+                    isPlaying && !isMuted
+                      ? 'text-teal-300 motion-safe:animate-spin'
+                      : 'text-teal-400/80'
+                  }`}
+                />
                 <span className="truncate">{reel.musicTrack}</span>
                 <ShieldCheck className="w-3 h-3 text-teal-400 shrink-0 ml-0.5" />
               </button>

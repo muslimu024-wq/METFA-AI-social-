@@ -26,7 +26,7 @@ import {
   Users,
   Lock,
 } from 'lucide-react';
-import { CommunityPost, PostAudience, UserProfile } from '../types/community';
+import { CommunityPost, PostAudience, UserProfile, VideoSeriesMeta } from '../types/community';
 import { AudioTrack } from '../types/audio';
 import { normalizeDefaultPostAudience } from '../utils/privacyPolicy';
 import { getPages, getGroups } from '../utils/socialStore';
@@ -35,6 +35,12 @@ import { generateAICaptionAndHashtags, refineTextWithAI } from '../services/aiAs
 import { saveMediaItem, fileToBase64 } from '../utils/mediaStorage';
 import { compressImageDataUrl } from '../utils/storageUtils';
 import { uploadMediaItem } from '../services/storageService';
+import {
+  fetchCreatorVideoSeries,
+  createCreatorVideoSeries,
+} from '../services/seriesService';
+import type { VideoSeriesDefinition } from '../utils/videoSeries';
+import { GUEST_AVATAR, sanitizeAvatarUrl } from '../services/authService';
 import AudioTrackPickerModal from './AudioTrackPickerModal';
 import AudioLicenseInfoModal from './AudioLicenseInfoModal';
 
@@ -86,6 +92,17 @@ export const CreatePostModal: React.FC<CreatePostModalProps> = ({
   const [selectedAudioTrack, setSelectedAudioTrack] = useState<AudioTrack | null>(null);
   const [isAudioPickerOpen, setIsAudioPickerOpen] = useState(false);
   const [isLicenseModalOpen, setIsLicenseModalOpen] = useState(false);
+
+  // Explicit Creator-Linked Series (Strictly Optional — isolated between Text Series & Video Series)
+  const [isSeriesEnabled, setIsSeriesEnabled] = useState(false);
+  const [creatorSeriesList, setCreatorSeriesList] = useState<VideoSeriesDefinition[]>([]);
+  const [seriesMode, setSeriesMode] = useState<'existing' | 'new'>('new');
+  const [selectedSeriesId, setSelectedSeriesId] = useState('');
+  const [newSeriesTitle, setNewSeriesTitle] = useState('');
+  const [newSeriesDescription, setNewSeriesDescription] = useState('');
+  const [seriesPartNumber, setSeriesPartNumber] = useState<number>(1);
+  const [seriesTotalParts, setSeriesTotalParts] = useState<string>('');
+  const [seriesIsOngoing, setSeriesIsOngoing] = useState(false);
 
   // AI Assistant States
   const [isAIAssistantOpen, setIsAIAssistantOpen] = useState(false);
@@ -169,8 +186,35 @@ export const CreatePostModal: React.FC<CreatePostModalProps> = ({
       selectedVideoFileRef.current = null;
       setSelectedVideoMetadata(null);
       isSubmittingRef.current = false;
+      setIsSeriesEnabled(false);
+      setNewSeriesTitle('');
+      setNewSeriesDescription('');
+      setSeriesPartNumber(1);
+      setSeriesTotalParts('');
+      setSeriesIsOngoing(false);
     }
-  }, [isOpen, initialVideoSrc, initialAudioTrack, userProfile?.defaultPostAudience]);
+  }, [isOpen, initialVideoSrc, initialAudioTrack, userProfile?.id, userProfile?.defaultPostAudience]);
+
+  // Keep creator series dropdown isolated strictly between 'text' and 'video' modes
+  useEffect(() => {
+    if (!isOpen || !userProfile?.id || userProfile.id === 'guest') return;
+    const desiredType = postMode === 'text' ? 'text' : 'video';
+    let active = true;
+    fetchCreatorVideoSeries(userProfile.id, desiredType).then((list) => {
+      if (!active) return;
+      setCreatorSeriesList(list);
+      if (list.length > 0) {
+        setSeriesMode('existing');
+        setSelectedSeriesId(list[0].seriesId);
+      } else {
+        setSeriesMode('new');
+        setSelectedSeriesId('');
+      }
+    });
+    return () => {
+      active = false;
+    };
+  }, [isOpen, postMode, userProfile?.id]);
 
   const handleClose = () => {
     if (isPublishing) {
@@ -201,6 +245,11 @@ export const CreatePostModal: React.FC<CreatePostModalProps> = ({
     setVideoPreviewErrorDetails(null);
     selectedVideoFileRef.current = null;
     setSelectedVideoMetadata(null);
+    setIsSeriesEnabled(false);
+    setNewSeriesTitle('');
+    setNewSeriesDescription('');
+    setSeriesPartNumber(1);
+    setSeriesTotalParts('');
     isSubmittingRef.current = false;
     onClose();
   };
@@ -538,6 +587,59 @@ export const CreatePostModal: React.FC<CreatePostModalProps> = ({
 
       setUploadProgress('Finalizing post publication...');
 
+      // Build explicit Video Series or Text Series linkage if creator enabled it
+      let resolvedSeriesMeta: VideoSeriesMeta | undefined;
+      const canAttachSeries =
+        isSeriesEnabled && (postMode === 'text' || Boolean(videoSrc));
+      if (canAttachSeries) {
+        const activeSeriesType = postMode === 'text' && !videoSrc ? 'text' : 'video';
+        const parsedTotal =
+          !seriesIsOngoing && seriesTotalParts.trim()
+            ? Math.max(1, Math.floor(Number(seriesTotalParts)))
+            : undefined;
+        const normalizedPart = Math.max(1, Math.floor(Number(seriesPartNumber) || 1));
+
+        if (seriesMode === 'existing' && selectedSeriesId) {
+          const matchedSeries = creatorSeriesList.find((s) => s.seriesId === selectedSeriesId);
+          if (matchedSeries) {
+            resolvedSeriesMeta = {
+              seriesId: matchedSeries.seriesId,
+              seriesTitle: matchedSeries.title,
+              seriesDescription: matchedSeries.description,
+              creatorId: userProfile.id,
+              partNumber: normalizedPart,
+              totalParts: parsedTotal || matchedSeries.totalParts,
+              visibility,
+              isPublished: true,
+              seriesType: activeSeriesType,
+              isOngoing: seriesIsOngoing || Boolean(matchedSeries.isOngoing),
+            };
+          }
+        } else if (newSeriesTitle.trim()) {
+          const createdSeries = await createCreatorVideoSeries({
+            creatorId: userProfile.id,
+            title: newSeriesTitle.trim(),
+            description: newSeriesDescription.trim() || undefined,
+            totalParts: parsedTotal,
+            visibility,
+            seriesType: activeSeriesType,
+            isOngoing: seriesIsOngoing,
+          });
+          resolvedSeriesMeta = {
+            seriesId: createdSeries.seriesId,
+            seriesTitle: createdSeries.title,
+            seriesDescription: createdSeries.description,
+            creatorId: userProfile.id,
+            partNumber: normalizedPart,
+            totalParts: createdSeries.totalParts || parsedTotal,
+            visibility,
+            isPublished: true,
+            seriesType: activeSeriesType,
+            isOngoing: seriesIsOngoing || Boolean(createdSeries.isOngoing),
+          };
+        }
+      }
+
       await onPostCreated({
         author: {
           id: userProfile.id,
@@ -557,6 +659,7 @@ export const CreatePostModal: React.FC<CreatePostModalProps> = ({
         caption: caption.trim(),
         videoTitle: videoSrc ? videoTitle.trim() : undefined,
         videoThumbnail: videoSrc ? (videoThumbnail || undefined) : undefined,
+        series: resolvedSeriesMeta,
         stylePreset: postMode === 'media' ? stylePreset : undefined,
         // Crucial: When video is uploaded, NEVER attach old photos or dummy cover
         imageSrc: videoSrc ? (videoThumbnail || undefined) : primaryImage,
@@ -703,7 +806,7 @@ export const CreatePostModal: React.FC<CreatePostModalProps> = ({
           <div className="flex items-center justify-between gap-3 flex-wrap">
             <div className="flex items-center gap-2 flex-1 min-w-[240px]">
               <img
-                src={userProfile.avatar}
+                src={sanitizeAvatarUrl(userProfile?.avatar) || GUEST_AVATAR}
                 alt={userProfile.name}
                 className="w-9 h-9 rounded-full object-cover border border-purple-500/40 shrink-0"
               />
@@ -833,6 +936,135 @@ export const CreatePostModal: React.FC<CreatePostModalProps> = ({
                     title={g.label}
                   />
                 ))}
+              </div>
+
+              {/* Optional Explicit Creator-Linked Text Series / Serial Story Section */}
+              <div className="bg-purple-50/50 border border-purple-200 rounded-2xl p-3 space-y-2.5">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-xs font-bold text-purple-950 flex items-center gap-1.5">
+                    <Layers className="w-4 h-4 text-purple-600" />
+                    <span>Text Series / Serial Story (Optional)</span>
+                  </span>
+                  <button
+                    type="button"
+                    data-testid="toggle-text-series-btn"
+                    onClick={() => setIsSeriesEnabled((prev) => !prev)}
+                    className={`px-2.5 py-1 rounded-lg text-[11px] font-bold border transition cursor-pointer ${
+                      isSeriesEnabled
+                        ? 'bg-teal-600 text-white border-teal-600'
+                        : 'bg-white text-slate-600 border-slate-200 hover:border-purple-300'
+                    }`}
+                  >
+                    {isSeriesEnabled ? 'Serial Story Active' : 'Add to Text Series'}
+                  </button>
+                </div>
+
+                {isSeriesEnabled && (
+                  <div className="bg-white border border-purple-200 rounded-xl p-3 space-y-2.5">
+                    {creatorSeriesList.length > 0 && (
+                      <div className="grid grid-cols-2 gap-1.5">
+                        <button
+                          type="button"
+                          onClick={() => setSeriesMode('existing')}
+                          className={`py-1.5 rounded-lg text-[11px] font-bold border cursor-pointer ${
+                            seriesMode === 'existing'
+                              ? 'bg-purple-600 text-white border-purple-600'
+                              : 'bg-slate-50 text-slate-600 border-slate-200'
+                          }`}
+                        >
+                          Existing Text Series
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setSeriesMode('new')}
+                          className={`py-1.5 rounded-lg text-[11px] font-bold border cursor-pointer ${
+                            seriesMode === 'new'
+                              ? 'bg-purple-600 text-white border-purple-600'
+                              : 'bg-slate-50 text-slate-600 border-slate-200'
+                          }`}
+                        >
+                          Create New Series
+                        </button>
+                      </div>
+                    )}
+
+                    {seriesMode === 'existing' && creatorSeriesList.length > 0 ? (
+                      <select
+                        data-testid="text-series-select"
+                        value={selectedSeriesId}
+                        onChange={(e) => setSelectedSeriesId(e.target.value)}
+                        className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs font-semibold text-slate-900 focus:outline-none focus:border-purple-600"
+                      >
+                        {creatorSeriesList.map((s) => (
+                          <option key={s.seriesId} value={s.seriesId}>
+                            {s.title}
+                          </option>
+                        ))}
+                      </select>
+                    ) : (
+                      <div className="space-y-2">
+                        <input
+                          type="text"
+                          data-testid="text-series-title-input"
+                          value={newSeriesTitle}
+                          onChange={(e) => setNewSeriesTitle(e.target.value)}
+                          placeholder="Story / Series Title (e.g. Dhaka Chronicles)"
+                          className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs text-slate-900 focus:outline-none focus:border-purple-600"
+                        />
+                        <input
+                          type="text"
+                          data-testid="text-series-desc-input"
+                          value={newSeriesDescription}
+                          onChange={(e) => setNewSeriesDescription(e.target.value)}
+                          placeholder="Short description (optional)"
+                          className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs text-slate-900 focus:outline-none focus:border-purple-600"
+                        />
+                      </div>
+                    )}
+
+                    <div className="grid grid-cols-2 gap-2">
+                      <div>
+                        <label className="text-[10px] font-bold text-slate-500 block mb-1">
+                          Part Number
+                        </label>
+                        <input
+                          type="number"
+                          min={1}
+                          data-testid="text-series-part-input"
+                          value={seriesPartNumber}
+                          onChange={(e) => setSeriesPartNumber(Math.max(1, Number(e.target.value) || 1))}
+                          className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-1.5 text-xs text-slate-900 focus:outline-none focus:border-purple-600 tabular-nums"
+                        />
+                      </div>
+                      <div>
+                        <label className="text-[10px] font-bold text-slate-500 block mb-1">
+                          Total Planned Parts (Optional)
+                        </label>
+                        <input
+                          type="number"
+                          min={1}
+                          disabled={seriesIsOngoing}
+                          data-testid="text-series-total-input"
+                          value={seriesTotalParts}
+                          onChange={(e) => setSeriesTotalParts(e.target.value)}
+                          placeholder={seriesIsOngoing ? 'Ongoing' : 'Leave empty if unknown'}
+                          className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-1.5 text-xs text-slate-900 focus:outline-none focus:border-purple-600 tabular-nums disabled:opacity-50"
+                        />
+                      </div>
+                    </div>
+
+                    <label className="flex items-center gap-2 text-[11px] font-semibold text-slate-700 cursor-pointer select-none pt-0.5">
+                      <input
+                        type="checkbox"
+                        data-testid="text-series-ongoing-checkbox"
+                        checked={seriesIsOngoing}
+                        onChange={(e) => setSeriesIsOngoing(e.target.checked)}
+                        className="rounded border-slate-300 text-purple-600 focus:ring-purple-500"
+                      />
+                      <span>Ongoing series (show "More parts coming soon")</span>
+                    </label>
+                  </div>
+                )}
               </div>
             </div>
           ) : (
@@ -1019,6 +1251,117 @@ export const CreatePostModal: React.FC<CreatePostModalProps> = ({
                       </label>
                     )}
                   </div>
+
+                  {/* Optional Explicit Creator-Linked Video Series Linking */}
+                  <div className="pt-2 border-t border-purple-200/80 space-y-2.5">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-xs font-bold text-purple-950 flex items-center gap-1.5">
+                        <Layers className="w-4 h-4 text-purple-600" />
+                        <span>Video Series Episode (Optional)</span>
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => setIsSeriesEnabled((prev) => !prev)}
+                        className={`px-2.5 py-1 rounded-lg text-[11px] font-bold border transition cursor-pointer ${
+                          isSeriesEnabled
+                            ? 'bg-teal-600 text-white border-teal-600'
+                            : 'bg-white text-slate-600 border-slate-200 hover:border-purple-300'
+                        }`}
+                      >
+                        {isSeriesEnabled ? 'Linked to Series' : 'Add to Series'}
+                      </button>
+                    </div>
+
+                    {isSeriesEnabled && (
+                      <div className="bg-white border border-purple-200 rounded-xl p-3 space-y-2.5">
+                        {creatorSeriesList.length > 0 && (
+                          <div className="grid grid-cols-2 gap-1.5">
+                            <button
+                              type="button"
+                              onClick={() => setSeriesMode('existing')}
+                              className={`py-1.5 rounded-lg text-[11px] font-bold border cursor-pointer ${
+                                seriesMode === 'existing'
+                                  ? 'bg-purple-600 text-white border-purple-600'
+                                  : 'bg-slate-50 text-slate-600 border-slate-200'
+                              }`}
+                            >
+                              Existing Series
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setSeriesMode('new')}
+                              className={`py-1.5 rounded-lg text-[11px] font-bold border cursor-pointer ${
+                                seriesMode === 'new'
+                                  ? 'bg-purple-600 text-white border-purple-600'
+                                  : 'bg-slate-50 text-slate-600 border-slate-200'
+                              }`}
+                            >
+                              New Series
+                            </button>
+                          </div>
+                        )}
+
+                        {seriesMode === 'existing' && creatorSeriesList.length > 0 ? (
+                          <select
+                            value={selectedSeriesId}
+                            onChange={(e) => setSelectedSeriesId(e.target.value)}
+                            className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs font-semibold text-slate-900 focus:outline-none focus:border-purple-600"
+                          >
+                            {creatorSeriesList.map((s) => (
+                              <option key={s.seriesId} value={s.seriesId}>
+                                {s.title}
+                              </option>
+                            ))}
+                          </select>
+                        ) : (
+                          <div className="space-y-2">
+                            <input
+                              type="text"
+                              value={newSeriesTitle}
+                              onChange={(e) => setNewSeriesTitle(e.target.value)}
+                              placeholder="Series Title (e.g. Studio Workflow)"
+                              className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs text-slate-900 focus:outline-none focus:border-purple-600"
+                            />
+                            <input
+                              type="text"
+                              value={newSeriesDescription}
+                              onChange={(e) => setNewSeriesDescription(e.target.value)}
+                              placeholder="Series description (optional)"
+                              className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs text-slate-900 focus:outline-none focus:border-purple-600"
+                            />
+                          </div>
+                        )}
+
+                        <div className="grid grid-cols-2 gap-2">
+                          <div>
+                            <label className="text-[10px] font-bold text-slate-500 block mb-1">
+                              Part Number
+                            </label>
+                            <input
+                              type="number"
+                              min={1}
+                              value={seriesPartNumber}
+                              onChange={(e) => setSeriesPartNumber(Math.max(1, Number(e.target.value) || 1))}
+                              className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-1.5 text-xs text-slate-900 focus:outline-none focus:border-purple-600 tabular-nums"
+                            />
+                          </div>
+                          <div>
+                            <label className="text-[10px] font-bold text-slate-500 block mb-1">
+                              Total Parts (Optional)
+                            </label>
+                            <input
+                              type="number"
+                              min={1}
+                              value={seriesTotalParts}
+                              onChange={(e) => setSeriesTotalParts(e.target.value)}
+                              placeholder="Ongoing"
+                              className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-1.5 text-xs text-slate-900 focus:outline-none focus:border-purple-600 tabular-nums"
+                            />
+                          </div>
+                        </div>
+                      </div>
+                    )}
+                  </div>
                 </div>
               ) : mediaGallery.length > 0 ? (
                 /* Multi-Photo Gallery Preview */
@@ -1130,11 +1473,13 @@ export const CreatePostModal: React.FC<CreatePostModalProps> = ({
             {selectedAudioTrack ? (
               <div className="p-2.5 bg-purple-50 border border-purple-200 rounded-xl flex items-center justify-between gap-3">
                 <div className="flex items-center gap-2.5 min-w-0">
-                  <img
-                    src={selectedAudioTrack.cover_url}
-                    alt={selectedAudioTrack.title}
-                    className="w-10 h-10 rounded-lg object-cover border border-purple-300 shrink-0"
-                  />
+                  {selectedAudioTrack.cover_url && (
+                    <img
+                      src={selectedAudioTrack.cover_url}
+                      alt={selectedAudioTrack.title}
+                      className="w-10 h-10 rounded-lg object-cover border border-purple-300 shrink-0"
+                    />
+                  )}
                   <div className="min-w-0">
                     <h4 className="text-xs font-bold text-slate-900 truncate">{selectedAudioTrack.title}</h4>
                     <p className="text-[10px] text-purple-700 truncate font-mono">

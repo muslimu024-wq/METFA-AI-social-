@@ -11,6 +11,7 @@ import {
 import { isSupabaseConfigured, supabase, getClientAuthToken } from '../services/supabaseClient';
 import { uploadMediaItem } from '../services/storageService';
 import { GUEST_AVATAR, sanitizeAvatarUrl } from '../services/authService';
+import { applySeriesRegistryHydrationToPost, attachContentToSeries } from '../services/seriesService';
 
 const POSTS_STORAGE_KEY = 'metfa_community_posts_v2';
 const USER_PROFILE_KEY = 'metfa_user_profile_v2';
@@ -116,7 +117,7 @@ export const getCommunityPosts = (): CommunityPost[] => {
     if (raw) {
       const data = JSON.parse(raw);
       if (Array.isArray(data)) {
-        const sanitized = data.filter(isRealPost);
+        const sanitized = data.filter(isRealPost).map(applySeriesRegistryHydrationToPost);
         return sanitized;
       }
     }
@@ -418,6 +419,18 @@ export const saveCommunityPost = (post: Omit<CommunityPost, 'id' | 'likesCount' 
     createdAt: 'Just now',
   };
 
+  if (newPost.series?.seriesId) {
+    const enrichedSeries = {
+      ...newPost.series,
+      creatorId: newPost.series.creatorId || newPost.author?.id || '',
+      seriesType: newPost.series.seriesType || (newPost.videoSrc ? 'video' : 'text'),
+      firstPartId:
+        newPost.series.firstPartId || (newPost.series.partNumber === 1 ? newPost.id : undefined),
+    };
+    newPost.series = enrichedSeries;
+    attachContentToSeries(newPost.id, enrichedSeries).catch(() => {});
+  }
+
   recordOwnedPostId(newPost.id, newPost.author?.id);
   const updated = [newPost, ...current];
   saveCommunityPosts(updated);
@@ -625,7 +638,19 @@ export const createPostAsync = async (
   }
 
   // 5. Offline fallback when database is not configured
-  return saveCommunityPost(postToSave);
+  const savedLocal = saveCommunityPost(postToSave);
+  if (postToSave.series?.seriesId) {
+    const enrichedSeries = {
+      ...postToSave.series,
+      creatorId: postToSave.series.creatorId || savedLocal.author?.id || '',
+      seriesType: postToSave.series.seriesType || (savedLocal.videoSrc ? 'video' : 'text'),
+      firstPartId:
+        postToSave.series.firstPartId || (postToSave.series.partNumber === 1 ? savedLocal.id : undefined),
+    };
+    savedLocal.series = enrichedSeries;
+    attachContentToSeries(savedLocal.id, enrichedSeries).catch(() => {});
+  }
+  return savedLocal;
 };
 
 /**
@@ -636,6 +661,12 @@ export const updatePostAsync = async (
   updates: Partial<CommunityPost>,
   authorId?: string
 ): Promise<CommunityPost[]> => {
+  if (updates.series?.seriesId) {
+    attachContentToSeries(postId, {
+      ...updates.series,
+      creatorId: updates.series.creatorId || authorId || '',
+    }).catch(() => {});
+  }
   if (isSupabaseConfigured() && isUuid(postId) && authorId && isUuid(authorId)) {
     try {
       await doUpdateSupabasePost(postId, updates, authorId);

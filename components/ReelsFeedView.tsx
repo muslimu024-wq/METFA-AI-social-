@@ -33,10 +33,32 @@ import {
   AlertCircle,
   Info,
   User,
+  Layers,
+  ChevronLeft,
+  ChevronRight,
+  RotateCcw,
+  WifiOff,
+  ListVideo,
+  Compass,
+  Play,
 } from 'lucide-react';
-import { FollowRelationStatus, PostAudience, ProfilePrivacy, ReelHighlight, UserProfile, PostComment } from '../types/community';
+import {
+  CommunityPost,
+  PostAudience,
+  ProfilePrivacy,
+  ReelHighlight,
+  UserProfile,
+  PostComment,
+} from '../types/community';
+import type { FollowRelationStatus } from '../utils/privacyPolicy';
 import { AudioTrack } from '../types/audio';
 import { useAuth } from '../context/AuthContext';
+import { useVideoReadiness } from '../utils/videoReadiness';
+import {
+  resolveSeriesNavigationContext,
+  recordVideoWatchProgress,
+  SeriesNavigationContext,
+} from '../utils/videoSeries';
 import {
   saveReelHighlights,
   incrementReelShares,
@@ -96,8 +118,19 @@ const ConfirmActionModal = lazy(() => import('./ConfirmActionModal'));
 const AudioLicenseInfoModal = lazy(() => import('./AudioLicenseInfoModal'));
 const ContentAnalyticsModal = lazy(() => import('./ContentAnalyticsModal'));
 
+export type ReelsFeedFilterTab = 'forYou' | 'following' | 'discover' | 'trending';
+
+export function isReelAudioActivelyPlaying(
+  el: Pick<HTMLVideoElement, 'paused' | 'ended' | 'readyState' | 'muted' | 'volume'> | null | undefined,
+  viewMuted: boolean
+): boolean {
+  if (!el) return false;
+  return !el.paused && !el.ended && el.readyState >= 2 && !viewMuted && !el.muted && el.volume > 0;
+}
+
 interface ReelsFeedViewProps {
   reels: ReelHighlight[];
+  allPosts?: CommunityPost[];
   directSelectedReel?: ReelHighlight | null;
   onUpdateReels: (reels: ReelHighlight[]) => void;
   userProfile: UserProfile;
@@ -105,6 +138,10 @@ interface ReelsFeedViewProps {
   onCreateReelClick: () => void;
   isLoading?: boolean;
   targetReelId?: string | null;
+  initialActiveReelId?: string | null;
+  initialFeedFilter?: ReelsFeedFilterTab;
+  onFeedFilterChange?: (filter: ReelsFeedFilterTab) => void;
+  onActiveReelChange?: (reelId: string | null) => void;
   onClearTargetReel?: () => void;
   initialCurrentTime?: number;
   onNavigateTab?: (tabId: string) => void;
@@ -114,6 +151,7 @@ interface ReelsFeedViewProps {
 
 export const ReelsFeedView: React.FC<ReelsFeedViewProps> = ({
   reels,
+  allPosts = [],
   directSelectedReel,
   onUpdateReels,
   userProfile,
@@ -121,6 +159,10 @@ export const ReelsFeedView: React.FC<ReelsFeedViewProps> = ({
   onCreateReelClick,
   isLoading = false,
   targetReelId,
+  initialActiveReelId,
+  initialFeedFilter = 'forYou',
+  onFeedFilterChange,
+  onActiveReelChange,
   onClearTargetReel,
   initialCurrentTime,
   onNavigateTab,
@@ -129,7 +171,14 @@ export const ReelsFeedView: React.FC<ReelsFeedViewProps> = ({
 }) => {
   const { user: authUser } = useAuth();
   // Immersive Reels Overlay Feed Filters & Search
-  const [feedFilter, setFeedFilter] = useState<'forYou' | 'following'>('forYou');
+  const [feedFilter, setFeedFilterState] = useState<ReelsFeedFilterTab>(initialFeedFilter);
+  const setFeedFilter = React.useCallback(
+    (next: ReelsFeedFilterTab) => {
+      setFeedFilterState(next);
+      onFeedFilterChange?.(next);
+    },
+    [onFeedFilterChange]
+  );
   const [isSearchOpen, setIsSearchOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [followedAuthorIds, setFollowedAuthorIds] = useState<string[]>(() =>
@@ -137,6 +186,8 @@ export const ReelsFeedView: React.FC<ReelsFeedViewProps> = ({
   );
   const [pendingRequestIds, setPendingRequestIds] = useState<string[]>([]);
   const [profilesPrivacyMap, setProfilesPrivacyMap] = useState<Map<string, ProfilePrivacy>>(new Map());
+  const [activeSeriesDrawerCtx, setActiveSeriesDrawerCtx] = useState<SeriesNavigationContext | null>(null);
+  const [activeVideoElement, setActiveVideoElement] = useState<HTMLVideoElement | null>(null);
 
   const getReelFollowStatus = (reel: ReelHighlight): FollowRelationStatus => {
     const aid = reel.author?.id?.toLowerCase();
@@ -161,15 +212,9 @@ export const ReelsFeedView: React.FC<ReelsFeedViewProps> = ({
     reel.author?.profilePrivacy ||
     'public';
 
-  // Combine persistent reels with any transient Feed-selected reel, enforce visibility rules,
-  // hoist targetReelId to top, and apply Following / Search filters cleanly.
-  const baseReels = React.useMemo(() => {
-    const combined =
-      directSelectedReel && !reels.some((r) => r.id === directSelectedReel.id)
-        ? [directSelectedReel, ...reels]
-        : reels;
-    const viewerId = authUser?.id || (userProfile?.id !== 'guest' ? userProfile?.id : null);
-    const accessible = combined.filter((r) => {
+  const canViewerAccessReelItem = React.useCallback(
+    (r: ReelHighlight): boolean => {
+      const viewerId = authUser?.id || (userProfile?.id !== 'guest' ? userProfile?.id : null);
       const viewerIsOwner = isContentOwner(r.author, userProfile, authUser, undefined, r.id);
       const followStatus = getReelFollowStatus(r);
       return canViewerAccessPost({
@@ -180,17 +225,59 @@ export const ReelsFeedView: React.FC<ReelsFeedViewProps> = ({
         viewerFollowsAuthor: followStatus === 'following',
         viewerIsOwner,
       });
-    });
+    },
+    [authUser, userProfile, followedAuthorIds, pendingRequestIds, profilesPrivacyMap]
+  );
+
+  // Combine persistent reels with any transient Feed-selected reel, enforce visibility rules,
+  // deduplicate cleanly by id, and hoist targetReelId to top when explicitly targeted.
+  const baseReels = React.useMemo(() => {
+    const rawCombined =
+      directSelectedReel && !reels.some((r) => r.id === directSelectedReel.id)
+        ? [directSelectedReel, ...reels]
+        : reels;
+    const dedupedMap = new Map<string, ReelHighlight>();
+    for (const r of rawCombined) {
+      if (r && r.id && r.videoSrc && !dedupedMap.has(r.id)) {
+        dedupedMap.set(r.id, r);
+      }
+    }
+    const accessible = Array.from(dedupedMap.values()).filter((r) => canViewerAccessReelItem(r));
     if (!targetReelId) return accessible;
     const target = accessible.find((r) => r.id === targetReelId);
     if (!target) return accessible;
     return [target, ...accessible.filter((r) => r.id !== targetReelId)];
-  }, [reels, directSelectedReel, targetReelId, authUser?.id, userProfile?.id, followedAuthorIds, profilesPrivacyMap]);
+  }, [reels, directSelectedReel, targetReelId, canViewerAccessReelItem]);
+
+  const computeReelEngagementScore = React.useCallback((r: ReelHighlight): number => {
+    const views = r.viewsCount ?? 0;
+    return (
+      (r.likesCount || 0) * 2 +
+      (r.commentsCount || 0) * 3 +
+      (r.sharesCount || 0) * 4 +
+      (r.savesCount || 0) * 3 +
+      views * 0.15
+    );
+  }, []);
 
   const displayedReels = React.useMemo(() => {
     let list = baseReels;
     if (feedFilter === 'following') {
       list = list.filter((r) => getReelFollowStatus(r) === 'following');
+    } else if (feedFilter === 'trending') {
+      list = [...list].sort((a, b) => {
+        const diff = computeReelEngagementScore(b) - computeReelEngagementScore(a);
+        if (diff !== 0) return diff;
+        const ta = a.createdAtIso ? Date.parse(a.createdAtIso) || 0 : 0;
+        const tb = b.createdAtIso ? Date.parse(b.createdAtIso) || 0 : 0;
+        return tb - ta;
+      });
+    } else if (feedFilter === 'discover') {
+      list = [...list].sort((a, b) => {
+        const ta = a.createdAtIso ? Date.parse(a.createdAtIso) || 0 : 0;
+        const tb = b.createdAtIso ? Date.parse(b.createdAtIso) || 0 : 0;
+        return tb - ta;
+      });
     }
     const q = searchQuery.trim().toLowerCase();
     if (q) {
@@ -198,13 +285,37 @@ export const ReelsFeedView: React.FC<ReelsFeedViewProps> = ({
         (r) =>
           r.title?.toLowerCase().includes(q) ||
           r.caption?.toLowerCase().includes(q) ||
+          r.series?.seriesTitle?.toLowerCase().includes(q) ||
           r.author?.name?.toLowerCase().includes(q) ||
           r.author?.username?.toLowerCase().includes(q) ||
           r.musicTrack?.toLowerCase().includes(q)
       );
     }
     return list;
-  }, [baseReels, feedFilter, followedAuthorIds, pendingRequestIds, searchQuery]);
+  }, [baseReels, feedFilter, followedAuthorIds, pendingRequestIds, searchQuery, computeReelEngagementScore]);
+
+  // Real registered creators suggested for Follow when Following feed is empty (zero fake/seeded creators)
+  const realCreatorSuggestions = React.useMemo(() => {
+    const byCreatorId = new Map<string, ReelHighlight['author']>();
+    const addCandidate = (author: ReelHighlight['author'] | undefined, sourceId?: string) => {
+      if (!author?.id || !author.name) return;
+      if (isContentOwner(author, userProfile, authUser, undefined, sourceId)) return;
+      const aid = author.id.toLowerCase();
+      const uname = (author.username || '').toLowerCase();
+      const isAlreadyFollowed =
+        followedAuthorIds.some((id) => id.toLowerCase() === aid || (uname && id.toLowerCase() === uname)) ||
+        (!isSupabaseConfigured() && (isUserFollowed(author.id) || isUserFollowed(author.username)));
+      const isPending =
+        pendingRequestIds.some((id) => id.toLowerCase() === aid) || isFollowRequestPending(author.id);
+      if (isAlreadyFollowed || isPending) return;
+      if (!byCreatorId.has(author.id)) {
+        byCreatorId.set(author.id, author);
+      }
+    };
+    baseReels.forEach((r) => addCandidate(r.author, r.id));
+    allPosts.forEach((p) => addCandidate(p.author, p.id));
+    return Array.from(byCreatorId.values()).slice(0, 4);
+  }, [baseReels, allPosts, userProfile, authUser, followedAuthorIds, pendingRequestIds]);
 
   const [activeSharePayload, setActiveSharePayload] = useState<SharePayload | null>(null);
   const [isShareModalOpen, setIsShareModalOpen] = useState(false);
@@ -269,8 +380,8 @@ export const ReelsFeedView: React.FC<ReelsFeedViewProps> = ({
     );
     if (ids.length === 0) return;
     let active = true;
-    fetchProfilesPrivacyBatch(ids).then(({ privacyMap, error }) => {
-      if (!error && active && privacyMap.size > 0) {
+    fetchProfilesPrivacyBatch(ids).then((privacyMap) => {
+      if (active && privacyMap && privacyMap.size > 0) {
         setProfilesPrivacyMap(privacyMap);
       }
     });
@@ -281,11 +392,55 @@ export const ReelsFeedView: React.FC<ReelsFeedViewProps> = ({
 
   // Reels Audio Mute / Unmute State & Direct Video Element DOM synchronization
   const [isMuted, setIsMuted] = useState<boolean>(false);
+  const [playingAudioReelId, setPlayingAudioReelId] = useState<string | null>(null);
   const [activeVisibleReelId, setActiveVisibleReelId] = useState<string | null>(
-    () => targetReelId || directSelectedReel?.id || reels[0]?.id || null
+    () => targetReelId || initialActiveReelId || directSelectedReel?.id || reels[0]?.id || null
   );
   const scrollContainerRef = useRef<HTMLDivElement | null>(null);
   const videoRefs = useRef<{ [id: string]: HTMLVideoElement | null }>({});
+
+  const activeVisibleReel = React.useMemo(
+    () => displayedReels.find((r) => r.id === activeVisibleReelId) || null,
+    [displayedReels, activeVisibleReelId]
+  );
+
+  // Sync active HTML5 video element for genuine readiness / buffering / slow-load / offline recovery
+  useEffect(() => {
+    if (!activeVisibleReelId) {
+      setActiveVideoElement(null);
+      return;
+    }
+    setActiveVideoElement(videoRefs.current[activeVisibleReelId] || null);
+    onActiveReelChange?.(activeVisibleReelId);
+  }, [activeVisibleReelId, displayedReels, onActiveReelChange]);
+
+  const handleReadinessPositionSample = React.useCallback(
+    (pos: number, dur?: number) => {
+      if (!activeVisibleReel) return;
+      recordVideoWatchProgress({
+        videoId: activeVisibleReel.id,
+        creatorId: activeVisibleReel.author?.id || '',
+        seriesId: activeVisibleReel.series?.seriesId,
+        partNumber: activeVisibleReel.series?.partNumber,
+        positionSeconds: pos,
+        durationSeconds: dur,
+      });
+    },
+    [activeVisibleReel]
+  );
+
+  const {
+    snapshot: readinessSnapshot,
+    retry: retryActiveVideo,
+    cancelLoading: cancelActiveVideoLoading,
+  } = useVideoReadiness({
+    videoEl: activeVideoElement,
+    reelId: activeVisibleReel?.id || '',
+    seriesId: activeVisibleReel?.series?.seriesId,
+    partNumber: activeVisibleReel?.series?.partNumber,
+    isActive: Boolean(activeVisibleReel),
+    onPositionSample: handleReadinessPositionSample,
+  });
 
   // Stable ref map for AdvancedVideoControls integration
   const reelVideoRefs = useRef<Map<string, { current: HTMLVideoElement | null }>>(new Map());
@@ -308,10 +463,35 @@ export const ReelsFeedView: React.FC<ReelsFeedViewProps> = ({
       setActiveVisibleReelId(targetReelId);
       return;
     }
+    if (initialActiveReelId && displayedReels.some((r) => r.id === initialActiveReelId) && !activeVisibleReelId) {
+      setActiveVisibleReelId(initialActiveReelId);
+      const targetEl = document.getElementById(`reel-${initialActiveReelId}`);
+      if (targetEl) targetEl.scrollIntoView({ behavior: 'auto', block: 'start' });
+      return;
+    }
     if (!activeVisibleReelId || !displayedReels.some((r) => r.id === activeVisibleReelId)) {
       setActiveVisibleReelId(displayedReels[0].id);
     }
-  }, [displayedReels, targetReelId, activeVisibleReelId]);
+  }, [displayedReels, targetReelId, initialActiveReelId, activeVisibleReelId]);
+
+  const navigateToSeriesReel = React.useCallback(
+    (targetPart: ReelHighlight) => {
+      if (!targetPart?.id) return;
+      if (searchQuery.trim()) setSearchQuery('');
+      if (feedFilter === 'following' && !displayedReels.some((r) => r.id === targetPart.id)) {
+        setFeedFilter('forYou');
+      }
+      setActiveVisibleReelId(targetPart.id);
+      setActiveSeriesDrawerCtx(null);
+      window.setTimeout(() => {
+        const el = document.getElementById(`reel-${targetPart.id}`);
+        if (el) {
+          el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        }
+      }, 40);
+    },
+    [searchQuery, feedFilter, displayedReels, setFeedFilter]
+  );
 
   // Track currently visible snapped Reel via IntersectionObserver
   useEffect(() => {
@@ -378,7 +558,46 @@ export const ReelsFeedView: React.FC<ReelsFeedViewProps> = ({
         } catch {}
       }
     });
-    }, [isMuted, displayedReels, activeVisibleReelId]);
+  }, [isMuted, displayedReels, activeVisibleReelId]);
+
+  // Synchronize Music action playback animation strictly with real HTML5 video/audio playback state
+  useEffect(() => {
+    if (!activeVisibleReelId) {
+      setPlayingAudioReelId(null);
+      return;
+    }
+    const el = videoRefs.current[activeVisibleReelId];
+    if (!el) {
+      setPlayingAudioReelId(null);
+      return;
+    }
+
+    const syncMusicPlaybackState = () => {
+      setPlayingAudioReelId(
+        isReelAudioActivelyPlaying(el, isMuted) ? activeVisibleReelId : null
+      );
+    };
+
+    syncMusicPlaybackState();
+
+    const events: (keyof HTMLMediaElementEventMap)[] = [
+      'play',
+      'playing',
+      'pause',
+      'ended',
+      'waiting',
+      'stalled',
+      'emptied',
+      'error',
+      'canplay',
+      'volumechange',
+    ];
+    events.forEach((evt) => el.addEventListener(evt, syncMusicPlaybackState));
+
+    return () => {
+      events.forEach((evt) => el.removeEventListener(evt, syncMusicPlaybackState));
+    };
+  }, [activeVisibleReelId, isMuted, displayedReels]);
 
   // Emit genuine Reel impression & attach VideoPlaybackSessionTracker to active reel video element
   useEffect(() => {
@@ -816,13 +1035,16 @@ export const ReelsFeedView: React.FC<ReelsFeedViewProps> = ({
             </button>
           </div>
 
-          {/* Center: Following / For You / Community */}
-          <div className="flex items-center justify-center gap-3 sm:gap-4 min-w-0">
+          {/* Center: Following / For You / Discover / Trending */}
+          <div
+            data-testid="reels-top-tabs-bar"
+            className="flex items-center justify-center gap-2.5 sm:gap-3.5 min-w-0 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+          >
             <button
               type="button"
               data-testid="reels-tab-following"
               onClick={() => setFeedFilter('following')}
-              className={`relative py-1 text-xs sm:text-sm font-bold transition cursor-pointer whitespace-nowrap ${
+              className={`relative py-1 text-xs sm:text-sm font-bold transition cursor-pointer whitespace-nowrap shrink-0 ${
                 feedFilter === 'following' ? 'text-white' : 'text-white/65 hover:text-white/90'
               }`}
             >
@@ -836,7 +1058,7 @@ export const ReelsFeedView: React.FC<ReelsFeedViewProps> = ({
               type="button"
               data-testid="reels-tab-foryou"
               onClick={() => setFeedFilter('forYou')}
-              className={`relative py-1 text-xs sm:text-sm font-bold transition cursor-pointer whitespace-nowrap ${
+              className={`relative py-1 text-xs sm:text-sm font-bold transition cursor-pointer whitespace-nowrap shrink-0 ${
                 feedFilter === 'forYou' ? 'text-white' : 'text-white/65 hover:text-white/90'
               }`}
             >
@@ -848,11 +1070,30 @@ export const ReelsFeedView: React.FC<ReelsFeedViewProps> = ({
 
             <button
               type="button"
-              data-testid="reels-tab-community"
-              onClick={() => handleExitReelsTo('feed')}
-              className="py-1 text-xs sm:text-sm font-bold text-white/65 hover:text-white transition cursor-pointer whitespace-nowrap"
+              data-testid="reels-tab-discover"
+              onClick={() => setFeedFilter('discover')}
+              className={`relative py-1 text-xs sm:text-sm font-bold transition cursor-pointer whitespace-nowrap shrink-0 ${
+                feedFilter === 'discover' ? 'text-white' : 'text-white/65 hover:text-white/90'
+              }`}
             >
-              Community
+              <span>Discover</span>
+              {feedFilter === 'discover' && (
+                <span className="absolute bottom-0 left-1/2 -translate-x-1/2 w-5 h-0.5 bg-teal-400 rounded-full" />
+              )}
+            </button>
+
+            <button
+              type="button"
+              data-testid="reels-tab-trending"
+              onClick={() => setFeedFilter('trending')}
+              className={`relative py-1 text-xs sm:text-sm font-bold transition cursor-pointer whitespace-nowrap shrink-0 ${
+                feedFilter === 'trending' ? 'text-white' : 'text-white/65 hover:text-white/90'
+              }`}
+            >
+              <span>Trending</span>
+              {feedFilter === 'trending' && (
+                <span className="absolute bottom-0 left-1/2 -translate-x-1/2 w-5 h-0.5 bg-teal-400 rounded-full" />
+              )}
             </button>
           </div>
 
@@ -895,7 +1136,7 @@ export const ReelsFeedView: React.FC<ReelsFeedViewProps> = ({
               data-testid="reels-search-input"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder="Search reels by title, creator, caption, or music..."
+              placeholder="Search reels by title, series, creator, caption, or music..."
               className="w-full bg-transparent text-xs text-white placeholder-white/50 focus:outline-none"
               autoFocus
             />
@@ -934,57 +1175,139 @@ export const ReelsFeedView: React.FC<ReelsFeedViewProps> = ({
               <Loader2 className="w-7 h-7 animate-spin text-purple-400" />
             </div>
             <div className="space-y-1">
-              <h3 className="text-sm font-bold text-white">Loading Community Reels...</h3>
-              <p className="text-xs text-slate-400">Fetching latest creations from cloud storage</p>
+              <h3 className="text-sm font-bold text-white">Loading Reels...</h3>
+              <p className="text-xs text-slate-400">Preparing video feed</p>
             </div>
           </div>
         ) : displayedReels.length === 0 ? (
-          <div className="w-full h-full flex flex-col items-center justify-center px-6 text-center space-y-4 bg-black animate-fadeIn">
-            <div className="w-16 h-16 rounded-full bg-purple-950/60 text-purple-400 border border-purple-800/50 flex items-center justify-center">
-              <Film className="w-8 h-8 text-purple-400" />
+          <div className="w-full h-full flex flex-col items-center justify-center px-5 text-center space-y-4 bg-black animate-fadeIn overflow-y-auto py-16">
+            <div className="w-14 h-14 rounded-full bg-purple-950/60 text-purple-400 border border-purple-800/50 flex items-center justify-center shrink-0">
+              {feedFilter === 'following' ? (
+                <Users className="w-7 h-7 text-teal-400" />
+              ) : (
+                <Film className="w-7 h-7 text-purple-400" />
+              )}
             </div>
-            <div className="space-y-1 max-w-xs">
+            <div className="space-y-1.5 max-w-sm">
               <h3 className="text-base font-bold text-white">
                 {searchQuery.trim()
                   ? `No reels match "${searchQuery.trim()}"`
                   : feedFilter === 'following'
-                    ? 'No reels from followed creators yet'
+                    ? followedAuthorIds.length === 0
+                      ? "You're not following anyone yet"
+                      : 'No Reels from followed creators yet'
                     : 'No Reels yet'}
               </h3>
-              <p className="text-xs text-slate-400">
+              <p className="text-xs text-slate-400 leading-relaxed">
                 {searchQuery.trim()
                   ? 'Try another keyword or clear your search filter.'
                   : feedFilter === 'following'
-                    ? 'Follow creators in For You to see their latest Reels here.'
-                    : 'Be the first creator to share a 90-second AI reel with the METFA Social community!'}
+                    ? followedAuthorIds.length === 0
+                      ? 'Follow registered creators to see their published Reels and video episodes here.'
+                      : 'None of the creators you currently follow have published a Reel yet.'
+                    : 'Share your first video or Reel to build the community catalog.'}
               </p>
             </div>
-            {searchQuery.trim() ? (
-              <button
-                type="button"
-                onClick={() => setSearchQuery('')}
-                className="px-5 py-2.5 bg-white/15 hover:bg-white/25 text-white text-xs font-bold rounded-xl transition cursor-pointer"
-              >
-                Clear Search
-              </button>
-            ) : feedFilter === 'following' ? (
-              <button
-                type="button"
-                onClick={() => setFeedFilter('forYou')}
-                className="px-5 py-2.5 bg-gradient-to-r from-purple-600 to-teal-500 text-white text-xs font-bold rounded-xl transition cursor-pointer"
-              >
-                Explore For You
-              </button>
-            ) : (
-              <button
-                type="button"
-                onClick={onCreateReelClick}
-                className="px-5 py-2.5 bg-gradient-to-r from-purple-600 to-teal-500 hover:from-purple-500 hover:to-teal-400 text-white text-xs font-bold rounded-xl shadow-md transition transform active:scale-95 cursor-pointer inline-flex items-center gap-2"
-              >
-                <Plus className="w-4 h-4" />
-                <span>Create First Reel</span>
-              </button>
+
+            {/* Real Registered Creator Suggestions (Strictly from accessible real creators, never fake/seeded) */}
+            {feedFilter === 'following' && !searchQuery.trim() && realCreatorSuggestions.length > 0 && (
+              <div className="w-full max-w-sm bg-white/5 border border-white/10 rounded-2xl p-3 space-y-2 text-left">
+                <p className="text-[11px] font-bold text-slate-300 uppercase tracking-wider">
+                  Creators on METFA Social
+                </p>
+                <div className="space-y-2">
+                  {realCreatorSuggestions.map((creator) => (
+                    <div
+                      key={creator.id}
+                      className="flex items-center justify-between gap-2 bg-black/40 border border-white/10 rounded-xl px-2.5 py-2"
+                    >
+                      <button
+                        type="button"
+                        onClick={() => handleCreatorProfileClick(creator.id)}
+                        className="flex items-center gap-2 min-w-0 text-left cursor-pointer"
+                      >
+                        <img
+                          src={creator.avatar || undefined}
+                          alt={creator.name}
+                          className="w-8 h-8 rounded-full object-cover border border-white/20 shrink-0"
+                        />
+                        <div className="min-w-0">
+                          <div className="text-xs font-bold text-white truncate">{creator.name}</div>
+                          {creator.username && (
+                            <div className="text-[10px] text-slate-400 font-mono truncate">
+                              @{creator.username.replace(/^@/, '')}
+                            </div>
+                          )}
+                        </div>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleFollowToggle(creator)}
+                        className="px-2.5 py-1 rounded-lg bg-teal-500 hover:bg-teal-400 text-slate-950 text-[11px] font-bold shrink-0 cursor-pointer flex items-center gap-1"
+                      >
+                        <UserPlus className="w-3 h-3" />
+                        <span>Follow</span>
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              </div>
             )}
+
+            <div className="flex flex-wrap items-center justify-center gap-2">
+              {searchQuery.trim() ? (
+                <button
+                  type="button"
+                  onClick={() => setSearchQuery('')}
+                  className="px-4 py-2 bg-white/15 hover:bg-white/25 text-white text-xs font-bold rounded-xl transition cursor-pointer"
+                >
+                  Clear Search
+                </button>
+              ) : feedFilter === 'following' ? (
+                <>
+                  <button
+                    type="button"
+                    onClick={() => setFeedFilter('forYou')}
+                    className="px-4 py-2 bg-gradient-to-r from-purple-600 to-teal-500 text-white text-xs font-bold rounded-xl transition cursor-pointer"
+                  >
+                    Explore For You
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setFeedFilter('discover')}
+                    className="px-4 py-2 bg-white/10 hover:bg-white/20 text-white text-xs font-bold rounded-xl transition cursor-pointer flex items-center gap-1"
+                  >
+                    <Compass className="w-3.5 h-3.5" />
+                    <span>Discover</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleExitReelsTo('feed')}
+                    className="px-4 py-2 bg-white/10 hover:bg-white/20 text-white text-xs font-bold rounded-xl transition cursor-pointer"
+                  >
+                    Community Feed
+                  </button>
+                </>
+              ) : (
+                <>
+                  <button
+                    type="button"
+                    onClick={onCreateReelClick}
+                    className="px-5 py-2.5 bg-gradient-to-r from-purple-600 to-teal-500 hover:from-purple-500 hover:to-teal-400 text-white text-xs font-bold rounded-xl shadow-md transition transform active:scale-95 cursor-pointer inline-flex items-center gap-2"
+                  >
+                    <Plus className="w-4 h-4" />
+                    <span>Create Reel</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleExitReelsTo('feed')}
+                    className="px-4 py-2.5 bg-white/10 hover:bg-white/20 text-white text-xs font-bold rounded-xl transition cursor-pointer"
+                  >
+                    Community Feed
+                  </button>
+                </>
+              )}
+            </div>
           </div>
         ) : (
           displayedReels.map((reel, idx) => {
@@ -997,6 +1320,11 @@ export const ReelsFeedView: React.FC<ReelsFeedViewProps> = ({
               visibility: reel.visibility,
               authorProfilePrivacy: authorPrivacy,
             });
+
+            const seriesCtx = resolveSeriesNavigationContext(reel, baseReels, canViewerAccessReelItem);
+            const isActiveSlide = reel.id === activeVisibleReelId;
+            const isMusicPlayingForReel = isActiveSlide && playingAudioReelId === reel.id && !isMuted;
+            const showReadinessOverlay = isActiveSlide && readinessSnapshot.context.reelId === reel.id;
 
             return (
               <div
@@ -1025,6 +1353,108 @@ export const ReelsFeedView: React.FC<ReelsFeedViewProps> = ({
 
                 {/* Edge-legibility dark gradients (never blocks touch) */}
                 <div className="absolute inset-0 bg-gradient-to-b from-black/45 via-transparent to-black/75 pointer-events-none" />
+
+                {/* Genuine Video Readiness, Slow-Load Warning & Offline/Error Recovery Overlay */}
+                {showReadinessOverlay &&
+                  (readinessSnapshot.phase === 'loading_metadata' ||
+                    (readinessSnapshot.phase === 'buffering' && !readinessSnapshot.isPlayable)) && (
+                    <div
+                      data-testid={`reel-loading-indicator-${reel.id}`}
+                      className="absolute inset-0 z-20 flex items-center justify-center pointer-events-none"
+                    >
+                      <div className="px-3.5 py-2 rounded-full bg-black/65 backdrop-blur-md border border-white/15 flex items-center gap-2 text-xs text-white/90">
+                        <Loader2 className="w-4 h-4 animate-spin text-teal-400" />
+                        <span>Loading video...</span>
+                      </div>
+                    </div>
+                  )}
+
+                {showReadinessOverlay && readinessSnapshot.phase === 'slow' && (
+                  <div
+                    data-testid={`reel-slow-load-banner-${reel.id}`}
+                    className="absolute inset-x-4 top-1/2 -translate-y-1/2 z-30 flex justify-center pointer-events-none"
+                  >
+                    <div className="pointer-events-auto max-w-xs w-full bg-black/85 backdrop-blur-md border border-amber-500/40 rounded-2xl p-4 text-center space-y-3 shadow-2xl">
+                      <div className="flex items-center justify-center gap-2 text-amber-300 text-xs font-bold">
+                        <Loader2 className="w-4 h-4 animate-spin" />
+                        <span>Your video is taking longer to load</span>
+                      </div>
+                      <p className="text-[11px] text-slate-300">
+                        {readinessSnapshot.context.seriesId
+                          ? `Preserved position at ${Math.floor(readinessSnapshot.context.lastPositionSeconds)}s (Part ${readinessSnapshot.context.partNumber || 1}).`
+                          : 'Connection is slow. You can retry or return to the feed.'}
+                      </p>
+                      <div className="flex items-center justify-center gap-2">
+                        <button
+                          type="button"
+                          onClick={retryActiveVideo}
+                          className="px-3.5 py-1.5 rounded-xl bg-teal-500 hover:bg-teal-400 text-slate-950 text-xs font-bold flex items-center gap-1 cursor-pointer"
+                        >
+                          <RotateCcw className="w-3.5 h-3.5" />
+                          <span>Retry</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            cancelActiveVideoLoading();
+                            handleExitReelsTo('feed');
+                          }}
+                          className="px-3.5 py-1.5 rounded-xl bg-white/15 hover:bg-white/25 text-white text-xs font-bold cursor-pointer"
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {showReadinessOverlay &&
+                  (readinessSnapshot.phase === 'offline' || readinessSnapshot.phase === 'error') && (
+                    <div
+                      data-testid={`reel-recovery-overlay-${reel.id}`}
+                      className="absolute inset-0 z-30 bg-black/75 backdrop-blur-xs flex items-center justify-center px-6"
+                    >
+                      <div className="max-w-xs w-full bg-gray-950 border border-white/15 rounded-2xl p-4 text-center space-y-3 shadow-2xl">
+                        <div className="w-10 h-10 rounded-full bg-rose-500/20 text-rose-300 border border-rose-500/30 flex items-center justify-center mx-auto">
+                          {readinessSnapshot.phase === 'offline' ? (
+                            <WifiOff className="w-5 h-5" />
+                          ) : (
+                            <AlertCircle className="w-5 h-5" />
+                          )}
+                        </div>
+                        <div className="space-y-1">
+                          <h4 className="text-xs font-bold text-white">
+                            {readinessSnapshot.phase === 'offline'
+                              ? 'Network connection lost'
+                              : 'Video playback error'}
+                          </h4>
+                          <p className="text-[11px] text-slate-400">
+                            {readinessSnapshot.errorMessage || 'Unable to stream video right now.'}
+                            {readinessSnapshot.context.lastPositionSeconds > 0
+                              ? ` Position preserved at ${Math.floor(readinessSnapshot.context.lastPositionSeconds)}s.`
+                              : ''}
+                          </p>
+                        </div>
+                        <div className="flex items-center justify-center gap-2">
+                          <button
+                            type="button"
+                            onClick={retryActiveVideo}
+                            className="px-3.5 py-1.5 rounded-xl bg-teal-500 hover:bg-teal-400 text-slate-950 text-xs font-bold flex items-center gap-1 cursor-pointer"
+                          >
+                            <RotateCcw className="w-3.5 h-3.5" />
+                            <span>Retry</span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleExitReelsTo('feed')}
+                            className="px-3.5 py-1.5 rounded-xl bg-white/15 hover:bg-white/25 text-white text-xs font-bold cursor-pointer"
+                          >
+                            Back
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  )}
 
                 {/* Top Bar (z-30 stays clickable above tap-reveal layer) — Sound & Context Menu cleanly positioned under Global Overlay Nav */}
                 <div className="relative z-30 flex items-center justify-between pt-14 px-3 sm:px-4 text-xs text-white pointer-events-none">
@@ -1230,7 +1660,7 @@ export const ReelsFeedView: React.FC<ReelsFeedViewProps> = ({
                         aria-label={`View ${reel.author.name} profile`}
                       >
                         <img
-                          src={reel.author.avatar}
+                          src={reel.author.avatar || undefined}
                           alt={reel.author.name}
                           loading={idx === 0 ? undefined : 'lazy'}
                           decoding="async"
@@ -1314,6 +1744,66 @@ export const ReelsFeedView: React.FC<ReelsFeedViewProps> = ({
                       </p>
                     )}
 
+                    {/* Explicit Creator-Linked Video Series Controls (Hidden on standalone videos) */}
+                    {seriesCtx && (
+                      <div
+                        data-testid={`reel-series-controls-${reel.id}`}
+                        className="pt-1 flex flex-wrap items-center gap-1.5"
+                      >
+                        <button
+                          type="button"
+                          data-testid={`reel-series-drawer-btn-${reel.id}`}
+                          onClick={() => setActiveSeriesDrawerCtx(seriesCtx)}
+                          className="px-2.5 py-1 rounded-lg bg-purple-600/80 hover:bg-purple-500 text-white text-[11px] font-bold inline-flex items-center gap-1.5 backdrop-blur-xs cursor-pointer transition shadow-sm"
+                        >
+                          <Layers className="w-3 h-3 shrink-0" />
+                          <span className="truncate max-w-[140px]">{seriesCtx.seriesTitle}</span>
+                          <span className="font-mono tabular-nums text-teal-200">
+                            Part {seriesCtx.currentPartNumber}
+                            {seriesCtx.totalDisplayParts && seriesCtx.totalDisplayParts > 1
+                              ? ` of ${seriesCtx.totalDisplayParts}`
+                              : ''}
+                          </span>
+                          <span className="text-white/85 underline underline-offset-2">See More</span>
+                        </button>
+
+                        {seriesCtx.previousPart && (
+                          <button
+                            type="button"
+                            data-testid={`reel-series-prev-btn-${reel.id}`}
+                            onClick={() => navigateToSeriesReel(seriesCtx.previousPart!)}
+                            className="px-2 py-1 rounded-lg bg-black/60 hover:bg-black/80 border border-white/20 text-white text-[11px] font-semibold inline-flex items-center gap-0.5 cursor-pointer transition"
+                          >
+                            <ChevronLeft className="w-3 h-3" />
+                            <span>Prev</span>
+                          </button>
+                        )}
+
+                        {seriesCtx.nextPart && (
+                          <button
+                            type="button"
+                            data-testid={`reel-series-next-btn-${reel.id}`}
+                            onClick={() => navigateToSeriesReel(seriesCtx.nextPart!)}
+                            className="px-2 py-1 rounded-lg bg-teal-500 hover:bg-teal-400 text-slate-950 text-[11px] font-bold inline-flex items-center gap-0.5 cursor-pointer transition"
+                          >
+                            <span>Next Part</span>
+                            <ChevronRight className="w-3 h-3" />
+                          </button>
+                        )}
+
+                        {seriesCtx.firstPart && seriesCtx.currentIndex > 1 && (
+                          <button
+                            type="button"
+                            data-testid={`reel-series-part1-btn-${reel.id}`}
+                            onClick={() => navigateToSeriesReel(seriesCtx.firstPart!)}
+                            className="px-2 py-1 rounded-lg bg-white/15 hover:bg-white/25 text-white text-[11px] font-semibold cursor-pointer transition"
+                          >
+                            Part 1
+                          </button>
+                        )}
+                      </div>
+                    )}
+
                     {/* Decoupled Music Track Action (independent of timeline state; no heavy always-on music strip) */}
                     {reel.musicTrack && (
                       <button
@@ -1353,7 +1843,7 @@ export const ReelsFeedView: React.FC<ReelsFeedViewProps> = ({
                         className="flex items-center gap-1.5 text-[11px] text-white/85 hover:text-teal-300 font-medium transition cursor-pointer max-w-full truncate drop-shadow"
                         title="View soundtrack & use music"
                       >
-                        <Music className="w-3.5 h-3.5 text-teal-400 shrink-0" />
+                        <Music className={`w-3.5 h-3.5 shrink-0 ${isMusicPlayingForReel ? 'text-teal-300' : 'text-teal-400'}`} />
                         <span className="truncate">{reel.musicTrack}</span>
                       </button>
                     )}
@@ -1454,10 +1944,11 @@ export const ReelsFeedView: React.FC<ReelsFeedViewProps> = ({
                       </span>
                     </button>
 
-                    {/* Separate Compact Music Action (always accessible without a permanent strip/player) */}
+                    {/* Separate Compact Music Action (always accessible; animates strictly while audio is playing unmuted) */}
                     <button
                       type="button"
                       data-testid={`reel-music-action-btn-${reel.id}`}
+                      data-music-playing={isMusicPlayingForReel ? 'true' : 'false'}
                       onClick={() => {
                         const trackString = reel.musicTrack || 'Original Sound';
                         const allTracks = getAudioTracks();
@@ -1490,11 +1981,36 @@ export const ReelsFeedView: React.FC<ReelsFeedViewProps> = ({
                         );
                       }}
                       className="flex flex-col items-center gap-0.5 text-white group cursor-pointer"
-                      title="Inspect or use this Reel's music"
+                      title={
+                        isMusicPlayingForReel
+                          ? 'Playing soundtrack — tap to inspect or use music'
+                          : "Inspect or use this Reel's music"
+                      }
                       aria-label="Inspect or use music"
                     >
-                      <div className="w-10 h-10 rounded-full bg-black/50 group-hover:bg-teal-600/80 border border-white/20 backdrop-blur-md flex items-center justify-center transition group-hover:scale-105 active:scale-90">
-                        <Music className="w-4 h-4 text-teal-300 group-hover:text-white" />
+                      <div
+                        className={`w-10 h-10 rounded-full backdrop-blur-md flex items-center justify-center transition group-hover:scale-105 active:scale-90 border ${
+                          isMusicPlayingForReel
+                            ? 'bg-teal-950/75 border-teal-400/70 metfa-music-playing-ring'
+                            : 'bg-black/50 group-hover:bg-teal-600/80 border-white/20'
+                        }`}
+                      >
+                        {isMusicPlayingForReel ? (
+                          <div
+                            data-testid={`reel-music-eq-${reel.id}`}
+                            className="flex items-center justify-center gap-0.5"
+                            aria-hidden="true"
+                          >
+                            <Music className="w-3.5 h-3.5 text-teal-300 group-hover:text-white shrink-0" />
+                            <span className="flex items-end gap-[1.5px] h-2.5 shrink-0">
+                              <span className="w-[2px] h-full rounded-full bg-teal-300 metfa-eq-bar-1" />
+                              <span className="w-[2px] h-full rounded-full bg-teal-200 metfa-eq-bar-2" />
+                              <span className="w-[2px] h-full rounded-full bg-teal-300 metfa-eq-bar-3" />
+                            </span>
+                          </div>
+                        ) : (
+                          <Music className="w-4 h-4 text-teal-300 group-hover:text-white" />
+                        )}
                       </div>
                     </button>
                   </div>
@@ -1547,7 +2063,7 @@ export const ReelsFeedView: React.FC<ReelsFeedViewProps> = ({
                 reelComments.map((comment) => (
                   <div key={comment.id} className="flex items-start gap-2.5">
                     <img
-                      src={comment.author.avatar}
+                      src={comment.author.avatar || undefined}
                       alt={comment.author.name}
                       className="w-7 h-7 rounded-full object-cover border border-white/15 shrink-0"
                     />
@@ -1792,6 +2308,89 @@ export const ReelsFeedView: React.FC<ReelsFeedViewProps> = ({
             caption: inspectingDetailsReel.caption || inspectingDetailsReel.title,
           }}
         />
+      )}
+
+      {/* Series Parts Bottom Sheet Drawer (Accessible Parts Only) */}
+      {activeSeriesDrawerCtx && (
+        <div
+          data-testid="reels-series-drawer"
+          onClick={() => setActiveSeriesDrawerCtx(null)}
+          className="fixed inset-0 z-50 bg-black/65 backdrop-blur-xs flex items-end justify-center animate-fadeIn"
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="w-full max-w-lg max-h-[75dvh] bg-gray-950 border-t border-white/15 rounded-t-3xl flex flex-col overflow-hidden shadow-2xl"
+          >
+            <div className="px-4 py-3.5 border-b border-white/10 flex items-center justify-between gap-3 shrink-0">
+              <div className="min-w-0">
+                <div className="flex items-center gap-1.5 text-xs font-bold text-white">
+                  <ListVideo className="w-4 h-4 text-teal-400 shrink-0" />
+                  <span className="truncate">{activeSeriesDrawerCtx.seriesTitle}</span>
+                </div>
+                {activeSeriesDrawerCtx.seriesDescription && (
+                  <p className="text-[11px] text-slate-400 truncate mt-0.5">
+                    {activeSeriesDrawerCtx.seriesDescription}
+                  </p>
+                )}
+              </div>
+              <button
+                type="button"
+                onClick={() => setActiveSeriesDrawerCtx(null)}
+                className="p-1.5 rounded-full text-white/60 hover:text-white hover:bg-white/10 cursor-pointer shrink-0"
+                aria-label="Close series drawer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="flex-1 overflow-y-auto p-3 space-y-2">
+              {activeSeriesDrawerCtx.accessibleParts.map((part) => {
+                const isCurrent = part.id === activeVisibleReelId;
+                const pNum = part.series?.partNumber || 1;
+                return (
+                  <button
+                    key={part.id}
+                    type="button"
+                    data-testid={`series-drawer-part-${part.id}`}
+                    onClick={() => navigateToSeriesReel(part)}
+                    className={`w-full p-2.5 rounded-2xl border flex items-center gap-3 text-left transition cursor-pointer ${
+                      isCurrent
+                        ? 'bg-purple-900/50 border-teal-400/60'
+                        : 'bg-white/5 hover:bg-white/10 border-white/10'
+                    }`}
+                  >
+                    <div className="relative w-16 h-11 rounded-xl overflow-hidden bg-black shrink-0 border border-white/15 flex items-center justify-center">
+                      {part.thumbnailSrc ? (
+                        <img
+                          src={part.thumbnailSrc}
+                          alt={part.title}
+                          loading="lazy"
+                          className="w-full h-full object-cover"
+                        />
+                      ) : (
+                        <Play className="w-4 h-4 text-white/70" />
+                      )}
+                      <span className="absolute bottom-0.5 right-0.5 px-1 rounded bg-black/80 text-[9px] font-mono text-white tabular-nums">
+                        {part.duration}s
+                      </span>
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-1.5">
+                        <span className="px-1.5 py-0.5 rounded bg-teal-500/20 text-teal-300 text-[10px] font-bold font-mono tabular-nums shrink-0">
+                          Part {pNum}
+                        </span>
+                        {isCurrent && (
+                          <span className="text-[10px] font-bold text-purple-300">Playing</span>
+                        )}
+                      </div>
+                      <h4 className="text-xs font-bold text-white truncate mt-0.5">{part.title}</h4>
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        </div>
       )}
 
       {/* Floating Action Toast Notification */}

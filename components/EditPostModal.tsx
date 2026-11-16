@@ -1,7 +1,10 @@
 import React, { useState, useEffect } from 'react';
-import { X, Check, Hash, Sparkles, Image as ImageIcon, Video, Type, Palette, Maximize2, Minimize2, Globe, Users, Lock, ShieldCheck, AlertCircle } from 'lucide-react';
-import { CommunityPost, PostAudience } from '../types/community';
+import { X, Check, Hash, Sparkles, Image as ImageIcon, Video, Type, Palette, Maximize2, Minimize2, Globe, Users, Lock, ShieldCheck, AlertCircle, Layers } from 'lucide-react';
+import { CommunityPost, PostAudience, VideoSeriesMeta } from '../types/community';
 import { isLegacyUnspecifiedAudience, normalizeAudience } from '../utils/privacyPolicy';
+import { invalidatePostTranslations } from '../utils/translationCache';
+import { createCreatorVideoSeries, fetchCreatorVideoSeries } from '../services/seriesService';
+import type { VideoSeriesDefinition } from '../utils/videoSeries';
 
 interface EditPostModalProps {
   isOpen: boolean;
@@ -34,6 +37,16 @@ export const EditPostModal: React.FC<EditPostModalProps> = ({
   const [visibility, setVisibility] = useState<PostAudience | null>(() => normalizeAudience(post?.visibility));
   const [isFullscreen, setIsFullscreen] = useState(true);
 
+  // Safe Text Series metadata editing (only for text posts, preserves earlier parts cleanly)
+  const [isTextSeriesEnabled, setIsTextSeriesEnabled] = useState(false);
+  const [creatorTextSeries, setCreatorTextSeries] = useState<VideoSeriesDefinition[]>([]);
+  const [seriesId, setSeriesId] = useState('');
+  const [seriesTitle, setSeriesTitle] = useState('');
+  const [seriesDescription, setSeriesDescription] = useState('');
+  const [seriesPartNumber, setSeriesPartNumber] = useState<number>(1);
+  const [seriesTotalParts, setSeriesTotalParts] = useState<string>('');
+  const [seriesIsOngoing, setSeriesIsOngoing] = useState<boolean>(false);
+
   useEffect(() => {
     if (post) {
       setCaption(post.caption || '');
@@ -42,6 +55,21 @@ export const EditPostModal: React.FC<EditPostModalProps> = ({
       setTextBackgroundPreset(post.textBackgroundPreset);
       setStylePreset(post.stylePreset);
       setVisibility(normalizeAudience(post.visibility));
+
+      const hasTextSeries = Boolean(post.series?.seriesId && !post.videoSrc);
+      setIsTextSeriesEnabled(hasTextSeries);
+      setSeriesId(post.series?.seriesId || '');
+      setSeriesTitle(post.series?.seriesTitle || '');
+      setSeriesDescription(post.series?.seriesDescription || '');
+      setSeriesPartNumber(post.series?.partNumber || 1);
+      setSeriesTotalParts(post.series?.totalParts ? String(post.series.totalParts) : '');
+      setSeriesIsOngoing(Boolean(post.series?.isOngoing));
+
+      if (!post.videoSrc && post.author?.id) {
+        fetchCreatorVideoSeries(post.author.id, 'text').then((list) => {
+          setCreatorTextSeries(list);
+        });
+      }
     }
   }, [post]);
 
@@ -70,14 +98,67 @@ export const EditPostModal: React.FC<EditPostModalProps> = ({
 
   const wasLegacyUnset = isLegacyUnspecifiedAudience(post.visibility);
 
-  const handleSave = () => {
+  const handleSave = async () => {
+    const trimmedCaption = caption.trim();
+    const trimmedPrompt = prompt.trim() || trimmedCaption;
+    const textChanged =
+      trimmedCaption !== (post.caption || '').trim() ||
+      trimmedPrompt !== (post.prompt || '').trim();
+    if (textChanged) {
+      invalidatePostTranslations(post.id);
+    }
+
+    let nextSeries: VideoSeriesMeta | undefined = post.series;
+    if (!post.videoSrc) {
+      if (isTextSeriesEnabled && seriesTitle.trim()) {
+        const parsedTotal =
+          !seriesIsOngoing && seriesTotalParts.trim()
+            ? Math.max(1, Math.floor(Number(seriesTotalParts)))
+            : undefined;
+        const normalizedPart = Math.max(1, Math.floor(Number(seriesPartNumber) || 1));
+        let resolvedSeriesId = seriesId.trim();
+
+        if (!resolvedSeriesId && post.author?.id) {
+          const created = await createCreatorVideoSeries({
+            creatorId: post.author.id,
+            title: seriesTitle.trim(),
+            description: seriesDescription.trim() || undefined,
+            totalParts: parsedTotal,
+            visibility: visibility ?? post.visibility ?? 'public',
+            seriesType: 'text',
+            isOngoing: seriesIsOngoing,
+          });
+          resolvedSeriesId = created.seriesId;
+        }
+
+        if (resolvedSeriesId) {
+          nextSeries = {
+            ...(post.series || {}),
+            seriesId: resolvedSeriesId,
+            seriesTitle: seriesTitle.trim(),
+            seriesDescription: seriesDescription.trim() || undefined,
+            creatorId: post.series?.creatorId || post.author.id,
+            partNumber: normalizedPart,
+            totalParts: parsedTotal,
+            visibility: visibility !== null ? visibility : (post.visibility ?? 'public'),
+            isPublished: true,
+            seriesType: 'text',
+            isOngoing: seriesIsOngoing,
+          };
+        }
+      } else if (!isTextSeriesEnabled) {
+        nextSeries = undefined;
+      }
+    }
+
     const updatedPost: CommunityPost = {
       ...post,
-      caption: caption.trim(),
-      prompt: prompt.trim() || caption.trim(),
+      caption: trimmedCaption,
+      prompt: trimmedPrompt,
       tags,
       textBackgroundPreset: textBackgroundPreset === 'none' ? undefined : textBackgroundPreset,
       stylePreset,
+      series: nextSeries,
       // Preserve NULL/unknown legacy value unless the owner explicitly selects an audience
       visibility: visibility !== null ? visibility : (post.visibility ?? null),
     };
@@ -281,6 +362,116 @@ export const EditPostModal: React.FC<EditPostModalProps> = ({
               Full-Screen View • Ample space to read, correct typos, check spellings, and edit comfortably
             </p>
           </div>
+
+          {/* Safe Text Series Metadata Editor (non-video posts only) */}
+          {!post.videoSrc && (
+            <div className="bg-purple-50/50 border border-purple-200 rounded-2xl p-4 space-y-3">
+              <div className="flex items-center justify-between gap-2">
+                <label className="text-xs sm:text-sm font-bold text-purple-950 flex items-center gap-2">
+                  <Layers className="w-4 h-4 text-purple-600" />
+                  <span>Text Series / Serial Story Linkage</span>
+                </label>
+                <button
+                  type="button"
+                  onClick={() => setIsTextSeriesEnabled((prev) => !prev)}
+                  className={`px-3 py-1 rounded-lg text-xs font-bold border transition cursor-pointer ${
+                    isTextSeriesEnabled
+                      ? 'bg-teal-600 text-white border-teal-600'
+                      : 'bg-white text-slate-600 border-slate-200'
+                  }`}
+                >
+                  {isTextSeriesEnabled ? 'Linked to Series' : 'Standalone Post'}
+                </button>
+              </div>
+
+              {isTextSeriesEnabled && (
+                <div className="bg-white border border-purple-200 rounded-xl p-3 space-y-2.5">
+                  {creatorTextSeries.length > 0 && (
+                    <div>
+                      <label className="text-[10px] font-bold text-slate-500 block mb-1">
+                        Select Series (Optional)
+                      </label>
+                      <select
+                        value={seriesId}
+                        onChange={(e) => {
+                          const nextId = e.target.value;
+                          setSeriesId(nextId);
+                          const matched = creatorTextSeries.find((s) => s.seriesId === nextId);
+                          if (matched) {
+                            setSeriesTitle(matched.title);
+                            setSeriesDescription(matched.description || '');
+                            setSeriesIsOngoing(Boolean(matched.isOngoing));
+                          }
+                        }}
+                        className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs text-slate-900 focus:outline-none focus:border-purple-600"
+                      >
+                        <option value="">Create / Custom Series Title below</option>
+                        {creatorTextSeries.map((s) => (
+                          <option key={s.seriesId} value={s.seriesId}>
+                            {s.title}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  )}
+
+                  <input
+                    type="text"
+                    value={seriesTitle}
+                    onChange={(e) => setSeriesTitle(e.target.value)}
+                    placeholder="Text Series Title"
+                    className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs text-slate-900 focus:outline-none focus:border-purple-600"
+                  />
+                  <input
+                    type="text"
+                    value={seriesDescription}
+                    onChange={(e) => setSeriesDescription(e.target.value)}
+                    placeholder="Series description (optional)"
+                    className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs text-slate-900 focus:outline-none focus:border-purple-600"
+                  />
+
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <label className="text-[10px] font-bold text-slate-500 block mb-1">
+                        Part Number
+                      </label>
+                      <input
+                        type="number"
+                        min={1}
+                        value={seriesPartNumber}
+                        onChange={(e) => setSeriesPartNumber(Math.max(1, Number(e.target.value) || 1))}
+                        className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-1.5 text-xs text-slate-900 tabular-nums"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-[10px] font-bold text-slate-500 block mb-1">
+                        Total Planned Parts
+                      </label>
+                      <input
+                        type="number"
+                        min={1}
+                        disabled={seriesIsOngoing}
+                        value={seriesTotalParts}
+                        onChange={(e) => setSeriesTotalParts(e.target.value)}
+                        placeholder={seriesIsOngoing ? 'Ongoing' : 'Optional'}
+                        className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-1.5 text-xs text-slate-900 tabular-nums disabled:opacity-50"
+                      />
+                    </div>
+                  </div>
+
+                  <label className="flex items-center gap-2 text-[11px] font-semibold text-slate-700 cursor-pointer select-none">
+                    <input
+                      type="checkbox"
+                      checked={seriesIsOngoing}
+                      onChange={(e) => setSeriesIsOngoing(e.target.checked)}
+                      className="rounded border-slate-300 text-purple-600 focus:ring-purple-500"
+                    />
+                    <span>Ongoing series ("More parts coming soon")</span>
+                  </label>
+                </div>
+              )}
+            </div>
+          )}
 
           {/* AI Recipe / Prompt (if applicable) */}
           <div className="space-y-1.5">

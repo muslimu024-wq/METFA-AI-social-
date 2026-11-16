@@ -381,7 +381,7 @@ export function App() {
 
     // Global listener to open reels feed
     const handleOpenReelEvent = () => {
-      setActiveTab('reels');
+      handleNavigateTab('reels');
     };
     window.addEventListener('metfa_open_reel', handleOpenReelEvent);
 

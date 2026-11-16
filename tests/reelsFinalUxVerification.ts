@@ -92,7 +92,9 @@ export async function runReelsFinalUxVerification(): Promise<{
 
   // 3. UX-AUTOHIDE-1S
   {
-    const default1000 = controlsCode.includes('delayMs: number = 1000');
+    const default1000 =
+      controlsCode.includes('AUTO_HIDE_DELAY_MS = 1000') &&
+      controlsCode.includes('delayMs: number = AUTO_HIDE_DELAY_MS');
     const keep1000 = controlsCode.includes('keepControlsVisible') && controlsCode.includes('scheduleControlsAutoHide(1000)');
     const no2500 = !controlsCode.includes('2500');
 
@@ -129,9 +131,9 @@ export async function runReelsFinalUxVerification(): Promise<{
   // 5. UX-TIMELINE-CLEAN
   {
     const thinLine = controlsCode.includes('h-0.5 bg-white/30 rounded-full');
-    const cleanReelsTimeBtn = controlsCode.includes(
-      "shouldRenderCenterControls\n                ? 'text-[11px] font-mono flex items-center gap-1 cursor-pointer select-none text-white/90 drop-shadow-sm py-0.5 touch-manipulation'"
-    );
+    const cleanReelsTimeBtn =
+      controlsCode.includes('shouldRenderCenterControls') &&
+      controlsCode.includes('text-[11px] font-mono flex items-center gap-1 select-none text-white/90 drop-shadow-sm py-0.5');
     const noContainerBg = !controlsCode.includes('expandable-timeline-container" className="bg-');
 
     assert(
@@ -196,7 +198,10 @@ export async function runReelsFinalUxVerification(): Promise<{
 
   // 8. DATA-PERSISTENT-ISOLATION
   {
-    const strictEqReel = reelServiceCode.includes(".eq('post_type', 'reel')");
+    const queriesAllVideoPosts =
+      reelServiceCode.includes(".not('video_src', 'is', null)") &&
+      reelServiceCode.includes(".neq('video_src', '')");
+    const filtersDummyReels = reelServiceCode.includes('isRealReel');
     const resolvesAuthors = reelServiceCode.includes('resolveMissingReelAuthors');
     const usesDisplayedLength =
       reelsViewCode.includes('isLoading && displayedReels.length === 0') &&
@@ -204,10 +209,10 @@ export async function runReelsFinalUxVerification(): Promise<{
 
     assert(
       'DATA-PERSISTENT-ISOLATION',
-      'Persistent Reels Catalog Isolation',
-      'fetchPersistentReels queries strictly post_type="reel", resolves missing authors, and ReelsFeedView checks displayedReels.length',
-      strictEqReel && resolvesAuthors && usesDisplayedLength,
-      `strictEqReel=${strictEqReel}, resolvesAuthors=${resolvesAuthors}, usesDisplayedLength=${usesDisplayedLength}`
+      'Canonical Persistent Reels Query',
+      'fetchPersistentReels queries non-empty video_src posts, filters out dummy reels via isRealReel, resolves missing authors, and ReelsFeedView checks displayedReels.length',
+      queriesAllVideoPosts && filtersDummyReels && resolvesAuthors && usesDisplayedLength,
+      `queriesAllVideoPosts=${queriesAllVideoPosts}, filtersDummyReels=${filtersDummyReels}, resolvesAuthors=${resolvesAuthors}, usesDisplayedLength=${usesDisplayedLength}`
     );
   }
 

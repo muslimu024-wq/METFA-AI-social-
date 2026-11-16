@@ -16,6 +16,7 @@ import {
   RawPostVisibility,
   formatAudienceMeta,
 } from '../utils/privacyPolicy';
+import { GUEST_AVATAR, sanitizeAvatarUrl } from '../services/authService';
 
 export interface PostHeaderProps {
   postId: string;
@@ -65,6 +66,7 @@ export const PostHeader: React.FC<PostHeaderProps> = ({
   renderMenuDropdown,
 }) => {
   const audienceMeta = providedMeta || formatAudienceMeta(visibility, authorProfilePrivacy);
+  const safeAvatarSrc = sanitizeAvatarUrl(avatarSrc, displayName) || GUEST_AVATAR;
   const canNavigateProfile = Boolean(authorId && authorId.trim().length > 0);
 
   const handleProfileClick = (e: React.MouseEvent) => {
@@ -103,7 +105,7 @@ export const PostHeader: React.FC<PostHeaderProps> = ({
           aria-label={`View ${displayName}'s profile`}
         >
           <img
-            src={avatarSrc}
+            src={safeAvatarSrc}
             alt={displayName}
             referrerPolicy="no-referrer"
             loading={priority ? undefined : 'lazy'}

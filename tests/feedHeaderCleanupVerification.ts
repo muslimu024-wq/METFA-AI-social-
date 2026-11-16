@@ -149,7 +149,12 @@ async function runSuite() {
 
       // Verify Header -> Caption -> Media order inside card body
       const headerIdx = src.indexOf('<PostHeader');
-      const captionIdx = src.indexOf('text={post.caption}', headerIdx);
+      const captionIdxCandidates = [
+        src.indexOf('text={post.caption}', headerIdx),
+        src.indexOf('text={activeDisplayText}', headerIdx),
+        src.indexOf(': post.caption', headerIdx),
+      ].filter((idx) => idx !== -1);
+      const captionIdx = captionIdxCandidates.length > 0 ? Math.min(...captionIdxCandidates) : -1;
       const mediaIdx = src.indexOf('bg-slate-950 max-h-[520px]', headerIdx);
       assert.ok(headerIdx !== -1 && captionIdx !== -1 && mediaIdx !== -1, `${filePath} markers must exist`);
       assert.ok(headerIdx < captionIdx && captionIdx < mediaIdx, `${filePath} must keep Header -> Caption -> Media order`);

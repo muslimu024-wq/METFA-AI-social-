@@ -143,6 +143,41 @@
       .animate-shimmer-sweep {
         animation: shimmer-sweep 2s infinite linear;
       }
+
+      /* Compact Reels Music Playback Equalizer (strictly gated for prefers-reduced-motion) */
+      @keyframes metfa-eq-pulse {
+        0%, 100% { transform: scaleY(0.35); opacity: 0.78; }
+        50% { transform: scaleY(1); opacity: 1; }
+      }
+      @keyframes metfa-music-glow {
+        0%, 100% { box-shadow: 0 0 0 0 rgba(45, 212, 191, 0.35); }
+        50% { box-shadow: 0 0 0 5px rgba(45, 212, 191, 0); }
+      }
+      @media (prefers-reduced-motion: no-preference) {
+        .metfa-eq-bar-1 {
+          animation: metfa-eq-pulse 0.9s ease-in-out infinite;
+          transform-origin: bottom;
+        }
+        .metfa-eq-bar-2 {
+          animation: metfa-eq-pulse 0.72s ease-in-out 0.18s infinite;
+          transform-origin: bottom;
+        }
+        .metfa-eq-bar-3 {
+          animation: metfa-eq-pulse 0.84s ease-in-out 0.34s infinite;
+          transform-origin: bottom;
+        }
+        .metfa-music-playing-ring {
+          animation: metfa-music-glow 1.8s ease-in-out infinite;
+        }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        .metfa-eq-bar-1,
+        .metfa-eq-bar-2,
+        .metfa-eq-bar-3,
+        .metfa-music-playing-ring {
+          animation: none !important;
+        }
+      }
     </style>
   </head>
   <body class="bg-white text-gray-900 antialiased selection:bg-purple-500 selection:text-white min-h-screen">

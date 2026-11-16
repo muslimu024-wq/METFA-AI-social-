@@ -39,6 +39,7 @@ import {
 import {
   fetchPersistentReels,
   migrateLocalStorageReels,
+  convertCommunityPostToReel,
 } from '../../services/reelService';
 import { DailyCreditsData } from '../../utils/creditManager';
 import { addNotification } from '../../utils/notificationStore';
@@ -98,6 +99,10 @@ export const SocialEcosystemModule: React.FC<SocialEcosystemProps> = ({
     return null;
   });
   const [directSelectedReel, setDirectSelectedReel] = useState<ReelHighlight | null>(null);
+  const [lastActiveReelId, setLastActiveReelId] = useState<string | null>(null);
+  const [lastReelsFeedFilter, setLastReelsFeedFilter] = useState<
+    'following' | 'forYou' | 'discover' | 'trending'
+  >('forYou');
 
   const postsRef = useRef<CommunityPost[]>(posts);
   const reelsRef = useRef<ReelHighlight[]>(reels);
@@ -307,6 +312,7 @@ export const SocialEcosystemModule: React.FC<SocialEcosystemProps> = ({
       if (!reelId) return;
       console.log('[Metfa Nav] features/social handleOpenReel called with:', reelId, 'pos:', videoPayload?.currentTime);
       setTargetReelId(reelId);
+      setLastActiveReelId(reelId);
       if (typeof videoPayload?.currentTime === 'number' && videoPayload.currentTime > 0) {
         setTargetReelInitialTime(videoPayload.currentTime);
       } else {
@@ -336,9 +342,15 @@ export const SocialEcosystemModule: React.FC<SocialEcosystemProps> = ({
       const reelMatch = hash.match(/^#\/?reel[_-]([a-zA-Z0-9_\-]+)/);
       if (reelMatch) {
         const reelId = reelMatch[1];
-        setTargetReelId(reelId);
-        resolveDirectSelectedReel(reelId);
-        onNavigateTab('reels');
+        setTargetReelId((prev) => {
+          if (prev !== reelId) {
+            resolveDirectSelectedReel(reelId);
+          }
+          return reelId;
+        });
+        if (currentTab !== 'reels') {
+          onNavigateTab('reels');
+        }
         return;
       }
 
@@ -348,20 +360,17 @@ export const SocialEcosystemModule: React.FC<SocialEcosystemProps> = ({
         onNavigateTab('feed');
 
         // If post not already in state and Supabase is configured, fetch immediately
-        setPosts((currentPosts) => {
-          const exists = currentPosts.some((p) => matchesPostId(p, postId));
-          if (!exists && isSupabaseConfigured()) {
-            fetchSupabasePostById(postId).then(({ post }) => {
-              if (post) {
-                setPosts((prev) => {
-                  if (prev.some((p) => matchesPostId(p, post.id))) return prev;
-                  return [post, ...prev];
-                });
-              }
-            });
-          }
-          return currentPosts;
-        });
+        const exists = postsRef.current.some((p) => matchesPostId(p, postId));
+        if (!exists && isSupabaseConfigured()) {
+          fetchSupabasePostById(postId).then(({ post }) => {
+            if (post) {
+              setPosts((prev) => {
+                if (prev.some((p) => matchesPostId(p, post.id))) return prev;
+                return [post, ...prev];
+              });
+            }
+          });
+        }
       } else {
         setTargetSharedPostId(null);
       }
@@ -474,6 +483,110 @@ export const SocialEcosystemModule: React.FC<SocialEcosystemProps> = ({
     });
   };
 
+  // Canonical Reels feed combining persistent reels and eligible published video posts (strictly deduplicated by id, zero fake entries)
+  const canonicalReels = useMemo(() => {
+    const byId = new Map<string, ReelHighlight>();
+
+    // Prefer converted feed posts for live post reaction/comment counts when already present, otherwise persistent reels
+    reels.forEach((r) => {
+      if (r && r.id && r.videoSrc && r.videoSrc.trim().length > 0) {
+        byId.set(r.id, r);
+      }
+    });
+
+    posts.forEach((p) => {
+      const converted = convertCommunityPostToReel(p);
+      if (!converted) return;
+      const existing = byId.get(converted.id);
+      if (existing) {
+        byId.set(converted.id, {
+          ...existing,
+          title: converted.title || existing.title,
+          caption: converted.caption || existing.caption,
+          visibility: converted.visibility ?? existing.visibility,
+          authorProfilePrivacy: converted.authorProfilePrivacy || existing.authorProfilePrivacy,
+          likesCount: Math.max(existing.likesCount || 0, converted.likesCount || 0),
+          commentsCount: Math.max(existing.commentsCount || 0, converted.commentsCount || 0),
+          sharesCount: Math.max(existing.sharesCount || 0, converted.sharesCount || 0),
+          isLiked: converted.isLiked ?? existing.isLiked,
+          isSaved: converted.isSaved ?? existing.isSaved,
+          savesCount: converted.savesCount ?? existing.savesCount,
+          series: converted.series || existing.series,
+          sourcePostType: p.postType === 'reel' ? 'reel' : p.videoSrc ? 'video' : 'media',
+        });
+      } else {
+        byId.set(converted.id, converted);
+      }
+    });
+
+    return Array.from(byId.values());
+  }, [reels, posts]);
+
+  const handleUpdateCanonicalReels = useCallback(
+    (updatedReels: ReelHighlight[]) => {
+      const updatedMap = new Map(updatedReels.map((r) => [r.id, r]));
+
+      // Sync matching reels state (preserving items removed only if they belonged to reels)
+      setReels((prevReels) => {
+        const nextReels = updatedReels.filter((r) =>
+          prevReels.some((pr) => pr.id === r.id) || r.sourcePostType === 'reel' || !postsRef.current.some((p) => p.id === r.id)
+        );
+        return nextReels;
+      });
+
+      // Sync engagement/edit/delete changes back onto any converted video posts in Feed state
+      setPosts((prevPosts) => {
+        let changed = false;
+        const nextPosts = prevPosts
+          .filter((p) => {
+            if (!p.videoSrc) return true;
+            // If deleted from Reels, remove from posts only if it was present before update
+            const wasInPrevCanonical =
+              reelsRef.current.some((r) => r.id === p.id) || prevPosts.some((pp) => pp.id === p.id && Boolean(pp.videoSrc));
+            if (wasInPrevCanonical && !updatedMap.has(p.id)) {
+              changed = true;
+              return false;
+            }
+            return true;
+          })
+          .map((p) => {
+            const matched = updatedMap.get(p.id);
+            if (!matched) return p;
+            if (
+              p.likesCount !== matched.likesCount ||
+              p.isLiked !== matched.isLiked ||
+              p.commentsCount !== matched.commentsCount ||
+              p.sharesCount !== matched.sharesCount ||
+              p.isBookmarked !== matched.isSaved ||
+              p.videoTitle !== matched.title ||
+              p.caption !== matched.caption ||
+              p.visibility !== matched.visibility
+            ) {
+              changed = true;
+              return {
+                ...p,
+                likesCount: matched.likesCount,
+                isLiked: Boolean(matched.isLiked),
+                commentsCount: matched.commentsCount,
+                sharesCount: matched.sharesCount,
+                isBookmarked: matched.isSaved,
+                videoTitle: matched.title,
+                caption: matched.caption,
+                visibility: matched.visibility,
+              };
+            }
+            return p;
+          });
+        if (changed) {
+          saveCommunityPosts(nextPosts);
+          return nextPosts;
+        }
+        return prevPosts;
+      });
+    },
+    []
+  );
+
   const handleRemix = (prompt: string, stylePreset?: string) => {
     if (onRemixPrompt) {
       onRemixPrompt(prompt, stylePreset);
@@ -523,10 +636,17 @@ export const SocialEcosystemModule: React.FC<SocialEcosystemProps> = ({
 
       {currentTab === 'reels' && (
         <ReelsFeedView
-          reels={reels}
+          reels={canonicalReels}
+          allPosts={posts}
           directSelectedReel={directSelectedReel}
-          isLoading={isLoadingReels}
+          isLoading={isLoadingReels && isLoadingPosts}
           targetReelId={targetReelId}
+          initialActiveReelId={targetReelId || lastActiveReelId}
+          initialFeedFilter={lastReelsFeedFilter}
+          onFeedFilterChange={setLastReelsFeedFilter}
+          onActiveReelChange={(rid) => {
+            if (rid) setLastActiveReelId(rid);
+          }}
           initialCurrentTime={targetReelInitialTime}
           onClearTargetReel={() => {
             setTargetReelId(null);
@@ -536,7 +656,7 @@ export const SocialEcosystemModule: React.FC<SocialEcosystemProps> = ({
               window.history.replaceState(null, '', window.location.pathname + window.location.search);
             }
           }}
-          onUpdateReels={(r) => setReels(r)}
+          onUpdateReels={handleUpdateCanonicalReels}
           userProfile={userProfile}
           onRemixPrompt={(prompt) => handleRemix(prompt)}
           onNavigateTab={onNavigateTab}
@@ -621,11 +741,11 @@ export const SocialEcosystemModule: React.FC<SocialEcosystemProps> = ({
           }
           userReels={
             viewedProfileUserId && viewedProfileUserId !== user?.id && viewedProfileUserId !== userProfile?.id
-              ? reels.filter((r) => r.author?.id === viewedProfileUserId)
-              : reels.filter((r) => isContentOwner(r.author, userProfile, user, undefined, r.id))
+              ? canonicalReels.filter((r) => r.author?.id === viewedProfileUserId)
+              : canonicalReels.filter((r) => isContentOwner(r.author, userProfile, user, undefined, r.id))
           }
           allPosts={posts}
-          allReels={reels}
+          allReels={canonicalReels}
           onUpdatePosts={(updated) => {
             setPosts(updated);
             saveCommunityPosts(updated);

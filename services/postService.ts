@@ -5,6 +5,10 @@ import { getDefaultAvatar } from './authService';
 import { batchFetchEngagement } from './engagementService';
 import { fetchProfilesPrivacyBatch } from './followService';
 import { normalizeProfilePrivacy } from '../utils/privacyPolicy';
+import {
+  applySeriesRegistryHydrationToPost,
+  attachContentToSeries,
+} from './seriesService';
 
 export interface SupabasePostRow {
   id: string;
@@ -148,7 +152,7 @@ export function mapSupabaseRowToCommunityPost(row: SupabasePostRow): CommunityPo
     }
   }
 
-  return {
+  const post: CommunityPost = {
     id: row.id,
     author: {
       id: row.author_id,
@@ -191,6 +195,7 @@ export function mapSupabaseRowToCommunityPost(row: SupabasePostRow): CommunityPo
     feedType: (row.feed_type as any) || 'for_you',
     audioTrack: row.audio_track || undefined,
   };
+  return applySeriesRegistryHydrationToPost(post);
 }
 
 const POST_BASE_COLUMNS = `
@@ -438,6 +443,16 @@ export async function createSupabasePost(
     }
 
     const mapped = mapSupabaseRowToCommunityPost(data as SupabasePostRow);
+    if (post.series?.seriesId) {
+      const enrichedSeries = {
+        ...post.series,
+        creatorId: authorId,
+        seriesType: post.series.seriesType || (mapped.videoSrc ? 'video' : 'text'),
+        firstPartId: post.series.firstPartId || (post.series.partNumber === 1 ? mapped.id : undefined),
+      };
+      mapped.series = enrichedSeries;
+      attachContentToSeries(mapped.id, enrichedSeries).catch(() => {});
+    }
     return { post: mapped };
   } catch (err: any) {
     console.warn('[PostService] Exception creating post in Supabase:', err);
@@ -489,6 +504,13 @@ export async function updateSupabasePost(
     if (error) {
       console.warn('[PostService] Error updating post in Supabase:', error.message);
       return { success: false, error: error.message };
+    }
+
+    if (updates.series?.seriesId) {
+      await attachContentToSeries(postId, {
+        ...updates.series,
+        creatorId: updates.series.creatorId || authorId,
+      }).catch(() => {});
     }
 
     return { success: true };

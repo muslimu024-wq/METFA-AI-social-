@@ -145,10 +145,11 @@ export interface SavedVisibilityContext {
  * that became private, only_me, or unfollowed are never revealed to unauthorized viewers.
  */
 export const filterVisibleSavedPosts = (
-  posts: CommunityPost[],
+  posts: CommunityPost[] = [],
   viewerCtx: SavedVisibilityContext
 ): CommunityPost[] => {
-  const viewerId = viewerCtx.viewerId || null;
+  if (!Array.isArray(posts) || posts.length === 0) return [];
+  const viewerId = viewerCtx?.viewerId || null;
   return posts.filter((post) => {
     const authorId = post.author?.id || null;
     const authorProfilePrivacy =
@@ -173,10 +174,11 @@ export const filterVisibleSavedPosts = (
 };
 
 export const filterVisibleSavedReels = (
-  reels: ReelHighlight[],
+  reels: ReelHighlight[] = [],
   viewerCtx: SavedVisibilityContext
 ): ReelHighlight[] => {
-  const viewerId = viewerCtx.viewerId || null;
+  if (!Array.isArray(reels) || reels.length === 0) return [];
+  const viewerId = viewerCtx?.viewerId || null;
   return reels.filter((reel) => {
     const authorId = reel.author?.id || null;
     const authorProfilePrivacy =

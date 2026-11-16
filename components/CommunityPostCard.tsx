@@ -89,15 +89,13 @@ export const CommunityVideoPlayer: React.FC<CommunityVideoPlayerProps> = ({
 
     if (reelId) {
       const currentPos = typeof customTime === 'number' ? customTime : (videoRef.current?.currentTime || 0);
-      console.log('[Metfa Nav] Reel video picture tapped:', reelId, title, 'pos:', currentPos);
       if (onOpenReel) {
         try {
           onOpenReel(reelId, { videoSrc: src, title, currentTime: currentPos });
         } catch (err) {
           console.warn('[Metfa Nav] onOpenReel error:', err);
         }
-      }
-      if (typeof window !== 'undefined') {
+      } else if (typeof window !== 'undefined') {
         window.dispatchEvent(
           new CustomEvent('metfa_open_reel', { detail: { reelId, videoSrc: src, title, currentTime: currentPos } })
         );
@@ -211,7 +209,7 @@ export const CommunityPostCard: React.FC<CommunityPostCardProps> = ({
   priority = false,
 }) => {
   return (
-    <article className="bg-white rounded-2xl border border-slate-200 overflow-hidden shadow-xs mb-4">
+    <article className="bg-white rounded-2xl border border-slate-200 overflow-hidden shadow-xs mb-3 sm:mb-4">
       {/* Media Viewport */}
       {post.videoSrc ? (
         <CommunityVideoPlayer
