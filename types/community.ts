@@ -1,4 +1,4 @@
-import { AudioTrack } from './audio';
+import { AudioTrack, ReelAudioConfig } from './audio';
 
 export * from './audio';
 
@@ -186,6 +186,7 @@ export interface CommunityPost {
   tags: string[];
   feedType?: 'for_you' | 'following' | 'trending' | 'page' | 'group';
   audioTrack?: AudioTrack;
+  audioConfig?: ReelAudioConfig;
   series?: VideoSeriesMeta;
 }
 
@@ -219,6 +220,7 @@ export interface ReelHighlight {
   promptUsed?: string;
   musicTrack?: string;
   audioTrack?: AudioTrack;
+  audioConfig?: ReelAudioConfig;
   series?: VideoSeriesMeta;
 }
 

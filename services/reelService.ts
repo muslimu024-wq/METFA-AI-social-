@@ -1,11 +1,16 @@
 import { supabase, isSupabaseConfigured, getClientAuthToken } from './supabaseClient';
 import { CommunityPost, PostAudience, ProfilePrivacy, ReelHighlight, VideoSeriesMeta } from '../types/community';
-import { AudioTrack } from '../types/audio';
+import { AudioTrack, ReelAudioConfig } from '../types/audio';
 import { uploadMediaItem, UploadProgressInfo } from './storageService';
 import { getDefaultAvatar, sanitizeAvatarUrl } from './authService';
 import { fetchAuthorProfileById } from './postService';
 import { fetchProfilesPrivacyBatch } from './followService';
 import { normalizeProfilePrivacy } from '../utils/privacyPolicy';
+import {
+  packAudioTrackWithConfig,
+  unpackStoredAudioTrack,
+  verifyTrackSelectionAllowed,
+} from '../utils/audioStore';
 import { applySeriesRegistryHydrationToReel, attachVideoToSeries } from './seriesService';
 import {
   getReelHighlights,
@@ -23,6 +28,7 @@ export interface CreateReelParams {
   thumbnailSource?: string;
   duration: number;
   audioTrack?: AudioTrack;
+  audioConfig?: ReelAudioConfig;
   musicTrack?: string;
   visibility?: PostAudience | 'private';
   series?: VideoSeriesMeta;
@@ -101,6 +107,9 @@ export function mapSupabaseRowToReel(row: any): ReelHighlight {
     }
   }
 
+  const { audioTrack: unpackedAudioTrack, audioConfig: unpackedAudioConfig } =
+    unpackStoredAudioTrack(row.audio_track);
+
   const reel: ReelHighlight = {
     id: String(row.id),
     title: row.video_title || row.prompt || 'Metfa Reel',
@@ -125,10 +134,11 @@ export function mapSupabaseRowToReel(row: any): ReelHighlight {
     createdAt: relativeTime,
     createdAtIso: row.created_at || undefined,
     promptUsed: row.prompt_used || row.prompt || undefined,
-    musicTrack: row.audio_track
-      ? `${row.audio_track.title} • ${row.audio_track.artist}`
+    musicTrack: unpackedAudioTrack
+      ? `${unpackedAudioTrack.title} • ${unpackedAudioTrack.artist}`
       : undefined,
-    audioTrack: row.audio_track || undefined,
+    audioTrack: unpackedAudioTrack,
+    audioConfig: unpackedAudioConfig,
   };
   return applySeriesRegistryHydrationToReel(reel);
 }
@@ -172,6 +182,7 @@ export function convertCommunityPostToReel(post: CommunityPost): ReelHighlight |
     promptUsed: post.prompt,
     musicTrack: post.audioTrack ? `${post.audioTrack.title} • ${post.audioTrack.artist}` : undefined,
     audioTrack: post.audioTrack,
+    audioConfig: post.audioConfig,
     series: post.series,
   };
   const hydrated = applySeriesRegistryHydrationToReel(candidate);
@@ -265,8 +276,18 @@ async function fetchServerPersistentReels(): Promise<ReelHighlight[]> {
           createdAt: p.createdAt || 'Recently',
           createdAtIso: p.createdAtIso || p.created_at || undefined,
           promptUsed: p.promptUsed || p.prompt_used || p.prompt || undefined,
-          musicTrack: p.musicTrack,
-          audioTrack: p.audioTrack || p.audio_track,
+          ...(() => {
+            const unpacked = unpackStoredAudioTrack(p.audioTrack || p.audio_track);
+            return {
+              musicTrack:
+                p.musicTrack ||
+                (unpacked.audioTrack
+                  ? `${unpacked.audioTrack.title} • ${unpacked.audioTrack.artist}`
+                  : undefined),
+              audioTrack: unpacked.audioTrack || p.audioTrack,
+              audioConfig: p.audioConfig || unpacked.audioConfig,
+            };
+          })(),
           series: p.series,
         };
         return applySeriesRegistryHydrationToReel(mapped);
@@ -410,6 +431,18 @@ export async function createPersistentReel(
     return { success: false, error: 'Video file is required to create a reel' };
   }
 
+  if (params.audioTrack) {
+    const rightsCheck = verifyTrackSelectionAllowed(params.audioTrack);
+    if (!rightsCheck.canSelect) {
+      return {
+        success: false,
+        error:
+          rightsCheck.reason ||
+          'Selected soundtrack is no longer eligible for reuse under current rights rules.',
+      };
+    }
+  }
+
   const resolvedVisibility = params.visibility || 'public';
 
   try {
@@ -494,7 +527,7 @@ export async function createPersistentReel(
           shares_count: 0,
           tags: ['reel', 'video'],
           feed_type: 'for_you',
-          audio_track: params.audioTrack || null,
+          audio_track: packAudioTrackWithConfig(params.audioTrack, params.audioConfig),
           visibility: resolvedVisibility,
           is_pinned: false,
           is_edited: false,
@@ -589,6 +622,7 @@ export async function createPersistentReel(
       promptUsed: params.promptUsed,
       musicTrack: params.musicTrack,
       audioTrack: params.audioTrack,
+      audioConfig: params.audioConfig,
       series: enrichedFallbackSeries,
     };
 

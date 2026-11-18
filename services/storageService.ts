@@ -77,7 +77,12 @@ export interface ValidateVideoOptions {
  */
 export function detectVideoMimeFromBytes(
   bytes: Uint8Array
-): { mimeType: string; extension: string; isNonVideoSignature?: boolean } | null {
+): {
+  mimeType: string;
+  extension: string;
+  isNonVideoSignature?: boolean;
+  isUnsupportedContainer?: boolean;
+} | null {
   if (!bytes || bytes.length < 4) return null;
 
   // Reject clear non-video headers immediately
@@ -100,8 +105,28 @@ export function detectVideoMimeFromBytes(
     return { mimeType: 'application/zip', extension: 'zip', isNonVideoSignature: true };
   }
 
-  // WebM / Matroska EBML header: 1A 45 DF A3
+  // RIFF AVI container (explicitly unsupported by server & web Reel playback)
+  if (
+    bytes.length >= 12 &&
+    bytes[0] === 0x52 &&
+    bytes[1] === 0x49 &&
+    bytes[2] === 0x46 &&
+    bytes[3] === 0x46 &&
+    bytes[8] === 0x41 &&
+    bytes[9] === 0x56 &&
+    bytes[10] === 0x49
+  ) {
+    return { mimeType: 'video/x-msvideo', extension: 'avi', isUnsupportedContainer: true };
+  }
+
+  // WebM / Matroska EBML header: 1A 45 DF A3 — distinguish 'matroska' vs 'webm' DocType
   if (bytes[0] === 0x1a && bytes[1] === 0x45 && bytes[2] === 0xdf && bytes[3] === 0xa3) {
+    const asciiScan = Array.from(bytes.slice(0, Math.min(bytes.length, 64)))
+      .map((b) => (b >= 32 && b <= 126 ? String.fromCharCode(b).toLowerCase() : ' '))
+      .join('');
+    if (asciiScan.includes('matroska') && !asciiScan.includes('webm')) {
+      return { mimeType: 'video/x-matroska', extension: 'mkv', isUnsupportedContainer: true };
+    }
     return { mimeType: 'video/webm', extension: 'webm' };
   }
 
@@ -126,20 +151,37 @@ export function detectVideoMimeFromBytes(
   return null;
 }
 
+const UNSUPPORTED_VIDEO_EXTENSIONS = new Set(['mkv', 'avi', 'wmv', 'flv', 'ts', 'mts', 'vob']);
+
 async function readBlobHeaderBytes(blob: Blob, maxBytes = 64): Promise<Uint8Array> {
   const slice = blob.slice(0, Math.min(blob.size, maxBytes));
-  if (typeof (slice as any).arrayBuffer === 'function') {
-    const buf = await (slice as any).arrayBuffer();
-    return new Uint8Array(buf);
-  }
-  return new Promise<Uint8Array>((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => {
-      resolve(new Uint8Array((reader.result as ArrayBuffer) || new ArrayBuffer(0)));
-    };
-    reader.onerror = () => reject(reader.error || new Error('Unable to read selected video file bytes.'));
-    reader.readAsArrayBuffer(slice);
+  const readPromise = (async () => {
+    if (typeof (slice as any).arrayBuffer === 'function') {
+      const buf = await (slice as any).arrayBuffer();
+      return new Uint8Array(buf);
+    }
+    return new Promise<Uint8Array>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => {
+        resolve(new Uint8Array((reader.result as ArrayBuffer) || new ArrayBuffer(0)));
+      };
+      reader.onerror = () => reject(reader.error || new Error('Unable to read selected video file bytes.'));
+      reader.readAsArrayBuffer(slice);
+    });
+  })();
+
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  const timeoutPromise = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => {
+      reject(new Error('Timed out reading the selected gallery file. Please retry or save the video locally first.'));
+    }, 8000);
   });
+
+  try {
+    return await Promise.race([readPromise, timeoutPromise]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
 }
 
 function normalizeBaseFileName(rawName: string | undefined, targetExt: string): string {
@@ -230,6 +272,16 @@ export async function validateAndPrepareVideoFile(
       `Selected file appears to be "${detected.mimeType}", not a supported MP4/WebM/MOV video.`
     );
   }
+  if (detected?.isUnsupportedContainer) {
+    throw new Error(
+      `Unsupported video container (.${detected.extension} / ${detected.mimeType}). Please select an MP4, WebM, or MOV video.`
+    );
+  }
+  if (extFromName && UNSUPPORTED_VIDEO_EXTENSIONS.has(extFromName)) {
+    throw new Error(
+      `Unsupported ".${extFromName}" video format. Please choose an MP4, WebM, or MOV video file.`
+    );
+  }
 
   let resolvedMime = '';
   let resolvedExt = '';
@@ -237,9 +289,9 @@ export async function validateAndPrepareVideoFile(
   if (detected) {
     resolvedMime = detected.mimeType;
     resolvedExt = detected.extension;
-  } else if (rawType && (rawType.startsWith('video/') || MIME_TO_EXTENSION[rawType])) {
+  } else if (rawType && MIME_TO_EXTENSION[rawType]) {
     resolvedMime = rawType === 'video/quicktime' || rawType === 'video/x-m4v' ? 'video/mp4' : rawType;
-    resolvedExt = MIME_TO_EXTENSION[rawType] || rawType.split('/')[1] || 'mp4';
+    resolvedExt = MIME_TO_EXTENSION[rawType];
   } else if (extFromName && SUPPORTED_VIDEO_EXTENSIONS.has(extFromName)) {
     resolvedMime = EXTENSION_TO_MIME[extFromName] || 'video/mp4';
     resolvedExt = MIME_TO_EXTENSION[resolvedMime] || 'mp4';

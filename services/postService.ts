@@ -5,6 +5,7 @@ import { getDefaultAvatar } from './authService';
 import { batchFetchEngagement } from './engagementService';
 import { fetchProfilesPrivacyBatch } from './followService';
 import { normalizeProfilePrivacy } from '../utils/privacyPolicy';
+import { packAudioTrackWithConfig, unpackStoredAudioTrack } from '../utils/audioStore';
 import {
   applySeriesRegistryHydrationToPost,
   attachContentToSeries,
@@ -193,7 +194,13 @@ export function mapSupabaseRowToCommunityPost(row: SupabasePostRow): CommunityPo
     createdAtIso: row.created_at || undefined,
     tags: Array.isArray(row.tags) ? row.tags : ['MetfaAI', 'SocialFirst'],
     feedType: (row.feed_type as any) || 'for_you',
-    audioTrack: row.audio_track || undefined,
+    ...(() => {
+      const unpacked = unpackStoredAudioTrack(row.audio_track);
+      return {
+        audioTrack: unpacked.audioTrack,
+        audioConfig: unpacked.audioConfig,
+      };
+    })(),
   };
   return applySeriesRegistryHydrationToPost(post);
 }
@@ -397,7 +404,7 @@ export async function createSupabasePost(
       group_id: post.groupId || null,
       group_name: post.groupName || null,
       posting_identity: post.postingIdentity || null,
-      audio_track: post.audioTrack || null,
+      audio_track: packAudioTrackWithConfig(post.audioTrack, post.audioConfig),
       visibility: resolvedVisibility,
       is_pinned: false,
       is_edited: false,

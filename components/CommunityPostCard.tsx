@@ -1,6 +1,11 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { AlertCircle, Film, Volume2, VolumeX } from 'lucide-react';
 import { CommunityPost } from '../types/community';
+import type { AudioTrack, ReelAudioConfig } from '../types/audio';
+import {
+  attachSyncedAudioController,
+  resolveDistinctExternalAudioUrl,
+} from '../utils/syncedAudioPlayback';
 import { AdvancedVideoControls } from './AdvancedVideoControls';
 import { VideoPlaybackSessionTracker } from '../utils/videoTracker';
 import type { TrafficSourceType } from '../utils/contentTracker';
@@ -15,6 +20,8 @@ export interface CommunityVideoPlayerProps {
   creatorId?: string;
   viewerId?: string | null;
   trafficSource?: TrafficSourceType;
+  audioTrack?: AudioTrack | null;
+  audioConfig?: ReelAudioConfig | null;
   onOpenReel?: (reelId: string, payload?: { videoSrc?: string; title?: string; currentTime?: number }) => void;
 }
 
@@ -32,12 +39,28 @@ export const CommunityVideoPlayer: React.FC<CommunityVideoPlayerProps> = ({
   creatorId = '',
   viewerId,
   trafficSource = 'feed',
+  audioTrack,
+  audioConfig,
   onOpenReel,
 }) => {
   const [hasError, setHasError] = useState(false);
   const [isFeedMuted, setIsFeedMuted] = useState(true);
   const lastNavTimeRef = useRef(0);
   const videoRef = useRef<HTMLVideoElement | null>(null);
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+
+  const distinctAudioUrl = resolveDistinctExternalAudioUrl(audioTrack?.audio_url, src);
+
+  useEffect(() => {
+    return attachSyncedAudioController({
+      videoEl: videoRef.current,
+      audioEl: audioRef.current,
+      isActive: Boolean(src && !hasError),
+      isMuted: isFeedMuted,
+      audioUrl: distinctAudioUrl,
+      audioConfig: audioConfig || null,
+    });
+  }, [src, hasError, isFeedMuted, distinctAudioUrl, audioConfig]);
 
   useEffect(() => {
     const el = videoRef.current;
@@ -114,6 +137,16 @@ export const CommunityVideoPlayer: React.FC<CommunityVideoPlayerProps> = ({
           videoRef.current.play().catch(() => {});
         }
       }
+      if (audioRef.current) {
+        audioRef.current.muted = next;
+        if (next) {
+          try {
+            audioRef.current.pause();
+          } catch {}
+        } else if (videoRef.current && !videoRef.current.paused && !videoRef.current.ended) {
+          audioRef.current.play().catch(() => {});
+        }
+      }
       return next;
     });
   };
@@ -179,6 +212,17 @@ export const CommunityVideoPlayer: React.FC<CommunityVideoPlayerProps> = ({
         onError={() => setHasError(true)}
       />
 
+      {distinctAudioUrl && (
+        <audio
+          ref={audioRef}
+          src={distinctAudioUrl}
+          loop
+          preload="auto"
+          muted={isFeedMuted}
+          className="hidden"
+        />
+      )}
+
       {/* Advanced Playback Controls (Feed mode: clean without center controls) */}
       <div className="absolute inset-0 z-30 pointer-events-none">
         <AdvancedVideoControls
@@ -218,6 +262,8 @@ export const CommunityPostCard: React.FC<CommunityPostCardProps> = ({
           title={post.videoTitle || post.prompt}
           isReel={post.postType === 'reel' || Boolean(post.videoSrc)}
           reelId={post.id}
+          audioTrack={post.audioTrack}
+          audioConfig={post.audioConfig}
         />
       ) : post.imageSrc ? (
         <img

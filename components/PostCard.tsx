@@ -27,6 +27,7 @@ import {
   Lock,
   Info,
   User,
+  Languages,
 } from 'lucide-react';
 import { CommunityPost, ProfilePrivacy, SupportedTranslationLanguage, UserProfile } from '../types/community';
 import { AudioTrack } from '../types/audio';
@@ -50,12 +51,18 @@ import { canSharePost, canViewerAccessPost, FollowRelationStatus, formatAudience
 import { GUEST_AVATAR, sanitizeAvatarUrl } from '../services/authService';
 import { resolveTextSeriesNavigationContext } from '../utils/videoSeries';
 import {
+  SUPPORTED_TRANSLATION_LANGUAGES,
   getPreferredTranslationLanguage,
   setPreferredTranslationLanguage,
+  getTranslationLanguageLabel,
 } from '../utils/translationCache';
 import TextSeriesNavigationBar from './TextSeriesNavigationBar';
-import TextPostTranslationBar from './TextPostTranslationBar';
-import { formatDuration } from '../utils/audioStore';
+import TextPostTranslationBar, { PostTranslationCommand, PostTranslationUiStatus } from './TextPostTranslationBar';
+import { formatDuration, isVerifiedAudioTrack } from '../utils/audioStore';
+import {
+  attachSyncedAudioController,
+  resolveDistinctExternalAudioUrl,
+} from '../utils/syncedAudioPlayback';
 import { AiRecipeBox } from './AiRecipeBox';
 import AudioLicenseInfoModal from './AudioLicenseInfoModal';
 import ContentAnalyticsModal from './ContentAnalyticsModal';
@@ -173,12 +180,36 @@ export const PostCard: React.FC<PostCardProps> = ({
     isShowingTranslation: boolean;
     translatedText: string | null;
   }>({ isShowingTranslation: false, translatedText: null });
+  const [translationCommand, setTranslationCommand] = useState<PostTranslationCommand | null>(null);
+  const [translationUiStatus, setTranslationUiStatus] = useState<PostTranslationUiStatus>({
+    isLoading: false,
+    isShowingTranslation: false,
+    hasTranslatedResult: false,
+    errorMsg: null,
+  });
   const feedVideoRef = useRef<HTMLVideoElement | null>(null);
+  const syncedFeedAudioRef = useRef<HTMLAudioElement | null>(null);
   const touchStartPosRef = useRef<{ x: number; y: number } | null>(null);
   const isTouchScrollingRef = useRef(false);
 
   const resolvedContentType = clientResolveContentType(post);
   const postTrafficSource = post.groupId ? 'group' : post.pageId ? 'page' : 'feed';
+  const distinctFeedAudioUrl = resolveDistinctExternalAudioUrl(
+    post.audioTrack?.audio_url,
+    post.videoSrc
+  );
+
+  useEffect(() => {
+    if (!post.videoSrc || !distinctFeedAudioUrl) return;
+    return attachSyncedAudioController({
+      videoEl: feedVideoRef.current,
+      audioEl: syncedFeedAudioRef.current,
+      isActive: true,
+      isMuted: isFeedVideoMuted,
+      audioUrl: distinctFeedAudioUrl,
+      audioConfig: post.audioConfig || null,
+    });
+  }, [post.videoSrc, distinctFeedAudioUrl, isFeedVideoMuted, post.audioConfig]);
 
   useEffect(() => {
     const el = feedVideoRef.current;
@@ -983,6 +1014,74 @@ export const PostCard: React.FC<PostCardProps> = ({
                 </button>
               )}
 
+              {/* 4b. Post Translation (Three-dot Menu action + preferred target language) */}
+              {(isPureTextPost ? originalBodyText : post.caption || '').trim().length > 0 && (
+                <div className="px-3.5 py-2 space-y-1.5 border-y border-slate-100 bg-slate-50/60">
+                  <button
+                    type="button"
+                    id={`translate-menu-btn-${post.id}`}
+                    data-testid={`menu-translate-toggle-btn-${post.id}`}
+                    disabled={translationUiStatus.isLoading}
+                    onClick={() => {
+                      setIsMenuOpen(false);
+                      setTranslationCommand({
+                        action: translationUiStatus.isShowingTranslation ? 'show_original' : 'translate',
+                        lang: targetLanguage,
+                        nonce: Date.now() + Math.floor(Math.random() * 1000),
+                      });
+                    }}
+                    className="w-full text-left text-slate-800 hover:text-purple-700 flex items-center justify-between gap-2 transition font-semibold cursor-pointer disabled:opacity-60"
+                  >
+                    <span className="flex items-center gap-2 min-w-0">
+                      <Languages className="w-4 h-4 text-purple-600 shrink-0" />
+                      <span className="truncate">
+                        {translationUiStatus.isLoading
+                          ? 'Translating...'
+                          : translationUiStatus.isShowingTranslation
+                          ? 'Show Original'
+                          : `Translate (${getTranslationLanguageLabel(targetLanguage)})`}
+                      </span>
+                    </span>
+                    <span className="text-[10px] font-bold text-purple-600 shrink-0">
+                      {translationUiStatus.isShowingTranslation ? 'Original' : 'See Translation'}
+                    </span>
+                  </button>
+                  <div className="flex items-center justify-between gap-2 pl-6">
+                    <label
+                      htmlFor={`menu-translate-lang-select-${post.id}`}
+                      className="text-[10px] font-medium text-slate-500 shrink-0"
+                    >
+                      Language:
+                    </label>
+                    <select
+                      id={`menu-translate-lang-select-${post.id}`}
+                      aria-label="Target translation language"
+                      data-testid={`menu-translate-lang-select-${post.id}`}
+                      value={targetLanguage}
+                      disabled={translationUiStatus.isLoading}
+                      onChange={(e) => {
+                        const nextLang = e.target.value as SupportedTranslationLanguage;
+                        setPreferredTranslationLanguage(nextLang);
+                        setTargetLanguage(nextLang);
+                        setTranslationCommand({
+                          action: 'translate',
+                          lang: nextLang,
+                          nonce: Date.now() + Math.floor(Math.random() * 1000),
+                        });
+                        setIsMenuOpen(false);
+                      }}
+                      className="flex-1 min-w-0 bg-white border border-slate-200 rounded-lg px-2 py-1 text-[11px] font-semibold text-slate-700 focus:outline-none focus:border-purple-500 cursor-pointer"
+                    >
+                      {SUPPORTED_TRANSLATION_LANGUAGES.map((lang) => (
+                        <option key={lang.code} value={lang.code}>
+                          {lang.label} ({lang.nativeLabel})
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+              )}
+
               {/* 5. AI Recipe & Remix & Copyright */}
               <button
                 type="button"
@@ -1265,9 +1364,17 @@ export const PostCard: React.FC<PostCardProps> = ({
                   type="button"
                   onClick={() => setIsLicenseModalOpen(true)}
                   className="px-2 py-1 rounded-lg bg-teal-50 border border-teal-200 text-teal-800 hover:bg-teal-100 text-[10px] font-bold flex items-center gap-1 shrink-0 transition cursor-pointer"
-                  title="View verified licensing certificate"
+                  title={
+                    isVerifiedAudioTrack(post.audioTrack)
+                      ? 'View verified licensing certificate'
+                      : 'View audio attribution details'
+                  }
                 >
-                  <ShieldCheck className="w-3 h-3 text-teal-600" />
+                  {isVerifiedAudioTrack(post.audioTrack) ? (
+                    <ShieldCheck className="w-3 h-3 text-teal-600" />
+                  ) : (
+                    <Music className="w-3 h-3 text-purple-600" />
+                  )}
                   <span>{post.audioTrack.license_type}</span>
                 </button>
               </div>
@@ -1320,6 +1427,8 @@ export const PostCard: React.FC<PostCardProps> = ({
             postId={post.id}
             sourceText={originalBodyText}
             targetLanguage={targetLanguage}
+            command={translationCommand}
+            onStatusChange={setTranslationUiStatus}
             onTargetLanguageChange={(lang) => {
               setPreferredTranslationLanguage(lang);
               setTargetLanguage(lang);
@@ -1425,6 +1534,17 @@ export const PostCard: React.FC<PostCardProps> = ({
                 className="w-full max-h-[520px] object-cover bg-black"
               />
 
+              {distinctFeedAudioUrl && (
+                <audio
+                  ref={syncedFeedAudioRef}
+                  src={distinctFeedAudioUrl}
+                  loop
+                  preload="auto"
+                  muted={isFeedVideoMuted}
+                  className="hidden"
+                />
+              )}
+
               {/* Advanced Playback Controls (Feed mode: clean without center controls) */}
               <div className="absolute inset-0 z-30 pointer-events-none">
                 <AdvancedVideoControls
@@ -1439,6 +1559,20 @@ export const PostCard: React.FC<PostCardProps> = ({
                         feedVideoRef.current.muted = next;
                         if (!next) {
                           feedVideoRef.current.play().catch(() => {});
+                        }
+                      }
+                      if (syncedFeedAudioRef.current) {
+                        syncedFeedAudioRef.current.muted = next;
+                        if (next) {
+                          try {
+                            syncedFeedAudioRef.current.pause();
+                          } catch {}
+                        } else if (
+                          feedVideoRef.current &&
+                          !feedVideoRef.current.paused &&
+                          !feedVideoRef.current.ended
+                        ) {
+                          syncedFeedAudioRef.current.play().catch(() => {});
                         }
                       }
                       return next;
@@ -1494,6 +1628,8 @@ export const PostCard: React.FC<PostCardProps> = ({
           postId={post.id}
           sourceText={post.caption}
           targetLanguage={targetLanguage}
+          command={translationCommand}
+          onStatusChange={setTranslationUiStatus}
           onTargetLanguageChange={(lang) => {
             setPreferredTranslationLanguage(lang);
             setTargetLanguage(lang);

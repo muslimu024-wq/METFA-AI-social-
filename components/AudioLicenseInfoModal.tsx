@@ -12,11 +12,15 @@ import {
   AlertCircle,
   Award,
   Sparkles,
-  ExternalLink,
   Info,
 } from 'lucide-react';
 import { AudioTrack } from '../types/audio';
-import { formatDuration, verifyTrackLicense } from '../utils/audioStore';
+import {
+  formatDuration,
+  isVerifiedAudioTrack,
+  verifyTrackLicense,
+  verifyTrackSelectionAllowed,
+} from '../utils/audioStore';
 
 interface AudioLicenseInfoModalProps {
   track: AudioTrack | null;
@@ -32,37 +36,66 @@ export const AudioLicenseInfoModal: React.FC<AudioLicenseInfoModalProps> = ({
   onSelectTrack,
 }) => {
   const [isPlaying, setIsPlaying] = useState(false);
+  const [previewError, setPreviewError] = useState<string | null>(null);
   const [copiedAttribution, setCopiedAttribution] = useState(false);
   const audioRef = useRef<HTMLAudioElement | null>(null);
 
   useEffect(() => {
-    // Reset playback when modal opens or closes
     if (!isOpen) {
       if (audioRef.current) {
         audioRef.current.pause();
+        audioRef.current = null;
       }
       setIsPlaying(false);
+      setPreviewError(null);
     }
-  }, [isOpen]);
+  }, [isOpen, track?.id]);
+
+  useEffect(() => {
+    return () => {
+      if (audioRef.current) {
+        audioRef.current.pause();
+        audioRef.current = null;
+      }
+    };
+  }, []);
 
   if (!isOpen || !track) return null;
 
   const licenseInfo = verifyTrackLicense(track);
+  const selectionCheck = verifyTrackSelectionAllowed(track);
+  const canReuseTrack = selectionCheck.canSelect && licenseInfo.isValid;
+  const isVerifiedTrack = isVerifiedAudioTrack(track);
+  const isOriginalSound = track.track_type === 'original';
 
   const togglePlay = () => {
+    setPreviewError(null);
+    if (!track.audio_url || !track.audio_url.trim()) {
+      setPreviewError('No playable audio stream is available for this track.');
+      return;
+    }
+
     if (!audioRef.current) {
       const audio = new Audio(track.audio_url);
       audioRef.current = audio;
       audio.onended = () => setIsPlaying(false);
-      audio.onerror = () => setIsPlaying(false);
+      audio.onerror = () => {
+        setIsPlaying(false);
+        setPreviewError('Unable to load audio preview stream.');
+      };
     }
 
     if (isPlaying) {
       audioRef.current.pause();
       setIsPlaying(false);
     } else {
-      audioRef.current.play().catch(() => setIsPlaying(false));
-      setIsPlaying(true);
+      audioRef.current
+        .play()
+        .then(() => setIsPlaying(true))
+        .catch(() => {
+          setIsPlaying(false);
+          setPreviewError('Browser blocked or failed to play this audio preview.');
+        });
     }
   };
 
@@ -101,13 +134,31 @@ export const AudioLicenseInfoModal: React.FC<AudioLicenseInfoModalProps> = ({
         <div className="flex items-center justify-between pb-4 border-b border-gray-800 shrink-0">
           <div className="flex items-center gap-2.5">
             <div className="p-2 rounded-xl bg-purple-950/80 border border-purple-500/40 text-purple-300">
-              <ShieldCheck className="w-5 h-5 text-teal-400" />
+              {isVerifiedTrack ? (
+                <ShieldCheck className="w-5 h-5 text-teal-400" />
+              ) : isOriginalSound ? (
+                <Music className="w-5 h-5 text-purple-300" />
+              ) : (
+                <AlertCircle className="w-5 h-5 text-amber-400" />
+              )}
             </div>
             <div>
               <h3 className="text-base font-bold text-white flex items-center gap-2">
-                <span>Music Licensing & Rights Certificate</span>
+                <span>
+                  {isVerifiedTrack
+                    ? 'Music Licensing & Rights Certificate'
+                    : isOriginalSound
+                    ? 'Creator Original Audio Details'
+                    : 'Audio Rights & License Status'}
+                </span>
               </h3>
-              <p className="text-xs text-gray-400">Verified sync and broadcast rights metadata</p>
+              <p className="text-xs text-gray-400">
+                {isVerifiedTrack
+                  ? 'Verified sync and broadcast rights metadata'
+                  : isOriginalSound
+                  ? 'User-uploaded original audio — rights not independently verified'
+                  : 'Unverified, expired, or restricted rights metadata'}
+              </p>
             </div>
           </div>
 
@@ -122,14 +173,36 @@ export const AudioLicenseInfoModal: React.FC<AudioLicenseInfoModalProps> = ({
 
         {/* Modal Body */}
         <div className="space-y-5 overflow-y-auto py-4 pr-1 text-xs">
+          {/* Reuse Blocking Banner if track rights are expired, revoked, pending, or missing */}
+          {!canReuseTrack && (
+            <div
+              data-testid="audio-license-blocked-banner"
+              className="p-3 rounded-xl bg-rose-950/70 border border-rose-500/50 text-rose-200 flex items-start gap-2.5"
+            >
+              <AlertCircle className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />
+              <div>
+                <div className="font-bold text-rose-100">Reuse Restricted</div>
+                <p className="text-[11px] text-rose-200/90 mt-0.5">
+                  {selectionCheck.reason || 'This track cannot be attached to new Reels under its current licensing status.'}
+                </p>
+              </div>
+            </div>
+          )}
+
           {/* Track Summary Banner */}
           <div className="p-4 rounded-2xl bg-gray-950/80 border border-gray-800 flex items-center gap-4">
             <div className="relative group shrink-0">
-              <img
-                src={track.cover_url}
-                alt={track.title}
-                className="w-16 h-16 rounded-xl object-cover border border-purple-500/30 shadow-md"
-              />
+              {track.cover_url?.trim() ? (
+                <img
+                  src={track.cover_url}
+                  alt={track.title}
+                  className="w-16 h-16 rounded-xl object-cover border border-purple-500/30 shadow-md"
+                />
+              ) : (
+                <div className="w-16 h-16 rounded-xl bg-gray-900 border border-purple-500/30 shadow-md flex items-center justify-center">
+                  <Music className="w-6 h-6 text-purple-300" />
+                </div>
+              )}
               <button
                 type="button"
                 onClick={togglePlay}
@@ -155,6 +228,9 @@ export const AudioLicenseInfoModal: React.FC<AudioLicenseInfoModalProps> = ({
                 <span className="bg-gray-800 px-1.5 py-0.5 rounded">{track.mood}</span>
                 {track.bpm && <span className="bg-gray-800 px-1.5 py-0.5 rounded font-mono">{track.bpm} BPM</span>}
               </div>
+              {previewError && (
+                <p className="text-[11px] text-rose-400 mt-1.5">{previewError}</p>
+              )}
             </div>
           </div>
 
@@ -188,7 +264,7 @@ export const AudioLicenseInfoModal: React.FC<AudioLicenseInfoModalProps> = ({
                 <span className="font-bold uppercase tracking-wider text-[10px]">Territories</span>
               </div>
               <p className="text-xs font-bold text-white">{licenseInfo.territoriesDisplay}</p>
-              <p className="text-[10px] text-gray-400 mt-0.5">Global digital streaming & sync</p>
+              <p className="text-[10px] text-gray-400 mt-0.5">Global digital streaming &amp; sync</p>
             </div>
 
             <div className="p-3 rounded-xl bg-gray-950/50 border border-gray-800">
@@ -245,14 +321,22 @@ export const AudioLicenseInfoModal: React.FC<AudioLicenseInfoModalProps> = ({
           {onSelectTrack && (
             <button
               type="button"
+              data-testid="use-this-soundtrack-btn"
+              disabled={!canReuseTrack}
+              title={selectionCheck.reason || 'Attach this soundtrack to a new Reel'}
               onClick={() => {
+                if (!canReuseTrack) return;
                 onSelectTrack(track);
                 onClose();
               }}
-              className="px-5 py-2 bg-gradient-to-r from-purple-600 to-teal-500 hover:from-purple-500 hover:to-teal-400 text-white text-xs font-bold rounded-xl shadow-md transition flex items-center gap-1.5"
+              className={`px-5 py-2 text-xs font-bold rounded-xl shadow-md transition flex items-center gap-1.5 ${
+                canReuseTrack
+                  ? 'bg-gradient-to-r from-purple-600 to-teal-500 hover:from-purple-500 hover:to-teal-400 text-white cursor-pointer'
+                  : 'bg-gray-800 text-gray-500 border border-rose-500/30 cursor-not-allowed'
+              }`}
             >
               <Music className="w-3.5 h-3.5" />
-              <span>Use This Soundtrack</span>
+              <span>{canReuseTrack ? 'Use This Soundtrack' : 'Reuse Restricted'}</span>
             </button>
           )}
         </div>

@@ -571,6 +571,7 @@ export const AudioTrackPickerModal: React.FC<AudioTrackPickerModalProps> = ({
                         type="button"
                         onClick={() => handleSelectSound(track)}
                         disabled={!selectionCheck.canSelect}
+                        title={selectionCheck.reason || 'Attach this sound'}
                         className={`px-3.5 py-1.5 rounded-xl text-xs font-bold transition flex items-center gap-1 shadow-md ${
                           !selectionCheck.canSelect
                             ? 'bg-gray-800 text-gray-500 cursor-not-allowed border border-rose-500/30'
@@ -585,7 +586,19 @@ export const AudioTrackPickerModal: React.FC<AudioTrackPickerModalProps> = ({
                             <span>Attached</span>
                           </>
                         ) : !selectionCheck.canSelect ? (
-                          <span>Expired</span>
+                          <span>
+                            {track.status === 'revoked'
+                              ? 'Revoked'
+                              : track.status === 'pending'
+                              ? 'Pending'
+                              : track.status === 'restricted'
+                              ? 'Restricted'
+                              : track.active_status === false
+                              ? 'Inactive'
+                              : track.status === 'expired' || licenseCheck.isExpired
+                              ? 'Expired'
+                              : 'Unavailable'}
+                          </span>
                         ) : (
                           <span>Use this sound</span>
                         )}

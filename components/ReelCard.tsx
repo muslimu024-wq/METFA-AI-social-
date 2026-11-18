@@ -30,7 +30,15 @@ import { useAuth } from '../context/AuthContext';
 import { isContentOwner } from '../utils/communityStore';
 import { isReelSaved, toggleSaveReel } from '../utils/bookmarkStore';
 import { canSharePost, formatAudienceMeta } from '../utils/privacyPolicy';
-import { getAudioTracks } from '../utils/audioStore';
+import {
+  classifyReelAudioState,
+  isVerifiedAudioTrack,
+  resolveReelAudioTrackMetadata,
+} from '../utils/audioStore';
+import {
+  attachSyncedAudioController,
+  resolveDistinctExternalAudioUrl,
+} from '../utils/syncedAudioPlayback';
 import AudioLicenseInfoModal from './AudioLicenseInfoModal';
 import ContentAnalyticsModal from './ContentAnalyticsModal';
 import PostDetailsModal from './PostDetailsModal';
@@ -84,6 +92,7 @@ export const ReelCard: React.FC<ReelCardProps> = ({
   const [isDetailsModalOpen, setIsDetailsModalOpen] = useState(false);
 
   const videoRef = useRef<HTMLVideoElement | null>(null);
+  const soundtrackAudioRef = useRef<HTMLAudioElement | null>(null);
   const trackerRef = useRef<VideoPlaybackSessionTracker | null>(null);
 
   // Initialize and attach genuine video playback session tracker
@@ -117,37 +126,31 @@ export const ReelCard: React.FC<ReelCardProps> = ({
   const isSaved = reel.isSaved ?? isReelSaved(reel.id);
   const savesCount = reel.savesCount ?? 0;
 
-  // Resolve audio track
-  const resolvedAudioTrack: AudioTrack | null = React.useMemo(() => {
-    if (reel.audioTrack) return reel.audioTrack;
-    if (!reel.musicTrack) return null;
-    const tracks = getAudioTracks();
-    const match = tracks.find((t) =>
-      reel.musicTrack?.toLowerCase().includes(t.title.toLowerCase()) ||
-      t.title.toLowerCase().includes(reel.musicTrack?.toLowerCase() || '')
-    );
-    if (match) return match;
-    // Synthesize licensed audio track object
-    return {
-      id: `track_custom_${reel.id}`,
-      title: reel.musicTrack.split('•')[0]?.trim() || reel.musicTrack,
-      artist: reel.musicTrack.split('•')[1]?.trim() || 'Metfa Sound Studio',
-      audio_url: 'https://actions.google.com/sounds/v1/science_fiction/scifi_engine_hum.ogg',
-      cover_url: reel.thumbnailSrc || 'https://images.unsplash.com/photo-1508700115892-45ecd05ae2ad?w=400&q=80',
-      duration: reel.duration || 30,
-      genre: 'Electronic',
-      mood: 'Energetic',
-      license_type: 'Royalty-Free Commercial',
-      license_source: 'Metfa Audio Catalog',
-      track_type: 'royalty_free',
-      attribution_required: false,
-      commercial_use_allowed: true,
-      territories: ['Worldwide'],
-      license_start: '2025-01-01T00:00:00.000Z',
-      license_expiry: null,
-      status: 'active',
-    };
-  }, [reel.audioTrack, reel.musicTrack, reel.id, reel.thumbnailSrc, reel.duration]);
+  // Resolve authentic audio track (including audioConfig.track & exact catalog match) without fabricating licenses
+  const audioClassification = React.useMemo(
+    () => classifyReelAudioState(reel),
+    [reel]
+  );
+  const resolvedAudioTrack: AudioTrack | null = React.useMemo(
+    () => audioClassification.track || resolveReelAudioTrackMetadata(reel),
+    [audioClassification.track, reel]
+  );
+
+  const distinctAudioUrl = resolveDistinctExternalAudioUrl(
+    resolvedAudioTrack?.audio_url,
+    reel.videoSrc
+  );
+
+  useEffect(() => {
+    return attachSyncedAudioController({
+      videoEl: videoRef.current,
+      audioEl: soundtrackAudioRef.current,
+      isActive,
+      isMuted,
+      audioUrl: distinctAudioUrl,
+      audioConfig: reel.audioConfig || null,
+    });
+  }, [isActive, isMuted, distinctAudioUrl, reel.audioConfig]);
 
   useEffect(() => {
     if (isActive) {
@@ -245,19 +248,31 @@ export const ReelCard: React.FC<ReelCardProps> = ({
       {/* Video / Thumbnail Container */}
       <div className="absolute inset-0 bg-black cursor-pointer" onClick={togglePlay}>
         {reel.videoSrc ? (
-          <video
-            ref={videoRef}
-            src={reel.videoSrc}
-            poster={reel.thumbnailSrc}
-            playsInline
-            loop
-            muted={isMuted}
-            onPlaying={() => setIsPlaying(true)}
-            onPause={() => setIsPlaying(false)}
-            onWaiting={() => setIsPlaying(false)}
-            onEnded={() => setIsPlaying(false)}
-            className="w-full h-full object-cover"
-          />
+          <>
+            <video
+              ref={videoRef}
+              src={reel.videoSrc}
+              poster={reel.thumbnailSrc}
+              playsInline
+              loop
+              muted={isMuted}
+              onPlaying={() => setIsPlaying(true)}
+              onPause={() => setIsPlaying(false)}
+              onWaiting={() => setIsPlaying(false)}
+              onEnded={() => setIsPlaying(false)}
+              className="w-full h-full object-cover"
+            />
+            {distinctAudioUrl && (
+              <audio
+                ref={soundtrackAudioRef}
+                src={distinctAudioUrl}
+                loop
+                preload="auto"
+                muted={isMuted}
+                className="hidden"
+              />
+            )}
+          </>
         ) : (
           <img
             src={reel.thumbnailSrc || 'https://images.unsplash.com/photo-1508739773434-c26b3d09e071?w=600&auto=format&fit=crop&q=80'}
@@ -653,10 +668,21 @@ export const ReelCard: React.FC<ReelCardProps> = ({
                 type="button"
                 onClick={(e) => {
                   e.stopPropagation();
+                  if (!resolvedAudioTrack) {
+                    onShowToast?.(
+                      audioClassification.description ||
+                        'Audio uses original video sound; no separate catalog track metadata is attached.'
+                    );
+                    return;
+                  }
                   setIsLicenseModalOpen(true);
                 }}
                 className="flex items-center gap-1.5 text-[10px] text-purple-300 hover:text-teal-300 font-mono bg-black/40 hover:bg-black/70 px-2.5 py-1 rounded-full border border-purple-500/30 transition cursor-pointer shrink-0 max-w-[85%]"
-                title="View music license terms & rights certificate"
+                title={
+                  isVerifiedAudioTrack(resolvedAudioTrack)
+                    ? 'View verified music license terms & rights certificate'
+                    : 'View audio details'
+                }
               >
                 <Music
                   className={`w-3 h-3 shrink-0 ${
@@ -666,7 +692,9 @@ export const ReelCard: React.FC<ReelCardProps> = ({
                   }`}
                 />
                 <span className="truncate">{reel.musicTrack}</span>
-                <ShieldCheck className="w-3 h-3 text-teal-400 shrink-0 ml-0.5" />
+                {isVerifiedAudioTrack(resolvedAudioTrack) && (
+                  <ShieldCheck className="w-3 h-3 text-teal-400 shrink-0 ml-0.5" />
+                )}
               </button>
             )}
 

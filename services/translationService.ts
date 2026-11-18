@@ -9,6 +9,7 @@ import {
   saveCachedTranslation,
 } from '../utils/translationCache';
 import { getClientAuthToken } from './supabaseClient';
+import { getStoredApiKeys } from '../utils/apiKeysStore';
 
 export class TranslationServiceError extends Error {
   code: 'AI_KEY_REQUIRED' | 'NETWORK_ERROR' | 'TRANSLATION_FAILED';
@@ -46,47 +47,110 @@ export async function translatePostText(params: {
   }
 
   const token = await getClientAuthToken().catch(() => null);
+  const storedKeys = getStoredApiKeys();
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
+    Accept: 'application/json',
   };
   if (token) {
     headers.Authorization = `Bearer ${token}`;
   }
+  if (storedKeys.geminiApiKey) {
+    headers['x-gemini-api-key'] = storedKeys.geminiApiKey;
+  }
+
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => {
+    try {
+      controller.abort();
+    } catch {
+      // ignore
+    }
+  }, 22000);
 
   let response: Response;
   try {
     response = await fetch('/api/ai/translate', {
       method: 'POST',
+      credentials: 'same-origin',
       headers,
+      signal: controller.signal,
       body: JSON.stringify({
         postId: params.postId,
         text: cleanText,
         targetLanguage: params.targetLanguage,
         targetLanguageLabel: getTranslationLanguageLabel(params.targetLanguage),
+        ...(storedKeys.geminiApiKey ? { geminiApiKey: storedKeys.geminiApiKey } : {}),
       }),
     });
   } catch (err: any) {
+    const isAbort = err?.name === 'AbortError';
     throw new TranslationServiceError(
-      err?.message || 'Unable to reach translation server. Original post text is preserved.',
+      isAbort
+        ? 'Translation request timed out. Original post text is preserved.'
+        : err?.message || 'Unable to reach translation server. Original post text is preserved.',
       'NETWORK_ERROR'
+    );
+  } finally {
+    clearTimeout(timeoutId);
+  }
+
+  const contentType = (response.headers.get('content-type') || '').toLowerCase();
+  let rawBody = '';
+  try {
+    rawBody = await response.text();
+  } catch {
+    throw new TranslationServiceError(
+      `Unable to read translation server response (HTTP ${response.status}). Original text preserved.`,
+      'TRANSLATION_FAILED',
+      response.status
+    );
+  }
+
+  const trimmedBody = rawBody.trim();
+  const looksLikeHtml =
+    contentType.includes('text/html') ||
+    trimmedBody.startsWith('<!doctype') ||
+    trimmedBody.startsWith('<!DOCTYPE') ||
+    trimmedBody.startsWith('<html');
+
+  if (looksLikeHtml) {
+    throw new TranslationServiceError(
+      `Translation endpoint returned HTML instead of JSON (HTTP ${response.status}). Original text has been preserved.`,
+      'TRANSLATION_FAILED',
+      response.status
     );
   }
 
   let payload: any = null;
-  try {
-    payload = await response.json();
-  } catch {
-    payload = null;
+  if (trimmedBody) {
+    try {
+      payload = JSON.parse(trimmedBody);
+    } catch {
+      throw new TranslationServiceError(
+        `Translation service returned invalid JSON response (HTTP ${response.status}). Original text has been preserved.`,
+        'TRANSLATION_FAILED',
+        response.status
+      );
+    }
   }
 
-  if (!response.ok || !payload?.translatedText) {
+  const normalized = Array.isArray(payload) ? payload[0] : payload;
+  const translatedTextRaw =
+    typeof normalized?.translatedText === 'string'
+      ? normalized.translatedText
+      : typeof normalized?.translated_text === 'string'
+      ? normalized.translated_text
+      : '';
+
+  if (!response.ok || normalized?.success === false || !translatedTextRaw.trim()) {
     const code =
-      payload?.code === 'AI_KEY_REQUIRED' || response.status === 503
+      normalized?.code === 'AI_KEY_REQUIRED' || response.status === 503
         ? 'AI_KEY_REQUIRED'
         : 'TRANSLATION_FAILED';
     throw new TranslationServiceError(
-      payload?.error ||
-        `Translation request failed (${response.status}). Original text has been preserved.`,
+      normalized?.error ||
+        `Translation service did not return translated text (HTTP ${response.status}). Original text has been preserved.`,
       code,
       response.status
     );
@@ -96,9 +160,9 @@ export async function translatePostText(params: {
     postId: params.postId,
     contentHash,
     targetLanguage: params.targetLanguage,
-    translatedText: String(payload.translatedText),
-    detectedSourceLanguage: String(payload.detectedSourceLanguage || 'Detected'),
-    modelUsed: payload.modelUsed || 'gemini-4-hydrogen',
+    translatedText: translatedTextRaw,
+    detectedSourceLanguage: String(normalized?.detectedSourceLanguage || 'Detected'),
+    modelUsed: normalized?.modelUsed || 'gemini-4-hydrogen',
     createdAt: new Date().toISOString(),
   };
 

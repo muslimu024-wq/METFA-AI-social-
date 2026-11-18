@@ -30,11 +30,11 @@ import { CommunityPost, PostAudience, UserProfile, VideoSeriesMeta } from '../ty
 import { AudioTrack } from '../types/audio';
 import { normalizeDefaultPostAudience } from '../utils/privacyPolicy';
 import { getPages, getGroups } from '../utils/socialStore';
-import { recordTrackUsage } from '../utils/audioStore';
+import { recordTrackUsage, verifyTrackSelectionAllowed } from '../utils/audioStore';
 import { generateAICaptionAndHashtags, refineTextWithAI } from '../services/aiAssistantService';
 import { saveMediaItem, fileToBase64 } from '../utils/mediaStorage';
 import { compressImageDataUrl } from '../utils/storageUtils';
-import { uploadMediaItem } from '../services/storageService';
+import { uploadMediaItem, validateAndPrepareVideoFile } from '../services/storageService';
 import {
   fetchCreatorVideoSeries,
   createCreatorVideoSeries,
@@ -167,7 +167,15 @@ export const CreatePostModal: React.FC<CreatePostModalProps> = ({
       }
 
       if (initialAudioTrack) {
-        setSelectedAudioTrack(initialAudioTrack);
+        const rightsCheck = verifyTrackSelectionAllowed(initialAudioTrack);
+        if (rightsCheck.canSelect) {
+          setSelectedAudioTrack(initialAudioTrack);
+        } else {
+          setSelectedAudioTrack(null);
+          setValidationError(
+            rightsCheck.reason || 'This audio track cannot be reused under current licensing rules.'
+          );
+        }
       } else {
         setSelectedAudioTrack(null);
       }
@@ -266,9 +274,22 @@ export const CreatePostModal: React.FC<CreatePostModalProps> = ({
 
     for (let i = 0; i < files.length; i++) {
       const file = files[i];
-      const isVideo = file.type.startsWith('video') || /\.(mp4|webm|mov|m4v|mkv|avi|ogv)$/i.test(file.name);
+      const isVideo =
+        file.type.startsWith('video') ||
+        /\.(mp4|webm|mov|m4v|3gp|3g2|ogv|ogg|mkv|avi|wmv|flv)$/i.test(file.name);
 
       if (isVideo) {
+        let preparedFile = file;
+        let preparedMime = file.type || 'video/mp4';
+        try {
+          const prepared = await validateAndPrepareVideoFile(file);
+          preparedFile = prepared.file;
+          preparedMime = prepared.mimeType;
+        } catch (valErr: any) {
+          setValidationError(valErr?.message || 'Selected video format or size is not supported.');
+          break;
+        }
+
         setMediaType('video');
         setPostMode('media');
         setMediaGallery([]);
@@ -279,13 +300,13 @@ export const CreatePostModal: React.FC<CreatePostModalProps> = ({
             URL.revokeObjectURL(videoBlobUrlRef.current);
           } catch {}
         }
-        const blobUrl = URL.createObjectURL(file);
+        const blobUrl = URL.createObjectURL(preparedFile);
         videoBlobUrlRef.current = blobUrl;
-        selectedVideoFileRef.current = file;
+        selectedVideoFileRef.current = preparedFile;
         setSelectedVideoMetadata({
-          name: file.name,
-          size: file.size,
-          type: file.type || 'video/mp4',
+          name: preparedFile.name,
+          size: preparedFile.size,
+          type: preparedMime,
         });
         setVideoSrc(blobUrl);
         // Reset preview error states whenever a new video is selected
@@ -293,7 +314,7 @@ export const CreatePostModal: React.FC<CreatePostModalProps> = ({
         setVideoPreviewErrorDetails(null);
 
         if (!videoTitle.trim()) {
-          const cleanName = file.name.replace(/\.[^/.]+$/, '');
+          const cleanName = preparedFile.name.replace(/\.[^/.]+$/, '');
           setVideoTitle(cleanName);
         }
 
@@ -301,9 +322,9 @@ export const CreatePostModal: React.FC<CreatePostModalProps> = ({
           userId: userProfile.id,
           type: 'video',
           dataUrl: blobUrl,
-          name: file.name,
-          sizeBytes: file.size,
-          mimeType: file.type || 'video/mp4',
+          name: preparedFile.name,
+          sizeBytes: preparedFile.size,
+          mimeType: preparedMime,
         }).catch(() => {});
         break; // Only 1 video per post
       } else {
@@ -532,6 +553,13 @@ export const CreatePostModal: React.FC<CreatePostModalProps> = ({
     const primaryImage = mediaGallery.length > 0 ? mediaGallery[0] : undefined;
 
     if (selectedAudioTrack) {
+      const trackRights = verifyTrackSelectionAllowed(selectedAudioTrack);
+      if (!trackRights.canSelect) {
+        setValidationError(
+          trackRights.reason || 'Selected soundtrack is not eligible for reuse under current rights rules.'
+        );
+        return;
+      }
       recordTrackUsage(selectedAudioTrack.id);
     }
 
@@ -1670,8 +1698,19 @@ export const CreatePostModal: React.FC<CreatePostModalProps> = ({
       <AudioTrackPickerModal
         isOpen={isAudioPickerOpen}
         onClose={() => setIsAudioPickerOpen(false)}
-        onSelectTrack={(track) => setSelectedAudioTrack(track)}
+        onSelectTrack={(track) => {
+          const rightsCheck = verifyTrackSelectionAllowed(track);
+          if (!rightsCheck.canSelect) {
+            setValidationError(
+              rightsCheck.reason || 'Selected soundtrack is not eligible for reuse under current rights rules.'
+            );
+            return;
+          }
+          setValidationError(null);
+          setSelectedAudioTrack(track);
+        }}
         selectedTrackId={selectedAudioTrack?.id}
+        userProfile={userProfile}
       />
 
       {/* Audio License Certificate Modal */}

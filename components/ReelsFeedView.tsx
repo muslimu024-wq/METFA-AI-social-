@@ -96,7 +96,15 @@ import {
   isLegacyUnspecifiedAudience,
   normalizeAudience,
 } from '../utils/privacyPolicy';
-import { getAudioTracks } from '../utils/audioStore';
+import {
+  classifyReelAudioState,
+  ReelAudioClassification,
+  resolveReelAudioTrackMetadata,
+} from '../utils/audioStore';
+import {
+  attachSyncedAudioController,
+  resolveDistinctExternalAudioUrl,
+} from '../utils/syncedAudioPlayback';
 import { isContentOwner } from '../utils/communityStore';
 import { toggleSaveReel } from '../utils/bookmarkStore';
 import { executeNativeShare, SharePayload } from '../utils/shareUtils';
@@ -122,10 +130,23 @@ export type ReelsFeedFilterTab = 'forYou' | 'following' | 'discover' | 'trending
 
 export function isReelAudioActivelyPlaying(
   el: Pick<HTMLVideoElement, 'paused' | 'ended' | 'readyState' | 'muted' | 'volume'> | null | undefined,
-  viewMuted: boolean
+  viewMuted: boolean,
+  audioEl?: Pick<HTMLAudioElement, 'paused' | 'ended' | 'muted' | 'volume'> | null
 ): boolean {
   if (!el) return false;
-  return !el.paused && !el.ended && el.readyState >= 2 && !viewMuted && !el.muted && el.volume > 0;
+  const videoAudioActive =
+    !el.paused && !el.ended && el.readyState >= 2 && !viewMuted && !el.muted && el.volume > 0;
+  const soundtrackAudioActive = Boolean(
+    audioEl &&
+      !el.paused &&
+      !el.ended &&
+      !viewMuted &&
+      !audioEl.paused &&
+      !audioEl.ended &&
+      !audioEl.muted &&
+      audioEl.volume > 0
+  );
+  return videoAudioActive || soundtrackAudioActive;
 }
 
 interface ReelsFeedViewProps {
@@ -335,6 +356,10 @@ export const ReelsFeedView: React.FC<ReelsFeedViewProps> = ({
   } | null>(null);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [inspectingAudioTrack, setInspectingAudioTrack] = useState<AudioTrack | null>(null);
+  const [inspectingNativeAudioInfo, setInspectingNativeAudioInfo] = useState<{
+    reel: ReelHighlight;
+    classification: ReelAudioClassification;
+  } | null>(null);
   const [inspectingAnalyticsReel, setInspectingAnalyticsReel] = useState<ReelHighlight | null>(null);
   const [inspectingDetailsReel, setInspectingDetailsReel] = useState<ReelHighlight | null>(null);
 
@@ -398,6 +423,7 @@ export const ReelsFeedView: React.FC<ReelsFeedViewProps> = ({
   );
   const scrollContainerRef = useRef<HTMLDivElement | null>(null);
   const videoRefs = useRef<{ [id: string]: HTMLVideoElement | null }>({});
+  const audioRefs = useRef<{ [id: string]: HTMLAudioElement | null }>({});
 
   const activeVisibleReel = React.useMemo(
     () => displayedReels.find((r) => r.id === activeVisibleReelId) || null,
@@ -524,12 +550,23 @@ export const ReelsFeedView: React.FC<ReelsFeedViewProps> = ({
     setIsMuted((prev) => {
       const nextMuted = !prev;
       const el = videoRefs.current[reelId];
+      const aEl = audioRefs.current[reelId];
       if (el) {
         el.muted = nextMuted;
         if (!nextMuted) {
           el.play().catch((err) => {
             console.log('[Reels Sound] Explicit play attempt error:', err);
           });
+        }
+      }
+      if (aEl) {
+        aEl.muted = nextMuted;
+        if (nextMuted) {
+          try {
+            aEl.pause();
+          } catch {}
+        } else if (el && !el.paused && !el.ended) {
+          aEl.play().catch(() => {});
         }
       }
       return nextMuted;
@@ -560,6 +597,54 @@ export const ReelsFeedView: React.FC<ReelsFeedViewProps> = ({
     });
   }, [isMuted, displayedReels, activeVisibleReelId]);
 
+  // Synchronize external attached soundtrack <audio> element with active reel playback & mixer config
+  useEffect(() => {
+    Object.entries(audioRefs.current).forEach(([id, aEl]) => {
+      if (aEl && (!activeVisibleReel || id !== activeVisibleReel.id)) {
+        try {
+          aEl.pause();
+        } catch {}
+      }
+    });
+
+    if (!activeVisibleReel) {
+      return;
+    }
+
+    const vEl = videoRefs.current[activeVisibleReel.id] || null;
+    const aEl = audioRefs.current[activeVisibleReel.id] || null;
+    const resolvedActiveTrack = resolveReelAudioTrackMetadata(activeVisibleReel);
+    const distinctAudioUrl = resolveDistinctExternalAudioUrl(
+      resolvedActiveTrack?.audio_url,
+      activeVisibleReel.videoSrc
+    );
+
+    if (!distinctAudioUrl && vEl) {
+      const origVolPct =
+        activeVisibleReel.audioConfig?.originalVideoVolume ??
+        activeVisibleReel.audioConfig?.originalVolume ??
+        100;
+      try {
+        vEl.muted = isMuted || origVolPct <= 0;
+        vEl.volume = isMuted ? 0 : Math.max(0, Math.min(1, origVolPct / 100));
+      } catch {}
+    }
+
+    return attachSyncedAudioController({
+      videoEl: vEl,
+      audioEl: aEl,
+      isActive: true,
+      isMuted,
+      audioUrl: distinctAudioUrl,
+      audioConfig: activeVisibleReel.audioConfig || null,
+      onAudioPlayStateChange: () => {
+        setPlayingAudioReelId(
+          isReelAudioActivelyPlaying(vEl, isMuted, aEl) ? activeVisibleReel.id : null
+        );
+      },
+    });
+  }, [activeVisibleReel, isMuted, displayedReels]);
+
   // Synchronize Music action playback animation strictly with real HTML5 video/audio playback state
   useEffect(() => {
     if (!activeVisibleReelId) {
@@ -567,6 +652,7 @@ export const ReelsFeedView: React.FC<ReelsFeedViewProps> = ({
       return;
     }
     const el = videoRefs.current[activeVisibleReelId];
+    const audioEl = audioRefs.current[activeVisibleReelId];
     if (!el) {
       setPlayingAudioReelId(null);
       return;
@@ -574,7 +660,7 @@ export const ReelsFeedView: React.FC<ReelsFeedViewProps> = ({
 
     const syncMusicPlaybackState = () => {
       setPlayingAudioReelId(
-        isReelAudioActivelyPlaying(el, isMuted) ? activeVisibleReelId : null
+        isReelAudioActivelyPlaying(el, isMuted, audioEl) ? activeVisibleReelId : null
       );
     };
 
@@ -593,9 +679,15 @@ export const ReelsFeedView: React.FC<ReelsFeedViewProps> = ({
       'volumechange',
     ];
     events.forEach((evt) => el.addEventListener(evt, syncMusicPlaybackState));
+    if (audioEl) {
+      events.forEach((evt) => audioEl.addEventListener(evt, syncMusicPlaybackState));
+    }
 
     return () => {
       events.forEach((evt) => el.removeEventListener(evt, syncMusicPlaybackState));
+      if (audioEl) {
+        events.forEach((evt) => audioEl.removeEventListener(evt, syncMusicPlaybackState));
+      }
     };
   }, [activeVisibleReelId, isMuted, displayedReels]);
 
@@ -629,7 +721,7 @@ export const ReelsFeedView: React.FC<ReelsFeedViewProps> = ({
     };
   }, [activeVisibleReelId, displayedReels, userProfile?.id]);
 
-  // Clean up, restore 1X speed, and pause videos when unmounting Reels feed to prevent audio leaking
+  // Clean up, restore 1X speed, and pause videos/audio when unmounting Reels feed to prevent audio leaking
   useEffect(() => {
     return () => {
       Object.values(videoRefs.current).forEach((el) => {
@@ -637,6 +729,13 @@ export const ReelsFeedView: React.FC<ReelsFeedViewProps> = ({
           try {
             el.playbackRate = 1;
             el.pause();
+          } catch {}
+        }
+      });
+      Object.values(audioRefs.current).forEach((aEl) => {
+        if (aEl) {
+          try {
+            aEl.pause();
           } catch {}
         }
       });
@@ -699,7 +798,20 @@ export const ReelsFeedView: React.FC<ReelsFeedViewProps> = ({
     return () => window.removeEventListener('click', handleGlobalClick);
   }, []);
 
-  const handleExitReelsTo = (targetTab: string) => {
+  const resolveAuthenticAudioTrack = (reel: ReelHighlight): AudioTrack | null => {
+    return resolveReelAudioTrackMetadata(reel);
+  };
+
+  const handleInspectReelAudio = (reel: ReelHighlight) => {
+    const classification = classifyReelAudioState(reel);
+    if (classification.track) {
+      setInspectingAudioTrack(classification.track);
+      return;
+    }
+    setInspectingNativeAudioInfo({ reel, classification });
+  };
+
+  const pauseAllMediaElements = () => {
     Object.values(videoRefs.current).forEach((el) => {
       if (el) {
         try {
@@ -708,6 +820,17 @@ export const ReelsFeedView: React.FC<ReelsFeedViewProps> = ({
         } catch {}
       }
     });
+    Object.values(audioRefs.current).forEach((aEl) => {
+      if (aEl) {
+        try {
+          aEl.pause();
+        } catch {}
+      }
+    });
+  };
+
+  const handleExitReelsTo = (targetTab: string) => {
+    pauseAllMediaElements();
     if (onClearTargetReel) onClearTargetReel();
     if (onNavigateTab) {
       onNavigateTab(targetTab);
@@ -716,14 +839,7 @@ export const ReelsFeedView: React.FC<ReelsFeedViewProps> = ({
 
   const handleCreatorProfileClick = (authorId: string) => {
     if (!authorId) return;
-    Object.values(videoRefs.current).forEach((el) => {
-      if (el) {
-        try {
-          el.playbackRate = 1;
-          el.pause();
-        } catch {}
-      }
-    });
+    pauseAllMediaElements();
     if (onViewProfile) {
       onViewProfile(authorId);
     } else if (typeof window !== 'undefined') {
@@ -1325,6 +1441,11 @@ export const ReelsFeedView: React.FC<ReelsFeedViewProps> = ({
             const isActiveSlide = reel.id === activeVisibleReelId;
             const isMusicPlayingForReel = isActiveSlide && playingAudioReelId === reel.id && !isMuted;
             const showReadinessOverlay = isActiveSlide && readinessSnapshot.context.reelId === reel.id;
+            const resolvedSlideTrack = resolveAuthenticAudioTrack(reel);
+            const distinctAudioUrl = resolveDistinctExternalAudioUrl(
+              resolvedSlideTrack?.audio_url,
+              reel.videoSrc
+            );
 
             return (
               <div
@@ -1350,6 +1471,20 @@ export const ReelsFeedView: React.FC<ReelsFeedViewProps> = ({
                   preload="metadata"
                   className="absolute inset-0 w-full h-full object-cover bg-black"
                 />
+
+                {/* Synced external soundtrack player when Reel uses a distinct audio track */}
+                {distinctAudioUrl && (
+                  <audio
+                    ref={(el) => {
+                      audioRefs.current[reel.id] = el;
+                    }}
+                    src={distinctAudioUrl}
+                    loop
+                    preload="auto"
+                    muted={isMuted}
+                    className="hidden"
+                  />
+                )}
 
                 {/* Edge-legibility dark gradients (never blocks touch) */}
                 <div className="absolute inset-0 bg-gradient-to-b from-black/45 via-transparent to-black/75 pointer-events-none" />
@@ -1809,39 +1944,9 @@ export const ReelsFeedView: React.FC<ReelsFeedViewProps> = ({
                       <button
                         type="button"
                         data-testid={`reel-music-link-${reel.id}`}
-                        onClick={() => {
-                          const trackString = reel.musicTrack || 'Original Sound';
-                          const allTracks = getAudioTracks();
-                          const match = allTracks.find(
-                            (t) =>
-                              trackString.toLowerCase().includes(t.title.toLowerCase()) ||
-                              t.title.toLowerCase().includes(trackString.toLowerCase())
-                          );
-                          setInspectingAudioTrack(
-                            match ||
-                              reel.audioTrack || {
-                                id: `track_${reel.id}`,
-                                title: trackString.split('•')[0]?.trim() || trackString,
-                                artist: trackString.split('•')[1]?.trim() || 'Metfa Sound Studio',
-                                audio_url: 'https://actions.google.com/sounds/v1/science_fiction/scifi_engine_hum.ogg',
-                                cover_url: reel.thumbnailSrc || 'https://images.unsplash.com/photo-1508700115892-45ecd05ae2ad?w=400&q=80',
-                                duration: reel.duration || 30,
-                                genre: 'Electronic',
-                                mood: 'Energetic',
-                                track_type: 'royalty_free',
-                                license_type: 'Royalty-Free Commercial',
-                                license_source: 'Metfa Audio Catalog',
-                                attribution_required: false,
-                                commercial_use_allowed: true,
-                                territories: ['Worldwide'],
-                                license_start: '2025-01-01T00:00:00.000Z',
-                                license_expiry: null,
-                                status: 'active',
-                              }
-                          );
-                        }}
+                        onClick={() => handleInspectReelAudio(reel)}
                         className="flex items-center gap-1.5 text-[11px] text-white/85 hover:text-teal-300 font-medium transition cursor-pointer max-w-full truncate drop-shadow"
-                        title="View soundtrack & use music"
+                        title="View soundtrack & audio details"
                       >
                         <Music className={`w-3.5 h-3.5 shrink-0 ${isMusicPlayingForReel ? 'text-teal-300' : 'text-teal-400'}`} />
                         <span className="truncate">{reel.musicTrack}</span>
@@ -1949,37 +2054,7 @@ export const ReelsFeedView: React.FC<ReelsFeedViewProps> = ({
                       type="button"
                       data-testid={`reel-music-action-btn-${reel.id}`}
                       data-music-playing={isMusicPlayingForReel ? 'true' : 'false'}
-                      onClick={() => {
-                        const trackString = reel.musicTrack || 'Original Sound';
-                        const allTracks = getAudioTracks();
-                        const match = allTracks.find(
-                          (t) =>
-                            trackString.toLowerCase().includes(t.title.toLowerCase()) ||
-                            t.title.toLowerCase().includes(trackString.toLowerCase())
-                        );
-                        setInspectingAudioTrack(
-                          match ||
-                            reel.audioTrack || {
-                              id: `track_${reel.id}`,
-                              title: trackString.split('•')[0]?.trim() || trackString,
-                              artist: trackString.split('•')[1]?.trim() || `${reel.author.name}`,
-                              audio_url: 'https://actions.google.com/sounds/v1/science_fiction/scifi_engine_hum.ogg',
-                              cover_url: reel.thumbnailSrc || 'https://images.unsplash.com/photo-1508700115892-45ecd05ae2ad?w=400&q=80',
-                              duration: reel.duration || 30,
-                              genre: 'Electronic',
-                              mood: 'Energetic',
-                              track_type: reel.musicTrack ? 'royalty_free' : 'original',
-                              license_type: reel.musicTrack ? 'Royalty-Free Commercial' : 'Original Creator Audio',
-                              license_source: 'Metfa Audio Catalog',
-                              attribution_required: false,
-                              commercial_use_allowed: true,
-                              territories: ['Worldwide'],
-                              license_start: '2025-01-01T00:00:00.000Z',
-                              license_expiry: null,
-                              status: 'active',
-                            }
-                        );
-                      }}
+                      onClick={() => handleInspectReelAudio(reel)}
                       className="flex flex-col items-center gap-0.5 text-white group cursor-pointer"
                       title={
                         isMusicPlayingForReel
@@ -2274,6 +2349,68 @@ export const ReelsFeedView: React.FC<ReelsFeedViewProps> = ({
             onSelectTrack={onUseMusic}
           />
         </Suspense>
+      )}
+
+      {/* Honest Native Video Audio / Missing Track Info Modal (never fabricates IDs or verified status) */}
+      {inspectingNativeAudioInfo && (
+        <div
+          data-testid="reel-native-audio-modal"
+          onClick={() => setInspectingNativeAudioInfo(null)}
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md animate-fadeIn"
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="bg-gray-900 border border-white/15 rounded-3xl max-w-md w-full p-5 shadow-2xl space-y-4 text-xs"
+          >
+            <div className="flex items-center justify-between border-b border-gray-800 pb-3">
+              <div className="flex items-center gap-2.5 min-w-0">
+                <div className="p-2 rounded-xl bg-gray-800 border border-white/10 text-teal-300 shrink-0">
+                  <Music className="w-4 h-4" />
+                </div>
+                <div className="min-w-0">
+                  <h3 className="text-sm font-bold text-white truncate">
+                    {inspectingNativeAudioInfo.classification.status === 'native_video_audio'
+                      ? 'Original Video Audio'
+                      : 'Audio Metadata Unavailable'}
+                  </h3>
+                  <p className="text-[11px] text-gray-400 truncate">
+                    {inspectingNativeAudioInfo.reel.author?.name || 'Creator'}
+                    {inspectingNativeAudioInfo.reel.author?.username
+                      ? ` (@${inspectingNativeAudioInfo.reel.author.username.replace(/^@/, '')})`
+                      : ''}
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setInspectingNativeAudioInfo(null)}
+                className="p-1.5 rounded-full bg-gray-800 text-gray-400 hover:text-white transition cursor-pointer"
+                aria-label="Close audio info"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="p-3.5 rounded-2xl bg-gray-950/80 border border-gray-800 space-y-1.5">
+              <p className="text-xs font-semibold text-gray-200">
+                {inspectingNativeAudioInfo.classification.label}
+              </p>
+              <p className="text-[11px] text-gray-400 leading-relaxed">
+                {inspectingNativeAudioInfo.classification.description}
+              </p>
+            </div>
+
+            <div className="flex justify-end">
+              <button
+                type="button"
+                onClick={() => setInspectingNativeAudioInfo(null)}
+                className="px-4 py-2 rounded-xl bg-gray-800 hover:bg-gray-700 text-white font-bold transition cursor-pointer"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
       )}
 
       {/* Unified Reel Analytics Modal (Owner Only) */}

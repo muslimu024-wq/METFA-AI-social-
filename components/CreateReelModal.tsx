@@ -25,7 +25,15 @@ import {
 import { PostAudience, ReelHighlight, UserProfile, VideoSeriesMeta } from '../types/community';
 import { AudioTrack } from '../types/audio';
 import { normalizeDefaultPostAudience } from '../utils/privacyPolicy';
-import { recordTrackUsage, createOriginalSoundRecord } from '../utils/audioStore';
+import {
+  recordTrackUsage,
+  createOriginalSoundRecord,
+  verifyTrackSelectionAllowed,
+} from '../utils/audioStore';
+import {
+  attachSyncedAudioController,
+  resolveDistinctExternalAudioUrl,
+} from '../utils/syncedAudioPlayback';
 import { compressImageDataUrl } from '../utils/storageUtils';
 import { createPersistentReel } from '../services/reelService';
 import {
@@ -134,6 +142,8 @@ export const CreateReelModal: React.FC<CreateReelModalProps> = ({
   const activeUploadIdRef = useRef<number>(0);
   const blobUrlRef = useRef<string | null>(null);
   const previewAudioRef = useRef<HTMLAudioElement | null>(null);
+  const previewVideoRef = useRef<HTMLVideoElement | null>(null);
+  const syncedPreviewAudioRef = useRef<HTMLAudioElement | null>(null);
 
   const revokePreviewBlobUrl = useCallback(() => {
     if (blobUrlRef.current) {
@@ -179,6 +189,15 @@ export const CreateReelModal: React.FC<CreateReelModalProps> = ({
     wasOpenRef.current = isOpen;
 
     if (justOpened) {
+      setTitle('');
+      setCaption('');
+      setPromptUsed('');
+      setMusicVolume(100);
+      setOriginalAudioVolume(100);
+      setAudioStartTime(0);
+      setFadeIn(false);
+      setFadeOut(false);
+      setShowAudioMixer(false);
       setVisibility(normalizeDefaultPostAudience(userProfile?.defaultPostAudience));
       setUploadError(null);
       setPublishError(null);
@@ -195,7 +214,17 @@ export const CreateReelModal: React.FC<CreateReelModalProps> = ({
       setSeriesTotalParts('');
 
       if (initialAudioTrack) {
-        setSelectedAudioTrack(initialAudioTrack);
+        const rightsCheck = verifyTrackSelectionAllowed(initialAudioTrack);
+        if (rightsCheck.canSelect) {
+          setSelectedAudioTrack(initialAudioTrack);
+        } else {
+          setSelectedAudioTrack(null);
+          setPublishError(
+            rightsCheck.reason || 'This audio track cannot be reused under current licensing rules.'
+          );
+        }
+      } else {
+        setSelectedAudioTrack(null);
       }
 
       if (initialVideoSrc) {
@@ -244,9 +273,56 @@ export const CreateReelModal: React.FC<CreateReelModalProps> = ({
   // Sync canonical soundtrack if initialAudioTrack arrives while open without wiping selected video
   useEffect(() => {
     if (isOpen && initialAudioTrack) {
-      setSelectedAudioTrack(initialAudioTrack);
+      const rightsCheck = verifyTrackSelectionAllowed(initialAudioTrack);
+      if (rightsCheck.canSelect) {
+        setSelectedAudioTrack(initialAudioTrack);
+      } else {
+        setSelectedAudioTrack(null);
+        setPublishError(
+          rightsCheck.reason || 'This audio track cannot be reused under current licensing rules.'
+        );
+      }
     }
   }, [isOpen, initialAudioTrack]);
+
+  const distinctPreviewAudioUrl = resolveDistinctExternalAudioUrl(
+    selectedAudioTrack?.audio_url,
+    videoSrc
+  );
+
+  // Sync attached soundtrack playback with the preview video player & mixer controls
+  useEffect(() => {
+    if (!isOpen || !videoSrc) return;
+    const audioConfig = selectedAudioTrack
+      ? {
+          track: selectedAudioTrack,
+          volume: musicVolume,
+          originalVideoVolume: originalAudioVolume,
+          startTime: audioStartTime,
+          fadeIn,
+          fadeOut,
+        }
+      : undefined;
+    return attachSyncedAudioController({
+      videoEl: previewVideoRef.current,
+      audioEl: syncedPreviewAudioRef.current,
+      isActive: isOpen && !isAudioPreviewPlaying,
+      isMuted: false,
+      audioUrl: distinctPreviewAudioUrl,
+      audioConfig,
+    });
+  }, [
+    isOpen,
+    videoSrc,
+    distinctPreviewAudioUrl,
+    selectedAudioTrack,
+    musicVolume,
+    originalAudioVolume,
+    audioStartTime,
+    fadeIn,
+    fadeOut,
+    isAudioPreviewPlaying,
+  ]);
 
   // Unmount cleanup
   useEffect(() => {
@@ -430,6 +506,11 @@ export const CreateReelModal: React.FC<CreateReelModalProps> = ({
       stopAudioPreview();
       return;
     }
+    if (previewVideoRef.current && !previewVideoRef.current.paused) {
+      try {
+        previewVideoRef.current.pause();
+      } catch {}
+    }
     stopAudioPreview();
     try {
       const audio = new Audio(selectedAudioTrack.audio_url);
@@ -488,6 +569,16 @@ export const CreateReelModal: React.FC<CreateReelModalProps> = ({
       return;
     }
 
+    if (selectedAudioTrack) {
+      const trackRights = verifyTrackSelectionAllowed(selectedAudioTrack);
+      if (!trackRights.canSelect) {
+        setPublishError(
+          trackRights.reason || 'Selected soundtrack is not eligible for reuse under current rights rules.'
+        );
+        return;
+      }
+    }
+
     const controller = new AbortController();
     publishAbortRef.current = controller;
     setIsPublishing(true);
@@ -524,7 +615,18 @@ export const CreateReelModal: React.FC<CreateReelModalProps> = ({
 
       const musicTrackName = resolvedTrack
         ? `${resolvedTrack.title} • ${resolvedTrack.artist}`
-        : `Original sound — @${userProfile.username.replace('@', '')}`;
+        : undefined;
+
+      const resolvedAudioConfig = resolvedTrack
+        ? {
+            track: resolvedTrack,
+            volume: musicVolume,
+            originalVideoVolume: originalAudioVolume,
+            startTime: audioStartTime,
+            fadeIn,
+            fadeOut,
+          }
+        : undefined;
 
       // Optional explicit creator-linked Video Series metadata
       let seriesMeta: VideoSeriesMeta | undefined;
@@ -581,6 +683,7 @@ export const CreateReelModal: React.FC<CreateReelModalProps> = ({
           duration: finalDuration,
           musicTrack: musicTrackName,
           audioTrack: resolvedTrack || undefined,
+          audioConfig: resolvedAudioConfig,
           visibility,
           series: seriesMeta,
           author: {
@@ -790,17 +893,26 @@ export const CreateReelModal: React.FC<CreateReelModalProps> = ({
               {videoSrc ? (
                 <div className="mt-2.5 rounded-2xl overflow-hidden border border-gray-800 bg-black aspect-video flex items-center justify-center relative">
                   <video
+                    ref={previewVideoRef}
                     src={videoSrc}
                     controls
                     playsInline
                     preload="metadata"
                     onLoadedMetadata={handleVideoLoadedMetadata}
+                    onPlay={stopAudioPreview}
                     onError={() =>
                       setVideoPreviewNotice(
                         'Preview codec is limited on this browser, but the selected video file can still upload.'
                       )
                     }
                     className="w-full h-full object-cover"
+                  />
+                  <audio
+                    ref={syncedPreviewAudioRef}
+                    src={distinctPreviewAudioUrl || undefined}
+                    loop
+                    preload="auto"
+                    className="hidden"
                   />
                 </div>
               ) : (
@@ -909,17 +1021,30 @@ export const CreateReelModal: React.FC<CreateReelModalProps> = ({
                       </div>
                     </div>
 
-                    <button
-                      type="button"
-                      onClick={() => {
-                        stopAudioPreview();
-                        setSelectedAudioTrack(null);
-                      }}
-                      className="p-1.5 rounded-lg bg-gray-800 text-gray-400 hover:text-rose-400 hover:bg-rose-950/30 transition shrink-0 cursor-pointer"
-                      title="Remove soundtrack"
-                    >
-                      <Trash2 className="w-3.5 h-3.5" />
-                    </button>
+                    <div className="flex items-center gap-1.5 shrink-0">
+                      <button
+                        type="button"
+                        data-testid="create-reel-replace-sound-btn"
+                        onClick={() => setIsAudioPickerOpen(true)}
+                        className="px-2 py-1 rounded-lg bg-gray-800 hover:bg-gray-700 text-teal-300 text-[10px] font-bold transition cursor-pointer"
+                        title="Replace soundtrack"
+                      >
+                        Replace
+                      </button>
+                      <button
+                        type="button"
+                        data-testid="create-reel-remove-sound-btn"
+                        onClick={() => {
+                          stopAudioPreview();
+                          setSelectedAudioTrack(null);
+                        }}
+                        className="p-1.5 rounded-lg bg-gray-800 text-gray-400 hover:text-rose-400 hover:bg-rose-950/30 transition cursor-pointer"
+                        title="Remove soundtrack"
+                        aria-label="Remove soundtrack"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
                   </div>
 
                   {/* Audio Mixer Controls */}
@@ -1281,6 +1406,14 @@ export const CreateReelModal: React.FC<CreateReelModalProps> = ({
         isOpen={isAudioPickerOpen}
         onClose={() => setIsAudioPickerOpen(false)}
         onSelectTrack={(track) => {
+          const rightsCheck = verifyTrackSelectionAllowed(track);
+          if (!rightsCheck.canSelect) {
+            setPublishError(
+              rightsCheck.reason || 'Selected soundtrack is not eligible for reuse under current rights rules.'
+            );
+            return;
+          }
+          setPublishError(null);
           stopAudioPreview();
           setSelectedAudioTrack(track);
         }}

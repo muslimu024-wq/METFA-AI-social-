@@ -1,4 +1,4 @@
-import { AudioTrack, CopyrightReport, AudioGenre, AudioMood, SoundEffectCategory } from '../types/audio';
+import { AudioTrack, CopyrightReport, AudioGenre, AudioMood, ReelAudioConfig, SoundEffectCategory } from '../types/audio';
 import { GUEST_AVATAR } from '../services/authService';
 
 const STORAGE_KEY = 'metfa_audio_tracks_catalog_v2';
@@ -552,13 +552,38 @@ export const searchAudioTracks = (params: {
 };
 
 /**
- * Check if a track can be selected for creating a NEW Reel.
- * Expired, revoked, or inactive tracks are strictly blocked from selection.
+ * Check if a track can be selected/reused for creating or attaching to a Reel/Post.
+ * Tracks without playable URL, required rights/creator metadata, active status,
+ * or currently active license window are strictly blocked.
  */
-export const verifyTrackSelectionAllowed = (track: AudioTrack): {
+export const verifyTrackSelectionAllowed = (track?: AudioTrack | null): {
   canSelect: boolean;
   reason?: string;
 } => {
+  if (!track || typeof track !== 'object' || !track.id) {
+    return {
+      canSelect: false,
+      reason: 'Audio track metadata is missing or invalid.',
+    };
+  }
+  if (!track.audio_url || !String(track.audio_url).trim()) {
+    return {
+      canSelect: false,
+      reason: 'This track has no valid playable audio file and cannot be reused.',
+    };
+  }
+  if (!track.artist?.trim() || !track.license_type?.trim() || !track.license_source?.trim()) {
+    return {
+      canSelect: false,
+      reason: 'Creator or licensing attribution metadata is incomplete; track reuse is blocked.',
+    };
+  }
+  if (track.active_status === false) {
+    return {
+      canSelect: false,
+      reason: 'This audio track has been deactivated by its rights holder or administrator.',
+    };
+  }
   if (track.status === 'expired') {
     return {
       canSelect: false,
@@ -577,9 +602,31 @@ export const verifyTrackSelectionAllowed = (track: AudioTrack): {
       reason: 'This track has restricted territorial or platform clearance.',
     };
   }
+  if (track.status === 'pending') {
+    return {
+      canSelect: false,
+      reason: 'This audio track is pending rights clearance and cannot be reused yet.',
+    };
+  }
+  if (track.status && track.status !== 'active') {
+    return {
+      canSelect: false,
+      reason: `Track status "${track.status}" is not eligible for reuse.`,
+    };
+  }
+  const now = new Date();
+  if (track.license_start) {
+    const start = new Date(track.license_start);
+    if (!isNaN(start.getTime()) && start > now) {
+      return {
+        canSelect: false,
+        reason: `This audio license is not active until ${start.toLocaleDateString()}.`,
+      };
+    }
+  }
   if (track.license_expiry) {
     const expiry = new Date(track.license_expiry);
-    if (!isNaN(expiry.getTime()) && expiry <= new Date()) {
+    if (!isNaN(expiry.getTime()) && expiry <= now) {
       return {
         canSelect: false,
         reason: `License expired on ${expiry.toLocaleDateString()}. Cannot be selected for new Reels.`,
@@ -588,6 +635,58 @@ export const verifyTrackSelectionAllowed = (track: AudioTrack): {
   }
 
   return { canSelect: true };
+};
+
+/**
+ * Packs optional mixer settings cleanly alongside AudioTrack inside JSONB `audio_track` columns
+ * without requiring schema migrations or mutating standalone AudioTrack instances.
+ */
+export const packAudioTrackWithConfig = (
+  audioTrack?: AudioTrack | null,
+  audioConfig?: ReelAudioConfig | null
+): Record<string, any> | null => {
+  if (!audioTrack) return null;
+  const cleanTrack: Record<string, any> = { ...audioTrack };
+  delete cleanTrack._mixerConfig;
+  if (audioConfig) {
+    cleanTrack._mixerConfig = {
+      volume: Number.isFinite(audioConfig.volume) ? audioConfig.volume : 100,
+      originalVideoVolume: Number.isFinite(audioConfig.originalVideoVolume)
+        ? audioConfig.originalVideoVolume
+        : 100,
+      startTime: Number.isFinite(audioConfig.startTime) ? audioConfig.startTime : 0,
+      fadeIn: Boolean(audioConfig.fadeIn),
+      fadeOut: Boolean(audioConfig.fadeOut),
+    };
+  }
+  return cleanTrack;
+};
+
+/**
+ * Unpacks stored Supabase/JSON audio_track payloads into clean AudioTrack + optional ReelAudioConfig.
+ */
+export const unpackStoredAudioTrack = (
+  raw: any
+): { audioTrack?: AudioTrack; audioConfig?: ReelAudioConfig } => {
+  if (!raw || typeof raw !== 'object') return {};
+  const { _mixerConfig, ...rest } = raw as Record<string, any>;
+  if (!rest.id || !rest.title) return {};
+  const cleanTrack = rest as AudioTrack;
+  const audioConfig: ReelAudioConfig | undefined =
+    _mixerConfig && typeof _mixerConfig === 'object'
+      ? {
+          track: cleanTrack,
+          volume: typeof _mixerConfig.volume === 'number' ? _mixerConfig.volume : 100,
+          originalVideoVolume:
+            typeof _mixerConfig.originalVideoVolume === 'number'
+              ? _mixerConfig.originalVideoVolume
+              : 100,
+          startTime: typeof _mixerConfig.startTime === 'number' ? _mixerConfig.startTime : 0,
+          fadeIn: Boolean(_mixerConfig.fadeIn),
+          fadeOut: Boolean(_mixerConfig.fadeOut),
+        }
+      : undefined;
+  return { audioTrack: cleanTrack, audioConfig };
 };
 
 /**
@@ -612,7 +711,8 @@ export const addAudioTrack = (trackData: Omit<AudioTrack, 'id'> & { id?: string 
 };
 
 /**
- * Automatically create an Original Sound record when a user uploads/creates a Reel with original audio
+ * Automatically create an Original Sound record when a user uploads/creates a Reel with genuine original media.
+ * Returns null if no real audioUrl/videoSrc exists (never substitutes a sample OGG file or claims copyright-free).
  */
 export const createOriginalSoundRecord = (params: {
   userId: string;
@@ -623,35 +723,42 @@ export const createOriginalSoundRecord = (params: {
   videoSrc?: string;
   title?: string;
   duration?: number;
-}): AudioTrack => {
+}): AudioTrack | null => {
+  const audioSource = (params.audioUrl || params.videoSrc || '').trim();
+  if (!audioSource) {
+    return null;
+  }
+
   const tracks = getAudioTracks();
-  
+
   // Check if original sound for this reel already exists
   const existing = tracks.find((t) => t.reel_id === params.reelId && t.track_type === 'original');
   if (existing) return existing;
 
-  const originalSoundTitle = params.title || `Original sound — @${params.username.replace('@', '')}`;
-  const audioSource = params.audioUrl || params.videoSrc || 'https://actions.google.com/sounds/v1/science_fiction/scifi_engine_hum.ogg';
+  const cleanHandle = (params.username || 'creator').replace(/^@/, '') || 'creator';
+  const originalSoundTitle = params.title || `Original sound — @${cleanHandle}`;
 
   const newOriginalSound: AudioTrack = {
     id: `orig_sound_${params.reelId}_${Date.now()}`,
     title: originalSoundTitle,
-    artist: `@${params.username.replace('@', '')}`,
-    creator_username: params.username.replace('@', ''),
+    artist: `@${cleanHandle}`,
+    creator_username: cleanHandle,
     creator_avatar: params.userAvatar,
     user_id: params.userId,
     reel_id: params.reelId,
     audio_url: audioSource,
     cover_url: params.userAvatar || GUEST_AVATAR,
     duration: params.duration || 15,
-    genre: 'Sound Effects',
-    mood: 'Energetic',
+    genre: 'Original Audio',
+    mood: 'Authentic',
     track_type: 'original',
-    license_type: 'Metfa Creator Original Sound',
-    license_source: 'Metfa Reels Original Audio',
+    license_type: 'Creator Original Sound (Attribution Required)',
+    license_source: `Uploaded by @${cleanHandle} on Metfa Social`,
     attribution_required: true,
-    attribution_requirements: `Original audio recorded by @${params.username.replace('@', '')}`,
-    commercial_use_allowed: true,
+    attribution_requirements: `Original creator audio uploaded by @${cleanHandle}. Not verified royalty-free or cleared for external commercial redistribution.`,
+    commercial_use_allowed: false,
+    commercial_usage_allowed: false,
+    monetization_rules: 'User-uploaded original audio; creator attribution required, non-commercial reuse only.',
     territories: ['Worldwide'],
     license_start: new Date().toISOString(),
     license_expiry: null,
@@ -659,7 +766,7 @@ export const createOriginalSoundRecord = (params: {
     active_status: true,
     playsCount: 1,
     useCount: 1,
-    tags: ['original', 'reel', params.username.replace('@', '')],
+    tags: ['original', 'reel', cleanHandle],
     waveform: Array.from({ length: 25 }, () => Math.floor(Math.random() * 70) + 30),
     created_at: new Date().toISOString(),
   };
@@ -885,3 +992,152 @@ export const verifyTrackLicense = (track: AudioTrack): {
     statusBadge,
   };
 };
+
+/**
+ * Returns true strictly when an AudioTrack represents an independently licensed/royalty-free/SFX
+ * catalog track with complete attribution, active status, valid license window, and playable stream.
+ * Creator-uploaded original sounds (`track_type === 'original'`) return false because their rights
+ * are user-declared rather than independently verified.
+ */
+export const isVerifiedAudioTrack = (track?: AudioTrack | null): boolean => {
+  if (!track || typeof track !== 'object') return false;
+  if (track.track_type === 'original') return false;
+  if (!track.id?.trim() || !track.title?.trim() || !track.artist?.trim()) return false;
+  if (!track.audio_url?.trim()) return false;
+  if (!track.license_type?.trim() || !track.license_source?.trim()) return false;
+  if (track.active_status === false) return false;
+  return verifyTrackLicense(track).isValid;
+};
+
+/**
+ * Resolves real, non-fabricated AudioTrack metadata for a Reel or video post across:
+ * 1) attached `audioTrack` or `audioConfig.track` (enriching from catalog only on exact `id` match),
+ * 2) catalog lookup strictly matching explicit `musicTrack` label or track `id`.
+ * Returns null if no genuine AudioTrack metadata is attached (never invents IDs, artists, or licenses).
+ */
+export const resolveReelAudioTrackMetadata = (
+  reel: {
+    audioTrack?: AudioTrack | null;
+    audioConfig?: ReelAudioConfig | null;
+    musicTrack?: string | null;
+  },
+  catalogTracks?: AudioTrack[]
+): AudioTrack | null => {
+  const catalog = catalogTracks || getAudioTracks();
+  const embeddedTrack = reel.audioTrack || reel.audioConfig?.track || null;
+
+  if (embeddedTrack && typeof embeddedTrack === 'object' && embeddedTrack.id && embeddedTrack.title) {
+    const catalogMatch = catalog.find((t) => t.id === embeddedTrack.id);
+    if (catalogMatch) {
+      return {
+        ...catalogMatch,
+        ...embeddedTrack,
+        audio_url: embeddedTrack.audio_url?.trim() ? embeddedTrack.audio_url : catalogMatch.audio_url,
+        cover_url: embeddedTrack.cover_url?.trim() ? embeddedTrack.cover_url : catalogMatch.cover_url,
+      };
+    }
+    return embeddedTrack;
+  }
+
+  const label = (reel.musicTrack || '').trim();
+  if (!label) return null;
+  const normalizedLabel = label.toLowerCase();
+
+  const match = catalog.find((t) => {
+    if (embeddedTrack?.id && t.id === embeddedTrack.id) return true;
+    const title = (t.title || '').trim().toLowerCase();
+    const artist = (t.artist || '').trim().toLowerCase();
+    if (!title) return false;
+    const formatted = artist ? `${title} • ${artist}` : title;
+    return (
+      normalizedLabel === title ||
+      normalizedLabel === formatted ||
+      normalizedLabel.startsWith(`${title} •`)
+    );
+  });
+
+  return match || embeddedTrack || null;
+};
+
+export type ReelAudioClassificationStatus =
+  | 'verified_track'
+  | 'original_track'
+  | 'native_video_audio'
+  | 'restricted_track'
+  | 'unavailable_metadata';
+
+export interface ReelAudioClassification {
+  status: ReelAudioClassificationStatus;
+  track: AudioTrack | null;
+  isVerified: boolean;
+  label: string;
+  description: string;
+}
+
+/**
+ * Classifies a Reel's audio source honestly without assuming every video has a verified soundtrack.
+ */
+export const classifyReelAudioState = (
+  reel: {
+    videoSrc?: string | null;
+    audioTrack?: AudioTrack | null;
+    audioConfig?: ReelAudioConfig | null;
+    musicTrack?: string | null;
+  },
+  catalogTracks?: AudioTrack[]
+): ReelAudioClassification => {
+  const track = resolveReelAudioTrackMetadata(reel, catalogTracks);
+
+  if (track) {
+    if (track.track_type === 'original') {
+      return {
+        status: 'original_track',
+        track,
+        isVerified: false,
+        label: track.title || 'Original audio',
+        description:
+          'Creator-uploaded original audio. Rights and third-party clearance are not independently verified.',
+      };
+    }
+    if (isVerifiedAudioTrack(track)) {
+      return {
+        status: 'verified_track',
+        track,
+        isVerified: true,
+        label: `${track.title} • ${track.artist}`,
+        description: 'Verified licensing and sync rights metadata.',
+      };
+    }
+    return {
+      status: 'restricted_track',
+      track,
+      isVerified: false,
+      label: track.title || reel.musicTrack || 'Soundtrack',
+      description:
+        verifyTrackSelectionAllowed(track).reason ||
+        'Audio license is inactive, expired, or unverified.',
+    };
+  }
+
+  const hasMusicLabel = Boolean((reel.musicTrack || '').trim());
+  if (!hasMusicLabel && Boolean((reel.videoSrc || '').trim())) {
+    return {
+      status: 'native_video_audio',
+      track: null,
+      isVerified: false,
+      label: 'Original video audio',
+      description:
+        'This video uses its native video audio. No separate catalog soundtrack metadata is attached.',
+    };
+  }
+
+  return {
+    status: 'unavailable_metadata',
+    track: null,
+    isVerified: false,
+    label: (reel.musicTrack || '').trim() || 'Audio metadata unavailable',
+    description:
+      'Soundtrack metadata is unavailable for this reel. Video playback remains unaffected.',
+  };
+};
+

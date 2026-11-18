@@ -85,11 +85,13 @@ import PostHeader from './PostHeader';
 import PostDetailsModal, { PostDetailsInfo } from './PostDetailsModal';
 import { CommunityVideoPlayer } from './CommunityPostCard';
 import TextSeriesNavigationBar from './TextSeriesNavigationBar';
-import TextPostTranslationBar from './TextPostTranslationBar';
+import TextPostTranslationBar, { PostTranslationCommand, PostTranslationUiStatus } from './TextPostTranslationBar';
 import { resolveTextSeriesNavigationContext } from '../utils/videoSeries';
 import {
+  SUPPORTED_TRANSLATION_LANGUAGES,
   getPreferredTranslationLanguage,
   setPreferredTranslationLanguage,
+  getTranslationLanguageLabel,
 } from '../utils/translationCache';
 import { useAuth } from '../context/AuthContext';
 import {
@@ -196,10 +198,31 @@ export const CommunityFeed: React.FC<CommunityFeedProps> = ({
   const [translatedPostsMap, setTranslatedPostsMap] = useState<
     Record<string, { isShowingTranslation: boolean; translatedText: string | null }>
   >({});
+  const [translationCommandsMap, setTranslationCommandsMap] = useState<
+    Record<string, PostTranslationCommand>
+  >({});
+  const [translationStatusMap, setTranslationStatusMap] = useState<
+    Record<string, PostTranslationUiStatus>
+  >({});
 
   const handleTargetLanguageChange = (lang: SupportedTranslationLanguage) => {
     setPreferredTranslationLanguage(lang);
     setTranslationTargetLang(lang);
+  };
+
+  const dispatchPostTranslationCommand = (
+    postId: string,
+    action: PostTranslationCommand['action'],
+    lang?: SupportedTranslationLanguage
+  ) => {
+    setTranslationCommandsMap((prev) => ({
+      ...prev,
+      [postId]: {
+        action,
+        lang: lang || translationTargetLang,
+        nonce: Date.now() + Math.floor(Math.random() * 10000),
+      },
+    }));
   };
 
   const handleNavigateTextSeriesPart = (targetPost: CommunityPost) => {
@@ -1715,7 +1738,75 @@ export const CommunityFeed: React.FC<CommunityFeedProps> = ({
                       </button>
                     )}
 
-                    <div className="h-px bg-slate-100 my-1" />
+                    {(isPureTextPost ? originalPostText : post.caption || '').trim().length > 0 && (() => {
+                      const postTransStatus = translationStatusMap[post.id];
+                      const isTransLoading = Boolean(postTransStatus?.isLoading);
+                      const isShowingTrans = Boolean(
+                        postTransStatus?.isShowingTranslation ||
+                          activeTranslationEntry?.isShowingTranslation
+                      );
+                      return (
+                        <div className="px-3.5 py-2 space-y-1.5 border-y border-slate-100 bg-slate-50/60 my-1">
+                          <button
+                            type="button"
+                            id={`translate-menu-btn-${post.id}`}
+                            data-testid={`menu-translate-toggle-btn-${post.id}`}
+                            disabled={isTransLoading}
+                            onClick={() => {
+                              setActivePostMenuId(null);
+                              dispatchPostTranslationCommand(
+                                post.id,
+                                isShowingTrans ? 'show_original' : 'translate',
+                                translationTargetLang
+                              );
+                            }}
+                            className="w-full text-left text-slate-800 hover:text-purple-700 flex items-center justify-between gap-2 transition font-semibold cursor-pointer disabled:opacity-60"
+                          >
+                            <span className="flex items-center gap-2 min-w-0">
+                              <Languages className="w-4 h-4 text-purple-600 shrink-0" />
+                              <span className="truncate">
+                                {isTransLoading
+                                  ? 'Translating...'
+                                  : isShowingTrans
+                                  ? 'Show Original'
+                                  : `Translate (${getTranslationLanguageLabel(translationTargetLang)})`}
+                              </span>
+                            </span>
+                            <span className="text-[10px] font-bold text-purple-600 shrink-0">
+                              {isShowingTrans ? 'Original' : 'See Translation'}
+                            </span>
+                          </button>
+                          <div className="flex items-center justify-between gap-2 pl-6">
+                            <label
+                              htmlFor={`menu-translate-lang-select-${post.id}`}
+                              className="text-[10px] font-medium text-slate-500 shrink-0"
+                            >
+                              Language:
+                            </label>
+                            <select
+                              id={`menu-translate-lang-select-${post.id}`}
+                              aria-label="Target translation language"
+                              data-testid={`menu-translate-lang-select-${post.id}`}
+                              value={translationTargetLang}
+                              disabled={isTransLoading}
+                              onChange={(e) => {
+                                const nextLang = e.target.value as SupportedTranslationLanguage;
+                                handleTargetLanguageChange(nextLang);
+                                dispatchPostTranslationCommand(post.id, 'translate', nextLang);
+                                setActivePostMenuId(null);
+                              }}
+                              className="flex-1 min-w-0 bg-white border border-slate-200 rounded-lg px-2 py-1 text-[11px] font-semibold text-slate-700 focus:outline-none focus:border-purple-500 cursor-pointer"
+                            >
+                              {SUPPORTED_TRANSLATION_LANGUAGES.map((lang) => (
+                                <option key={lang.code} value={lang.code}>
+                                  {lang.label} ({lang.nativeLabel})
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+                        </div>
+                      );
+                    })()}
 
                     {/* 5. AI Recipe Toggle */}
                     <button
@@ -1911,6 +2002,13 @@ export const CommunityFeed: React.FC<CommunityFeedProps> = ({
                     postId={post.id}
                     sourceText={originalPostText}
                     targetLanguage={translationTargetLang}
+                    command={translationCommandsMap[post.id] || null}
+                    onStatusChange={(status) =>
+                      setTranslationStatusMap((prev) => ({
+                        ...prev,
+                        [post.id]: status,
+                      }))
+                    }
                     onTargetLanguageChange={handleTargetLanguageChange}
                     onTranslationChange={(state) =>
                       setTranslatedPostsMap((prev) => ({
@@ -1945,6 +2043,8 @@ export const CommunityFeed: React.FC<CommunityFeedProps> = ({
                       creatorId={post.author?.id || ''}
                       viewerId={authUser?.id || userProfile?.id}
                       trafficSource={postTrafficSource}
+                      audioTrack={post.audioTrack}
+                      audioConfig={post.audioConfig}
                       onOpenReel={onOpenReel}
                     />
                   ) : post.imageGallery && post.imageGallery.length > 1 ? (
@@ -1981,6 +2081,13 @@ export const CommunityFeed: React.FC<CommunityFeedProps> = ({
                   postId={post.id}
                   sourceText={post.caption}
                   targetLanguage={translationTargetLang}
+                  command={translationCommandsMap[post.id] || null}
+                  onStatusChange={(status) =>
+                    setTranslationStatusMap((prev) => ({
+                      ...prev,
+                      [post.id]: status,
+                    }))
+                  }
                   onTargetLanguageChange={handleTargetLanguageChange}
                   onTranslationChange={(state) =>
                     setTranslatedPostsMap((prev) => ({

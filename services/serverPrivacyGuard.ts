@@ -157,6 +157,30 @@ export function signPostMediaUrls<T extends Record<string, any>>(
       typeof url === 'string' ? signMediaUrlForViewer(url, viewerId, 900, dataDir) : url
     );
   }
+  const signTrack = (track: any) => {
+    if (!track || typeof track !== 'object') return track;
+    return {
+      ...track,
+      ...(typeof track.audio_url === 'string'
+        ? { audio_url: signMediaUrlForViewer(track.audio_url, viewerId, 900, dataDir) }
+        : {}),
+      ...(typeof track.cover_url === 'string'
+        ? { cover_url: signMediaUrlForViewer(track.cover_url, viewerId, 900, dataDir) }
+        : {}),
+    };
+  };
+  if (cloned.audioTrack && typeof cloned.audioTrack === 'object') {
+    cloned.audioTrack = signTrack(cloned.audioTrack);
+  }
+  if (cloned.audio_track && typeof cloned.audio_track === 'object') {
+    cloned.audio_track = signTrack(cloned.audio_track);
+  }
+  if (cloned.audioConfig && typeof cloned.audioConfig === 'object' && cloned.audioConfig.track) {
+    cloned.audioConfig = {
+      ...cloned.audioConfig,
+      track: signTrack(cloned.audioConfig.track),
+    };
+  }
   return cloned as T;
 }
 
@@ -176,6 +200,30 @@ export function sanitizePostMediaUrlsForStorage<T extends Record<string, any>>(p
     cloned.imageGallery = cloned.imageGallery.map((url: any) =>
       typeof url === 'string' ? stripMediaSignature(url) : url
     );
+  }
+  const sanitizeTrack = (track: any) => {
+    if (!track || typeof track !== 'object') return track;
+    return {
+      ...track,
+      ...(typeof track.audio_url === 'string'
+        ? { audio_url: stripMediaSignature(track.audio_url) }
+        : {}),
+      ...(typeof track.cover_url === 'string'
+        ? { cover_url: stripMediaSignature(track.cover_url) }
+        : {}),
+    };
+  };
+  if (cloned.audioTrack && typeof cloned.audioTrack === 'object') {
+    cloned.audioTrack = sanitizeTrack(cloned.audioTrack);
+  }
+  if (cloned.audio_track && typeof cloned.audio_track === 'object') {
+    cloned.audio_track = sanitizeTrack(cloned.audio_track);
+  }
+  if (cloned.audioConfig && typeof cloned.audioConfig === 'object' && cloned.audioConfig.track) {
+    cloned.audioConfig = {
+      ...cloned.audioConfig,
+      track: sanitizeTrack(cloned.audioConfig.track),
+    };
   }
   return cloned as T;
 }
@@ -247,6 +295,12 @@ export function extractLocalUploadFilenamesFromPost(post: Record<string, any>): 
   pushUrl(post?.imageSrc);
   pushUrl(post?.videoSrc);
   pushUrl(post?.videoThumbnail);
+  pushUrl(post?.audioTrack?.audio_url);
+  pushUrl(post?.audioTrack?.cover_url);
+  pushUrl(post?.audio_track?.audio_url);
+  pushUrl(post?.audio_track?.cover_url);
+  pushUrl(post?.audioConfig?.track?.audio_url);
+  pushUrl(post?.audioConfig?.track?.cover_url);
   if (Array.isArray(post?.imageGallery)) {
     for (const u of post.imageGallery) pushUrl(u);
   }

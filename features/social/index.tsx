@@ -18,7 +18,7 @@ const AiEditorModal = lazy(() => import('../ai-editor'));
 import { CommunityPost, ReelHighlight, UserProfile } from '../../types/community';
 import { AudioTrack } from '../../types/audio';
 import { ProcessedMediaResult } from '../ai-editor/types';
-import { createOriginalSoundRecord } from '../../utils/audioStore';
+import { createOriginalSoundRecord, verifyTrackSelectionAllowed } from '../../utils/audioStore';
 import {
   getCommunityPosts,
   saveCommunityPosts,
@@ -231,6 +231,11 @@ export const SocialEcosystemModule: React.FC<SocialEcosystemProps> = ({
           commentsCount: matchedPost?.commentsCount || 0,
           sharesCount: matchedPost?.sharesCount || 0,
           createdAt: matchedPost?.createdAt || 'Just now',
+          musicTrack: matchedPost?.audioTrack
+            ? `${matchedPost.audioTrack.title} • ${matchedPost.audioTrack.artist}`
+            : undefined,
+          audioTrack: matchedPost?.audioTrack,
+          audioConfig: matchedPost?.audioConfig,
         };
         setDirectSelectedReel(transientReel);
         return;
@@ -283,6 +288,11 @@ export const SocialEcosystemModule: React.FC<SocialEcosystemProps> = ({
                 commentsCount: post.commentsCount || 0,
                 sharesCount: post.sharesCount || 0,
                 createdAt: post.createdAt || 'Just now',
+                musicTrack: post.audioTrack
+                  ? `${post.audioTrack.title} • ${post.audioTrack.artist}`
+                  : undefined,
+                audioTrack: post.audioTrack,
+                audioConfig: post.audioConfig,
               });
             }
           })
@@ -512,6 +522,9 @@ export const SocialEcosystemModule: React.FC<SocialEcosystemProps> = ({
           isSaved: converted.isSaved ?? existing.isSaved,
           savesCount: converted.savesCount ?? existing.savesCount,
           series: converted.series || existing.series,
+          musicTrack: converted.musicTrack || existing.musicTrack,
+          audioTrack: converted.audioTrack || existing.audioTrack,
+          audioConfig: converted.audioConfig || existing.audioConfig,
           sourcePostType: p.postType === 'reel' ? 'reel' : p.videoSrc ? 'video' : 'media',
         });
       } else {
@@ -673,6 +686,10 @@ export const SocialEcosystemModule: React.FC<SocialEcosystemProps> = ({
             if (!isAuthenticated) {
               if (onOpenAuthModal) onOpenAuthModal();
               else window.dispatchEvent(new CustomEvent('metfa_open_auth_modal'));
+              return;
+            }
+            const rightsCheck = verifyTrackSelectionAllowed(track);
+            if (!rightsCheck.canSelect) {
               return;
             }
             setEditorInitialAudio(track);
@@ -895,8 +912,10 @@ export const SocialEcosystemModule: React.FC<SocialEcosystemProps> = ({
                 audioUrl: result.dataUrl,
                 duration: Math.round(result.durationSeconds),
               });
-              setEditorInitialAudio(soundTrack);
-              setIsCreatePostOpen(true);
+              if (soundTrack) {
+                setEditorInitialAudio(soundTrack);
+                setIsCreatePostOpen(true);
+              }
             }}
           />
         </Suspense>
